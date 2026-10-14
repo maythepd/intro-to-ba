@@ -3,6 +3,7 @@ Verification and demonstration script for the FeatureEngineeringPipeline and Con
 """
 
 import os
+from pathlib import Path
 import sys
 import pandas as pd
 from sklearn.metrics import roc_auc_score, f1_score
@@ -12,23 +13,33 @@ from config import PipelineConfig, load_config
 from preprocessing import FeatureEngineeringPipeline
 
 
+def resolve_data_path(path_str: str) -> str:
+    path = Path(path_str)
+    if path.is_absolute() and path.exists():
+        return str(path)
+    if path.exists():
+        return str(path.resolve())
+    script_dir = Path(__file__).resolve().parent
+    candidate = (script_dir / path).resolve()
+    if candidate.exists():
+        return str(candidate)
+    candidate_parent = (script_dir.parent / path).resolve()
+    if candidate_parent.exists():
+        return str(candidate_parent)
+    raise FileNotFoundError(f"Data file not found: {path_str}")
+
+
 def run_checks():
-    data_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "Week 5", "Project", "artifacts", "cleaned_bank_data.csv")
-    )
-    if not os.path.exists(data_path):
-        print(f"Data file not found at {data_path}")
-        return
-
-    df = pd.read_csv(data_path)
-    print(f"[OK] Ingested dataset: {df.shape[0]} rows, {df.shape[1]} columns")
-
     # 1. Test Config loading from YAML
     cfg = load_config()
     print(f"[OK] Loaded config from YAML: enable_domain_features={cfg.enable_domain_features}, enable_smote={cfg.enable_smote}")
 
+    data_path = resolve_data_path(cfg.data_path)
+    df = pd.read_csv(data_path)
+    print(f"[OK] Ingested dataset from '{data_path}': {df.shape[0]} rows, {df.shape[1]} columns")
+
     # 2. Test Default Full Pipeline using YAML
-    print("\n--- Running Full Pipeline (Loaded from config/feature_engineering.yaml) ---")
+    print("\n--- Running Full Pipeline (Loaded from config/config.yaml) ---")
     pipe = FeatureEngineeringPipeline(cfg)
     res = pipe.prepare_train_test(df, compute_feature_importance=True)
 
