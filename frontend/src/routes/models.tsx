@@ -1,0 +1,33 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { ErrorState, KeyValueGrid, Notice, PageHeader, Panel, SourceBadge } from "@/components/common";
+import { api, describeError, isApiConfigured } from "@/lib/api";
+import { SOURCE_FACTS } from "@/lib/demo-data";
+import { pageMeta } from "@/lib/seo";
+
+export const Route = createFileRoute("/models")({
+  head: () => pageMeta("Models", "XGBoost evaluation metrics from the project study."),
+  component: Models,
+});
+
+function Models() {
+  const x = SOURCE_FACTS.xgboost;
+  const q = useQuery({ queryKey: ["metrics"], queryFn: ({ signal }) => api.metrics(signal), enabled: isApiConfigured, retry: false });
+  return (
+    <>
+      <PageHeader eyebrow="Models" title="XGBoost Model" description="Evaluation metrics reported in the source study." />
+      <Notice tone="info" title="These are results reported by the source study, not measured deployment performance.">Near-perfect scores may reflect target leakage or an overly favorable test split. Independent validation is required.</Notice>
+      <div className="mt-6 grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+        {[["ROC-AUC", x.rocAuc], ["PR-AUC", x.prAuc], ["F1", x.f1], ["Recall", x.recall]].map(([l, v]) => (
+          <div key={l as string} className="rounded-2xl border bg-card p-5 shadow-soft">
+            <div className="flex items-center justify-between"><p className="text-xs text-muted-foreground">{l}</p><SourceBadge /></div>
+            <p className="mt-2 font-display text-3xl font-bold tabular">{(v as number).toFixed(4)}</p>
+          </div>
+        ))}
+      </div>
+      <Panel className="mt-6" title="Metrics from API" subtitle="GET /api/metrics">
+        {!isApiConfigured ? <p className="text-sm text-muted-foreground">API Not Connected.</p> : q.isError ? <ErrorState message={describeError(q.error)} onRetry={() => q.refetch()} retrying={q.isFetching} /> : q.data ? <KeyValueGrid data={q.data} /> : <div className="h-20 animate-pulse rounded-xl bg-muted" />}
+      </Panel>
+    </>
+  );
+}
