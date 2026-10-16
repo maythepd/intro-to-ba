@@ -97,7 +97,10 @@ def customers(search: str="",limit: int=Query(20,ge=1,le=100)):
     df=app.state.customers
     if df is None: raise HTTPException(503,"Customer dataset unavailable")
     matches=df[df.customer_id.astype(str).str.contains(search,regex=False)] if search else df
-    return {"total":int(len(matches)),"items":matches.head(limit).drop(columns=["churn"],errors="ignore").fillna("").to_dict("records")}
+    records=matches.head(limit).drop(columns=["churn"],errors="ignore").fillna("").to_dict("records")
+    for record in records:
+        record["customer_id"]=str(record["customer_id"])
+    return {"total":int(len(matches)),"items":records}
 
 @app.get("/api/customers/{customer_id}")
 def customer(customer_id:int):

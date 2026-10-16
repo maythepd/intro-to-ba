@@ -86,7 +86,7 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
     e.preventDefault();
     navigate({ to: "/customers", search: { search: q.trim() || undefined } });
   };
-  const status = !isApiConfigured ? "off" : health.isSuccess ? "ok" : health.isError ? "err" : "wait";
+  const status = !isApiConfigured ? "off" : health.isSuccess && health.data?.model_loaded === true ? "ok" : health.isSuccess ? "err" : health.isError ? "err" : "wait";
   const notices = [
     status === "off" && "API chưa được cấu hình. Dữ liệu khách hàng chỉ là bản ghi Demo.",
     status === "err" && "Không kết nối được API sức khỏe (/health).",
