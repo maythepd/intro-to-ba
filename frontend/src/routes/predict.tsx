@@ -23,7 +23,7 @@ export const Route = createFileRoute("/predict")({
 
 const EMPTY: CustomerFeatures = {
   customer_id: "", credit_score: 650, country: "France", gender: "Female", age: 40, tenure: 5, balance: 0,
-  products_number: 1, credit_card: 1, active_member: 1, estimated_salary: 0, recency_days: 0, monthly_transactions: 0,
+  products_number: 1, credit_card: 1, active_member: 1, estimated_salary: 0, recency_days: 1, monthly_transactions: 0,
   trans_amount_3m: 0, trans_trend_ratio: 1, app_logins_monthly: 0, customer_service_complaints: 0,
   has_unresolved_complaint: 0, preferred_channel: "Mobile App", primary_device: "iOS",
 };
@@ -71,7 +71,7 @@ function PredictPage() {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!isApiConfigured) return;
-    m.mutate({ ...form, customer_id: form.customer_id.trim() });
+    m.mutate({ ...form, customer_id: /^\d+$/.test(form.customer_id.trim()) ? form.customer_id.trim() : "" });
   };
 
   return (
@@ -100,7 +100,7 @@ function PredictPage() {
                 </Select>
               </F>
               <F label="Tuổi (age)"><Input type="number" required min={18} max={100} value={form.age} onChange={num("age")} /></F>
-              <F label="Điểm tín dụng (credit_score)"><Input type="number" required min={300} max={900} value={form.credit_score} onChange={num("credit_score")} /></F>
+              <F label="Điểm tín dụng (credit_score)"><Input type="number" required min={300} max={850} value={form.credit_score} onChange={num("credit_score")} /></F>
               <F label="Thu nhập ước tính (estimated_salary)"><Input type="number" required min={0} step="0.01" value={form.estimated_salary} onChange={num("estimated_salary")} /></F>
             </div>
           </Panel>
@@ -109,7 +109,7 @@ function PredictPage() {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <F label="Thâm niên năm (tenure)"><Input type="number" required min={0} max={50} value={form.tenure} onChange={num("tenure")} /></F>
               <F label="Số dư (balance)"><Input type="number" required min={0} step="0.01" value={form.balance} onChange={num("balance")} /></F>
-              <F label="Số sản phẩm (products_number)"><Input type="number" required min={1} max={10} value={form.products_number} onChange={num("products_number")} /></F>
+              <F label="Số sản phẩm (products_number)"><Input type="number" required min={1} max={4} value={form.products_number} onChange={num("products_number")} /></F>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               {([["credit_card", "Có thẻ tín dụng (credit_card)"], ["active_member", "Thành viên tích cực (active_member)"]] as const).map(([k, l]) => (
@@ -122,7 +122,7 @@ function PredictPage() {
 
           <Panel title="3. Hành vi giao dịch & số" subtitle="Transactions & digital engagement">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <F label="Ngày từ GD cuối (recency_days)"><Input type="number" required min={0} value={form.recency_days} onChange={num("recency_days")} /></F>
+              <F label="Ngày từ GD cuối (recency_days)"><Input type="number" required min={1} max={180} value={form.recency_days} onChange={num("recency_days")} /></F>
               <F label="Giao dịch/tháng (monthly_transactions)"><Input type="number" required min={0} value={form.monthly_transactions} onChange={num("monthly_transactions")} /></F>
               <F label="Giá trị GD 3 tháng (trans_amount_3m)"><Input type="number" required min={0} step="0.01" value={form.trans_amount_3m} onChange={num("trans_amount_3m")} /></F>
               <F label="Tỷ lệ xu hướng GD (trans_trend_ratio)" hint="< 1 nghĩa là giao dịch đang chậm lại"><Input type="number" required min={0} step="0.01" value={form.trans_trend_ratio} onChange={num("trans_trend_ratio")} /></F>

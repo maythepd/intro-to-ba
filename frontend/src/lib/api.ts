@@ -142,7 +142,7 @@ export const api = {
   getCustomer: (id: string, signal?: AbortSignal) =>
     request<CustomerFeatures>(`/api/customers/${encodeURIComponent(id)}`, { signal }),
   predict: (payload: CustomerFeatures, signal?: AbortSignal) =>
-    request<PredictionResult>("/api/predict", { method: "POST", body: payload, signal, timeoutMs: 20000 }),
+    request<PredictionResult>("/api/predict", { method: "POST", body: {...payload, customer_id: /^\d+$/.test(payload.customer_id) ? Number(payload.customer_id) : null}, signal, timeoutMs: 20000 }),
   metrics: (signal?: AbortSignal) => request<GenericRecord>("/api/metrics", { signal }),
   segments: (signal?: AbortSignal) => request<GenericRecord | GenericRecord[]>("/api/segments", { signal }),
   monitoring: (signal?: AbortSignal) => request<GenericRecord>("/api/monitoring", { signal }),

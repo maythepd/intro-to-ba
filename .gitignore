@@ -1,4 +1,10 @@
 __pycache__/
-*.joblib
-saved/
-*.db
+*.pyc
+.venv/
+.env
+.env.*
+!.env.example
+node_modules/
+frontend/dist/
+*.log
+artifacts/
