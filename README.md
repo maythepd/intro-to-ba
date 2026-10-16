@@ -1,5 +1,9 @@
 # BaBank Analytics
 
+## Group project context
+
+The upstream project covers Churn Prediction and Segmentation Modules 1 2 and 3, including business objectives, KPI definitions, synthetic data generation, exploratory analysis and data cleaning. The group dataset is hosted on Kaggle. See [the synthetic data dictionary](synth_data_dict.md) and the [Module 1 document](https://docs.google.com/document/d/1t4vT18zHOeCOTXPCxd7UgwmqREK4O0zQJOycYO0oZ-M/edit?usp=sharing).
+
 Bank-staff analytics interface for customer churn risk, with an XGBoost API. The `demo` branch is isolated from the group's `main` branch.
 
 ## Official dataset
