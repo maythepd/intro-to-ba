@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
     app.state.inference_count = 0
     yield
 
-app = FastAPI(title="VioletBank Analytics API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="BaBank Analytics API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[x.strip() for x in os.environ.get("CORS_ORIGINS","http://localhost:5173").split(",") if x.strip()],
@@ -58,10 +58,10 @@ def health():
 def signals(p: CustomerInput) -> list[dict[str,str]]:
     result=[]
     for flag,title,description in [
-        (p.trans_trend_ratio < .75,"Giao dịch giảm","Xu hướng giao dịch giảm hơn 25%."),
-        (p.customer_service_complaints >= 2 or p.has_unresolved_complaint == 1,"Khiếu nại dịch vụ","Cần xử lý các khiếu nại."),
-        (p.recency_days >= 45,"Ít tương tác","Không tương tác ít nhất 45 ngày."),
-        (p.products_number >= 3,"Nhiều sản phẩm","Cần đánh giá trải nghiệm sử dụng nhiều sản phẩm."),
+        (p.trans_trend_ratio < .75,"Declining Transactions","Transaction activity has fallen by more than 25%."),
+        (p.customer_service_complaints >= 2 or p.has_unresolved_complaint == 1,"Service Complaints","Customer complaints require resolution."),
+        (p.recency_days >= 45,"Low Engagement","No recorded interaction for at least 45 days."),
+        (p.products_number >= 3,"Multiple Products","Review the customer's experience with multiple products."),
     ]:
         if flag: result.append({"title":title,"description":description,"direction":"risk"})
     return result

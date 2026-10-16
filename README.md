@@ -1,4 +1,4 @@
-# VioletBank Analytics
+# BaBank Analytics
 
 Bank-staff analytics interface for customer churn risk, with an XGBoost API. The `demo` branch is isolated from the group's `main` branch.
 
@@ -37,7 +37,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Set `VITE_API_BASE_URL=http://localhost:8000` or your hosted API URL. Customer listing and lookup now depend on the official-data API. If the API is unavailable, no synthetic customer records are silently substituted. Some dashboard charts are explicitly labelled as *Minh họa* until actual measurements are provided.
+Set `VITE_API_BASE_URL=http://localhost:8000` or your hosted API URL. Customer listing and lookup now depend on the official-data API. If the API is unavailable, no synthetic customer records are silently substituted. Some dashboard charts are explicitly labelled as *Illustrative* until actual measurements are provided.
 
 ## Deployment
 

@@ -1,5 +1,5 @@
 /**
- * Typed client for the VioletBank churn model API.
+ * Typed client for the BaBank churn model API.
  * Base URL comes from VITE_API_BASE_URL. When it is not set, every call throws
  * ApiNotConfiguredError — callers must never substitute fabricated results.
  */
@@ -58,7 +58,7 @@ export type GenericRecord = Record<string, unknown>;
 
 export class ApiNotConfiguredError extends Error {
   constructor() {
-    super("API chưa được cấu hình (VITE_API_BASE_URL).");
+    super("API is not configured (VITE_API_BASE_URL).");
     this.name = "ApiNotConfiguredError";
   }
 }
@@ -74,7 +74,7 @@ export class ApiError extends Error {
 
 export class ApiTimeoutError extends Error {
   constructor() {
-    super("Yêu cầu quá thời gian chờ.");
+    super("Request timed out.");
     this.name = "ApiTimeoutError";
   }
 }
@@ -154,8 +154,8 @@ export function normalizeCustomerList(data: CustomerFeatures[] | { items: Custom
 
 export function describeError(err: unknown): string {
   if (err instanceof ApiNotConfiguredError) return err.message;
-  if (err instanceof ApiTimeoutError) return "Máy chủ không phản hồi kịp thời. Vui lòng thử lại.";
-  if (err instanceof ApiError) return `Lỗi máy chủ (${err.status}): ${err.message}`;
-  if (err instanceof TypeError) return "Không thể kết nối tới API. Kiểm tra mạng hoặc cấu hình CORS.";
-  return err instanceof Error ? err.message : "Lỗi không xác định.";
+  if (err instanceof ApiTimeoutError) return "The server did not respond in time. Please try again.";
+  if (err instanceof ApiError) return `Server error (${err.status}): ${err.message}`;
+  if (err instanceof TypeError) return "Could not connect to the API. Check network access and CORS settings.";
+  return err instanceof Error ? err.message : "Unknown error.";
 }

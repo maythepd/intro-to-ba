@@ -13,7 +13,7 @@ export const Route = createFileRoute("/customers/")({
   validateSearch: (s: Record<string, unknown>): { search?: string } => ({
     search: typeof s.search === "string" && s.search ? s.search : undefined,
   }),
-  head: () => pageMeta("Khách hàng", "Tra cứu hồ sơ khách hàng và hành vi giao dịch."),
+  head: () => pageMeta("Customers", "Explore customer profiles and transaction behavior."),
   component: CustomersPage,
 });
 
@@ -40,18 +40,18 @@ function CustomersPage() {
 
   return (
     <>
-      <PageHeader eyebrow="Customers" title="Danh sách khách hàng" description="Tìm kiếm theo mã khách hàng, quốc gia, kênh hoặc thiết bị." />
+      <PageHeader eyebrow="Customers" title="Customer Directory" description="Search customers by ID, country, channel, or device." />
       {!isApiConfigured && (
         <div className="mb-5">
-          <Notice tone="warning" title="Chưa kết nối dữ liệu chính thức">
-            Kết nối API và nạp dữ liệu Kaggle chính thức để hiển thị hồ sơ.
+          <Notice tone="warning" title="Official Dataset Not Connected">
+            Connect the API and load the official Kaggle dataset to view customer profiles.
           </Notice>
         </div>
       )}
       <Panel>
         <div className="relative mb-5 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Tìm khách hàng…" className="h-10 rounded-xl pl-9" />
+          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search customers…" className="h-10 rounded-xl pl-9" />
         </div>
 
         {q.isError ? (
@@ -61,15 +61,15 @@ function CustomersPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Mã KH</TableHead>
-                  <TableHead>Quốc gia</TableHead>
-                  <TableHead className="text-right">Tuổi</TableHead>
-                  <TableHead className="text-right">Số dư</TableHead>
+                  <TableHead>Customer ID</TableHead>
+                  <TableHead>Country</TableHead>
+                  <TableHead className="text-right">Age</TableHead>
+                  <TableHead className="text-right">Balance</TableHead>
                   <TableHead className="text-right">SP</TableHead>
-                  <TableHead className="text-right">Giao dịch/tháng</TableHead>
-                  <TableHead className="text-right">Ngày từ GD cuối</TableHead>
-                  <TableHead>Khiếu nại</TableHead>
-                  <TableHead>Kênh</TableHead>
+                  <TableHead className="text-right">Transactions per Month</TableHead>
+                  <TableHead className="text-right">Days Since Last Transaction</TableHead>
+                  <TableHead>Complaints</TableHead>
+                  <TableHead>Channel</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
@@ -79,7 +79,7 @@ function CustomersPage() {
                     <TableRow key={i}><TableCell colSpan={10}><div className="h-5 animate-pulse rounded bg-muted" /></TableCell></TableRow>
                   ))}
                 {!q.isLoading && rows.length === 0 && (
-                  <TableRow><TableCell colSpan={10} className="py-10 text-center text-sm text-muted-foreground">Không có khách hàng phù hợp.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={10} className="py-10 text-center text-sm text-muted-foreground">No matching customers found.</TableCell></TableRow>
                 )}
                 {rows.map((c) => (
                   <TableRow key={c.customer_id} className="cursor-pointer" onClick={() => navigate({ to: "/customers/$id", params: { id: c.customer_id } })}>
@@ -93,7 +93,7 @@ function CustomersPage() {
                     <TableCell className="text-right tabular">{c.monthly_transactions}</TableCell>
                     <TableCell className="text-right tabular">{c.recency_days}</TableCell>
                     <TableCell>
-                      {c.has_unresolved_complaint ? <span className="text-xs font-semibold text-danger">Chưa xử lý</span> : <span className="text-xs text-muted-foreground">{c.customer_service_complaints}</span>}
+                      {c.has_unresolved_complaint ? <span className="text-xs font-semibold text-danger">Unresolved</span> : <span className="text-xs text-muted-foreground">{c.customer_service_complaints}</span>}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{c.preferred_channel}</TableCell>
                     <TableCell>

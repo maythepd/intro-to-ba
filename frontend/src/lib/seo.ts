@@ -1,5 +1,5 @@
 export function pageMeta(title: string, description: string) {
-  const full = `${title} · VioletBank Analytics`;
+  const full = `${title} · BaBank Analytics`;
   return {
     meta: [
       { title: full },

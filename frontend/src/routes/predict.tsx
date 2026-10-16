@@ -16,7 +16,7 @@ export const Route = createFileRoute("/predict")({
   validateSearch: (s: Record<string, unknown>): { customer_id?: string } => ({
     customer_id: typeof s.customer_id === "string" && s.customer_id ? s.customer_id : undefined,
   }),
-  head: () => pageMeta("Dự đoán rời bỏ", "Chấm điểm xác suất rời bỏ của khách hàng bằng mô hình XGBoost."),
+  head: () => pageMeta("Churn Prediction", "Predict customer churn probability using the XGBoost model."),
   component: PredictPage,
 });
 
@@ -75,43 +75,43 @@ function PredictPage() {
 
   return (
     <>
-      <PageHeader eyebrow="Predict" title="Dự đoán khả năng rời bỏ" description="Nhập đầy đủ hồ sơ theo lược đồ của mô hình XGBoost. Kết quả chỉ đến từ API mô hình — không có ước tính cục bộ." />
+      <PageHeader eyebrow="Predict" title="Customer Churn Prediction" description="Enter customer information matching the XGBoost input schema. Results come only from the model API." />
 
       {prefillSource === "demo" && (
-        <div className="mb-5"><Notice tone="warning" title={`Đã điền sẵn từ bản ghi Demo ${form.customer_id}`}>Dữ liệu mẫu tự tạo, không phải khách hàng thật.</Notice></div>
+        <div className="mb-5"><Notice tone="warning" title={`Prefilled from demo record ${form.customer_id}`}>Synthetic preview data, not a real customer.</Notice></div>
       )}
 
       <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
         <form onSubmit={submit} className="space-y-5">
-          <Panel title="1. Định danh & nhân khẩu học" subtitle="Identity & demographics">
+          <Panel title="1. Identity and Demographics" subtitle="Identity & demographics">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <F label="Mã khách hàng (customer_id)"><Input required value={form.customer_id} onChange={(e) => set("customer_id", e.target.value)} placeholder="VD: 15634602" /></F>
-              <F label="Quốc gia (country)">
+              <F label="Customer ID (customer_id)"><Input required value={form.customer_id} onChange={(e) => set("customer_id", e.target.value)} placeholder="e.g. 15634602" /></F>
+              <F label="Country (country)">
                 <Select value={form.country} onValueChange={(v) => set("country", v as CustomerFeatures["country"])}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>{["France", "Germany", "Spain"].map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}</SelectContent>
                 </Select>
               </F>
-              <F label="Giới tính (gender)">
+              <F label="Gender (gender)">
                 <Select value={form.gender} onValueChange={(v) => set("gender", v as CustomerFeatures["gender"])}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="Female">Female</SelectItem><SelectItem value="Male">Male</SelectItem></SelectContent>
                 </Select>
               </F>
-              <F label="Tuổi (age)"><Input type="number" required min={18} max={100} value={form.age} onChange={num("age")} /></F>
-              <F label="Điểm tín dụng (credit_score)"><Input type="number" required min={300} max={850} value={form.credit_score} onChange={num("credit_score")} /></F>
-              <F label="Thu nhập ước tính (estimated_salary)"><Input type="number" required min={0} step="0.01" value={form.estimated_salary} onChange={num("estimated_salary")} /></F>
+              <F label="Age (age)"><Input type="number" required min={18} max={100} value={form.age} onChange={num("age")} /></F>
+              <F label="Credit Score (credit_score)"><Input type="number" required min={300} max={850} value={form.credit_score} onChange={num("credit_score")} /></F>
+              <F label="Estimated Salary (estimated_salary)"><Input type="number" required min={0} step="0.01" value={form.estimated_salary} onChange={num("estimated_salary")} /></F>
             </div>
           </Panel>
 
-          <Panel title="2. Quan hệ sản phẩm" subtitle="Products & relationship">
+          <Panel title="2. Products and Relationship" subtitle="Products & relationship">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <F label="Thâm niên năm (tenure)"><Input type="number" required min={0} max={50} value={form.tenure} onChange={num("tenure")} /></F>
-              <F label="Số dư (balance)"><Input type="number" required min={0} step="0.01" value={form.balance} onChange={num("balance")} /></F>
-              <F label="Số sản phẩm (products_number)"><Input type="number" required min={1} max={4} value={form.products_number} onChange={num("products_number")} /></F>
+              <F label="Tenure in Years (tenure)"><Input type="number" required min={0} max={50} value={form.tenure} onChange={num("tenure")} /></F>
+              <F label="Balance (balance)"><Input type="number" required min={0} step="0.01" value={form.balance} onChange={num("balance")} /></F>
+              <F label="Number of Products (products_number)"><Input type="number" required min={1} max={4} value={form.products_number} onChange={num("products_number")} /></F>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              {([["credit_card", "Có thẻ tín dụng (credit_card)"], ["active_member", "Thành viên tích cực (active_member)"]] as const).map(([k, l]) => (
+              {([["credit_card", "Has Credit Card (credit_card)"], ["active_member", "Active Member (active_member)"]] as const).map(([k, l]) => (
                 <label key={k} className="flex items-center justify-between rounded-xl border bg-muted/50 px-4 py-3 text-sm">
                   {l}<Switch checked={form[k] === 1} onCheckedChange={(v) => set(k, v ? 1 : 0)} />
                 </label>
@@ -119,43 +119,43 @@ function PredictPage() {
             </div>
           </Panel>
 
-          <Panel title="3. Hành vi giao dịch & số" subtitle="Transactions & digital engagement">
+          <Panel title="3. Transactions and Digital Engagement" subtitle="Transactions & digital engagement">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <F label="Ngày từ GD cuối (recency_days)"><Input type="number" required min={1} max={180} value={form.recency_days} onChange={num("recency_days")} /></F>
-              <F label="Giao dịch/tháng (monthly_transactions)"><Input type="number" required min={0} value={form.monthly_transactions} onChange={num("monthly_transactions")} /></F>
-              <F label="Giá trị GD 3 tháng (trans_amount_3m)"><Input type="number" required min={0} step="0.01" value={form.trans_amount_3m} onChange={num("trans_amount_3m")} /></F>
-              <F label="Tỷ lệ xu hướng GD (trans_trend_ratio)" hint="< 1 nghĩa là giao dịch đang chậm lại"><Input type="number" required min={0} step="0.01" value={form.trans_trend_ratio} onChange={num("trans_trend_ratio")} /></F>
-              <F label="Đăng nhập app/tháng (app_logins_monthly)"><Input type="number" required min={0} value={form.app_logins_monthly} onChange={num("app_logins_monthly")} /></F>
-              <F label="Kênh ưa thích (preferred_channel)">
+              <F label="Days Since Last Activity (recency_days)"><Input type="number" required min={1} max={180} value={form.recency_days} onChange={num("recency_days")} /></F>
+              <F label="Transactions per Month (monthly_transactions)"><Input type="number" required min={0} value={form.monthly_transactions} onChange={num("monthly_transactions")} /></F>
+              <F label="3-Month Transaction Amount (trans_amount_3m)"><Input type="number" required min={0} step="0.01" value={form.trans_amount_3m} onChange={num("trans_amount_3m")} /></F>
+              <F label="Transaction Trend Ratio (trans_trend_ratio)" hint="A value below 1 indicates declining activity"><Input type="number" required min={0} step="0.01" value={form.trans_trend_ratio} onChange={num("trans_trend_ratio")} /></F>
+              <F label="Monthly App Logins (app_logins_monthly)"><Input type="number" required min={0} value={form.app_logins_monthly} onChange={num("app_logins_monthly")} /></F>
+              <F label="Preferred Channel (preferred_channel)">
                 <Select value={form.preferred_channel} onValueChange={(v) => set("preferred_channel", v as CustomerFeatures["preferred_channel"])}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>{["Mobile App", "Online Web", "ATM", "Branch"].map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}</SelectContent>
                 </Select>
               </F>
-              <F label="Thiết bị chính (primary_device)">
+              <F label="Primary Device (primary_device)">
                 {customDevice ? (
-                  <Input required value={form.primary_device} onChange={(e) => set("primary_device", e.target.value)} placeholder="Nhập giá trị" />
+                  <Input required value={form.primary_device} onChange={(e) => set("primary_device", e.target.value)} placeholder="Enter a value" />
                 ) : (
                   <Select value={form.primary_device} onValueChange={(v) => (v === "__other" ? (setCustomDevice(true), set("primary_device", "")) : set("primary_device", v))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {DEVICES.map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}
-                      <SelectItem value="__other">Khác (nhập tay)…</SelectItem>
+                      <SelectItem value="__other">Other (enter manually)…</SelectItem>
                     </SelectContent>
                   </Select>
                 )}
                 {customDevice && (
-                  <button type="button" className="text-[11px] font-medium text-primary" onClick={() => { setCustomDevice(false); set("primary_device", "iOS"); }}>Chọn từ danh sách</button>
+                  <button type="button" className="text-[11px] font-medium text-primary" onClick={() => { setCustomDevice(false); set("primary_device", "iOS"); }}>Choose from list</button>
                 )}
               </F>
             </div>
           </Panel>
 
-          <Panel title="4. Dịch vụ khách hàng" subtitle="Service & complaints">
+          <Panel title="4. Customer Service" subtitle="Service & complaints">
             <div className="grid gap-4 sm:grid-cols-2">
-              <F label="Số khiếu nại (customer_service_complaints)"><Input type="number" required min={0} value={form.customer_service_complaints} onChange={num("customer_service_complaints")} /></F>
+              <F label="Complaint Count (customer_service_complaints)"><Input type="number" required min={0} value={form.customer_service_complaints} onChange={num("customer_service_complaints")} /></F>
               <label className="flex items-center justify-between self-end rounded-xl border bg-muted/50 px-4 py-2.5 text-sm">
-                Khiếu nại chưa xử lý (has_unresolved_complaint)
+                Unresolved Complaint (has_unresolved_complaint)
                 <Switch checked={form.has_unresolved_complaint === 1} onCheckedChange={(v) => set("has_unresolved_complaint", v ? 1 : 0)} />
               </label>
             </div>
@@ -163,27 +163,27 @@ function PredictPage() {
 
           <div className="flex flex-wrap items-center gap-3">
             <Button type="submit" size="lg" disabled={!isApiConfigured || m.isPending}>
-              {m.isPending ? <Loader2 className="animate-spin" /> : <BrainCircuit />} Chấm điểm
+              {m.isPending ? <Loader2 className="animate-spin" /> : <BrainCircuit />} Predict Churn
             </Button>
             <Button type="button" variant="outline" size="lg" onClick={() => { setForm(EMPTY); setCustomDevice(false); setPrefillSource(null); m.reset(); }}>
-              <RotateCcw /> Đặt lại
+              <RotateCcw /> Reset
             </Button>
-            {!isApiConfigured && <span className="text-xs text-muted-foreground">Cần kết nối API để chấm điểm.</span>}
+            {!isApiConfigured && <span className="text-xs text-muted-foreground">Connect the API to run predictions.</span>}
           </div>
         </form>
 
         <div className="xl:sticky xl:top-24 xl:self-start">
-          <Panel title="Kết quả mô hình" subtitle="Model output">
+          <Panel title="Model Results" subtitle="Model output">
             {!isApiConfigured ? (
-              <Notice tone="warning" title="API chưa kết nối">Không thể chấm điểm. Ứng dụng không tạo kết quả giả hay ước tính cục bộ.</Notice>
+              <Notice tone="warning" title="API Not Connected">Unable to score customers. No simulated or locally estimated probabilities are generated.</Notice>
             ) : m.isPending ? (
-              <div className="flex flex-col items-center py-12 text-sm text-muted-foreground"><Loader2 className="mb-3 h-6 w-6 animate-spin text-primary" />Đang gọi mô hình…</div>
+              <div className="flex flex-col items-center py-12 text-sm text-muted-foreground"><Loader2 className="mb-3 h-6 w-6 animate-spin text-primary" />Running model inference…</div>
             ) : m.isError ? (
               <ErrorState message={describeError(m.error)} onRetry={() => m.mutate(form)} />
             ) : m.data ? (
               <ResultView r={m.data} />
             ) : (
-              <p className="py-10 text-center text-sm text-muted-foreground">Điền biểu mẫu và bấm “Chấm điểm”.</p>
+              <p className="py-10 text-center text-sm text-muted-foreground">Complete the form and click “Predict Churn”.</p>
             )}
           </Panel>
         </div>
@@ -200,16 +200,16 @@ function ResultView({ r }: { r: import("@/lib/api").PredictionResult }) {
         <span className="font-mono text-xs text-muted-foreground">{r.customer_id}</span>
         <RiskBadge level={r.risk_level} />
       </div>
-      <p className="mt-4 text-xs text-muted-foreground">Xác suất rời bỏ</p>
+      <p className="mt-4 text-xs text-muted-foreground">Churn Probability</p>
       <p className="font-display text-5xl font-bold tabular text-primary">{fmtPct(pct, 1)}</p>
       <div className="mt-3 h-2 overflow-hidden rounded-full bg-lilac"><div className="h-full rounded-full bg-primary" style={{ width: `${pct * 100}%` }} /></div>
-      <p className="mt-3 text-sm">Dự đoán: <strong>{r.predicted_churn ? "Có khả năng rời bỏ" : "Có khả năng ở lại"}</strong></p>
-      <p className="text-[11px] text-muted-foreground">Mô hình: {r.model_name}</p>
+      <p className="mt-3 text-sm">Prediction: <strong>{r.predicted_churn ? "Likely to Churn" : "Likely to Stay"}</strong></p>
+      <p className="text-[11px] text-muted-foreground">Model: {r.model_name}</p>
       {r.signals?.length > 0 && (
         <div className="mt-5 space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Tín hiệu</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Signals</p>
           {r.signals.map((s, i) => {
-            const up = /up|increase|tăng|risk|positive/i.test(s.direction);
+            const up = /up|increase|risk|positive/i.test(s.direction);
             return (
               <div key={i} className="flex gap-3 rounded-xl bg-muted p-3">
                 {up ? <TrendingUp className="h-4 w-4 shrink-0 text-danger" /> : <TrendingDown className="h-4 w-4 shrink-0 text-success" />}
@@ -219,7 +219,7 @@ function ResultView({ r }: { r: import("@/lib/api").PredictionResult }) {
           })}
         </div>
       )}
-      <Button variant="outline" size="sm" className="mt-5 w-full" asChild><Link to="/retention">Xem gợi ý giữ chân</Link></Button>
+      <Button variant="outline" size="sm" className="mt-5 w-full" asChild><Link to="/retention">View Retention Recommendations</Link></Button>
     </div>
   );
 }

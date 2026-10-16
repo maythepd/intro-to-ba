@@ -8,7 +8,7 @@ import { fmtInt, fmtMoney, yesNo } from "@/lib/format";
 import { pageMeta } from "@/lib/seo";
 
 export const Route = createFileRoute("/customers/$id")({
-  head: ({ params }) => pageMeta(`Khách hàng ${params.id}`, "Hồ sơ nhân khẩu học và hành vi giao dịch của khách hàng."),
+  head: ({ params }) => pageMeta(`Customers ${params.id}`, "Customer demographics and transaction behavior."),
   component: CustomerDetail,
 });
 
@@ -32,20 +32,20 @@ function CustomerDetail() {
   const c: CustomerFeatures | undefined = q.data;
 
   const back = (
-    <Button variant="ghost" size="sm" asChild className="mb-4 -ml-2"><Link to="/customers"><ArrowLeft /> Danh sách khách hàng</Link></Button>
+    <Button variant="ghost" size="sm" asChild className="mb-4 -ml-2"><Link to="/customers"><ArrowLeft /> Customer Directory</Link></Button>
   );
 
   if (isApiConfigured && q.isLoading) return <>{back}<div className="h-64 animate-pulse rounded-2xl bg-muted" /></>;
   if (isApiConfigured && q.isError) {
     if (q.error instanceof ApiError && q.error.status === 404)
-      return <>{back}<EmptyState icon={<BrainCircuit />} title="Không tìm thấy khách hàng">Mã {id} không tồn tại trong hệ thống.</EmptyState></>;
+      return <>{back}<EmptyState icon={<BrainCircuit />} title="Customer Not Found">Customer ID {id} was not found in the system.</EmptyState></>;
     return <>{back}<ErrorState message={describeError(q.error)} onRetry={() => q.refetch()} retrying={q.isFetching} /></>;
   }
   if (!c) {
     return (
       <>{back}
-        <EmptyState icon={<BrainCircuit />} title="Không có hồ sơ để hiển thị">
-          API chưa kết nối và mã {id} không thuộc bản ghi Demo.
+        <EmptyState icon={<BrainCircuit />} title="No Customer Profile Available">
+          The API is not connected and customer ID {id} is not available.
         </EmptyState>
       </>
     );
@@ -57,17 +57,17 @@ function CustomerDetail() {
       <PageHeader
         eyebrow="Customer profile"
         title={c.customer_id}
-        description={<span className="inline-flex items-center gap-2">{c.country} · {c.gender === "Female" ? "Nữ" : "Nam"} · {c.age} tuổi </span>}
-        actions={<Button asChild><Link to="/predict" search={{ customer_id: c.customer_id }}><BrainCircuit /> Chấm điểm rủi ro</Link></Button>}
+        description={<span className="inline-flex items-center gap-2">{c.country} · {c.gender === "Female" ? "Female" : "Male"} · {c.age} years old </span>}
+        actions={<Button asChild><Link to="/predict" search={{ customer_id: c.customer_id }}><BrainCircuit /> Score Churn Risk</Link></Button>}
       />
       
 
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         {[
-          ["Số dư", fmtMoney(c.balance)],
-          ["Giao dịch/tháng", fmtInt(c.monthly_transactions)],
-          ["Giá trị GD 3 tháng", fmtMoney(c.trans_amount_3m)],
-          ["Xu hướng giao dịch", c.trans_trend_ratio.toFixed(2)],
+          ["Balance", fmtMoney(c.balance)],
+          ["Transactions per Month", fmtInt(c.monthly_transactions)],
+          ["3-Month Transaction Amount", fmtMoney(c.trans_amount_3m)],
+          ["Transaction Trend", c.trans_trend_ratio.toFixed(2)],
         ].map(([l, v]) => (
           <div key={l} className="rounded-2xl border bg-card p-5 shadow-soft">
             <p className="text-xs text-muted-foreground">{l}</p>
@@ -77,27 +77,27 @@ function CustomerDetail() {
       </div>
 
       <div className="mt-6 grid gap-5 lg:grid-cols-3">
-        <Panel title="Nhân khẩu học" subtitle="Demographics">
-          <Field label="Quốc gia" value={c.country} />
-          <Field label="Giới tính" value={c.gender} />
-          <Field label="Tuổi" value={c.age} />
-          <Field label="Thu nhập ước tính" value={fmtMoney(c.estimated_salary)} />
-          <Field label="Điểm tín dụng" value={c.credit_score} />
+        <Panel title="Demographics" subtitle="Demographics">
+          <Field label="Country" value={c.country} />
+          <Field label="Gender" value={c.gender} />
+          <Field label="Age" value={c.age} />
+          <Field label="Estimated Salary" value={fmtMoney(c.estimated_salary)} />
+          <Field label="Credit Score" value={c.credit_score} />
         </Panel>
-        <Panel title="Quan hệ sản phẩm" subtitle="Products & tenure">
-          <Field label="Thâm niên (năm)" value={c.tenure} />
-          <Field label="Số sản phẩm" value={c.products_number} />
-          <Field label="Thẻ tín dụng" value={yesNo(c.credit_card)} />
-          <Field label="Thành viên tích cực" value={yesNo(c.active_member)} />
-          <Field label="Số dư" value={fmtMoney(c.balance)} />
+        <Panel title="Product Relationship" subtitle="Products & tenure">
+          <Field label="Tenure (years)" value={c.tenure} />
+          <Field label="Number of Products" value={c.products_number} />
+          <Field label="Credit Card" value={yesNo(c.credit_card)} />
+          <Field label="Active Member" value={yesNo(c.active_member)} />
+          <Field label="Balance" value={fmtMoney(c.balance)} />
         </Panel>
-        <Panel title="Hành vi & dịch vụ" subtitle="Behavior">
-          <Field label="Ngày từ giao dịch cuối" value={c.recency_days} />
-          <Field label="Đăng nhập app/tháng" value={c.app_logins_monthly} />
-          <Field label="Khiếu nại" value={c.customer_service_complaints} />
-          <Field label="Khiếu nại chưa xử lý" value={c.has_unresolved_complaint ? <span className="text-danger">Có</span> : "Không"} />
-          <Field label="Kênh ưa thích" value={c.preferred_channel} />
-          <Field label="Thiết bị chính" value={c.primary_device} />
+        <Panel title="Behavior and Service" subtitle="Behavior">
+          <Field label="Days Since Last Transaction" value={c.recency_days} />
+          <Field label="App Logins per Month" value={c.app_logins_monthly} />
+          <Field label="Complaints" value={c.customer_service_complaints} />
+          <Field label="Unresolved Complaint" value={c.has_unresolved_complaint ? <span className="text-danger">Yes</span> : "No"} />
+          <Field label="Preferred Channel" value={c.preferred_channel} />
+          <Field label="Primary Device" value={c.primary_device} />
         </Panel>
       </div>
     </>

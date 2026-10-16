@@ -6,7 +6,7 @@ import { SOURCE_FACTS } from "@/lib/demo-data";
 import { pageMeta } from "@/lib/seo";
 
 export const Route = createFileRoute("/models")({
-  head: () => pageMeta("Mô hình", "Chỉ số kiểm định XGBoost theo nghiên cứu nguồn."),
+  head: () => pageMeta("Models", "XGBoost evaluation metrics from the project study."),
   component: Models,
 });
 
@@ -15,8 +15,8 @@ function Models() {
   const q = useQuery({ queryKey: ["metrics"], queryFn: ({ signal }) => api.metrics(signal), enabled: isApiConfigured, retry: false });
   return (
     <>
-      <PageHeader eyebrow="Models" title="Mô hình XGBoost" description="Chỉ số kiểm định do nghiên cứu nguồn báo cáo." />
-      <Notice tone="info" title="Đây là số liệu của nghiên cứu nguồn, không phải hiệu năng đo trong triển khai.">Chỉ số gần tuyệt đối có thể phản ánh rò rỉ dữ liệu hoặc tập kiểm định thuận lợi; cần đánh giá lại trên dữ liệu vận hành.</Notice>
+      <PageHeader eyebrow="Models" title="XGBoost Model" description="Evaluation metrics reported in the source study." />
+      <Notice tone="info" title="These are results reported by the source study, not measured deployment performance.">Near-perfect scores may reflect target leakage or an overly favorable test split. Independent validation is required.</Notice>
       <div className="mt-6 grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
         {[["ROC-AUC", x.rocAuc], ["PR-AUC", x.prAuc], ["F1", x.f1], ["Recall", x.recall]].map(([l, v]) => (
           <div key={l as string} className="rounded-2xl border bg-card p-5 shadow-soft">
@@ -25,8 +25,8 @@ function Models() {
           </div>
         ))}
       </div>
-      <Panel className="mt-6" title="Chỉ số từ API" subtitle="GET /api/metrics">
-        {!isApiConfigured ? <p className="text-sm text-muted-foreground">API chưa kết nối.</p> : q.isError ? <ErrorState message={describeError(q.error)} onRetry={() => q.refetch()} retrying={q.isFetching} /> : q.data ? <KeyValueGrid data={q.data} /> : <div className="h-20 animate-pulse rounded-xl bg-muted" />}
+      <Panel className="mt-6" title="Metrics from API" subtitle="GET /api/metrics">
+        {!isApiConfigured ? <p className="text-sm text-muted-foreground">API Not Connected.</p> : q.isError ? <ErrorState message={describeError(q.error)} onRetry={() => q.refetch()} retrying={q.isFetching} /> : q.data ? <KeyValueGrid data={q.data} /> : <div className="h-20 animate-pulse rounded-xl bg-muted" />}
       </Panel>
     </>
   );

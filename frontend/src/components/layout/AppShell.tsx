@@ -11,13 +11,13 @@ import { api, isApiConfigured, API_BASE_URL } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const NAV = [
-  { to: "/", label: "Tổng quan", sub: "Dashboard", icon: LayoutDashboard },
-  { to: "/customers", label: "Khách hàng", sub: "Customers", icon: Users },
-  { to: "/predict", label: "Dự đoán rời bỏ", sub: "Predict", icon: BrainCircuit },
-  { to: "/segments", label: "Phân khúc", sub: "Segments", icon: PieChart },
-  { to: "/retention", label: "Giữ chân", sub: "Retention", icon: HeartHandshake },
-  { to: "/monitoring", label: "Giám sát", sub: "Monitoring", icon: Gauge },
-  { to: "/models", label: "Mô hình", sub: "Models", icon: ShieldCheck },
+  { to: "/", label: "Overview", sub: "Dashboard", icon: LayoutDashboard },
+  { to: "/customers", label: "Customers", sub: "Customers", icon: Users },
+  { to: "/predict", label: "Churn Prediction", sub: "Predict", icon: BrainCircuit },
+  { to: "/segments", label: "Segmentation", sub: "Segments", icon: PieChart },
+  { to: "/retention", label: "Retention", sub: "Retention", icon: HeartHandshake },
+  { to: "/monitoring", label: "Monitoring", sub: "Monitoring", icon: Gauge },
+  { to: "/models", label: "Models", sub: "Models", icon: ShieldCheck },
 ] as const;
 
 function Logo({ compact }: { compact?: boolean }) {
@@ -28,7 +28,7 @@ function Logo({ compact }: { compact?: boolean }) {
       </div>
       {!compact && (
         <div className="leading-tight">
-          <p className="font-display text-[15px] font-bold">VioletBank</p>
+          <p className="font-display text-[15px] font-bold">BaBank</p>
           <p className="text-[11px] text-muted-foreground">Retention Analytics</p>
         </div>
       )}
@@ -88,15 +88,15 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
   };
   const status = !isApiConfigured ? "off" : health.isSuccess && health.data?.model_loaded === true ? "ok" : health.isSuccess ? "err" : health.isError ? "err" : "wait";
   const notices = [
-    status === "off" && "API chưa được cấu hình. Dữ liệu khách hàng chỉ là bản ghi Demo.",
-    status === "err" && "Không kết nối được API sức khỏe (/health).",
-    status === "ok" && "API mô hình đang hoạt động.",
-    "Chỉ số mô hình hiển thị là số liệu của nghiên cứu nguồn, không phải hiệu năng triển khai.",
+    status === "off" && "API is not configured. Customer records require a connection.",
+    status === "err" && "Unable to reach the API health endpoint (/health).",
+    status === "ok" && "The model API is available.",
+    "Displayed model metrics come from the source study, not live deployment.",
   ].filter(Boolean) as string[];
 
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b bg-background/85 px-4 backdrop-blur md:px-8">
-      <button onClick={onMenu} className="rounded-lg p-2 text-muted-foreground hover:bg-muted lg:hidden" aria-label="Mở menu">
+      <button onClick={onMenu} className="rounded-lg p-2 text-muted-foreground hover:bg-muted lg:hidden" aria-label="Open menu">
         <Menu className="h-5 w-5" />
       </button>
       <form onSubmit={submit} className="relative max-w-md flex-1">
@@ -104,8 +104,8 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Tìm mã khách hàng, quốc gia…"
-          aria-label="Tìm khách hàng"
+          placeholder="Search customer ID or country…"
+          aria-label="Search customers"
           className="h-10 w-full rounded-xl border bg-card pl-9 pr-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-ring/20"
         />
       </form>
@@ -115,15 +115,15 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
           status === "ok" ? "border-success/30 bg-success-soft text-success" : status === "err" ? "border-danger/30 bg-danger-soft text-danger" : "bg-card text-muted-foreground",
         )}>
           <span className={cn("h-1.5 w-1.5 rounded-full", status === "ok" ? "bg-success" : status === "err" ? "bg-danger" : "bg-muted-foreground")} />
-          {status === "ok" ? "API online" : status === "err" ? "API lỗi" : status === "wait" ? "Đang kiểm tra" : "API offline"}
+          {status === "ok" ? "API online" : status === "err" ? "API error" : status === "wait" ? "Checking" : "API offline"}
         </span>
         <DropdownMenu>
-          <DropdownMenuTrigger className="relative rounded-xl border bg-card p-2.5 text-muted-foreground hover:text-primary" aria-label="Thông báo">
+          <DropdownMenuTrigger className="relative rounded-xl border bg-card p-2.5 text-muted-foreground hover:text-primary" aria-label="Notifications">
             <Bell className="h-4 w-4" />
             <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-primary" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-80">
-            <DropdownMenuLabel>Thông báo hệ thống</DropdownMenuLabel>
+            <DropdownMenuLabel>System Notifications</DropdownMenuLabel>
             <DropdownMenuSeparator />
             {notices.map((n) => (
               <div key={n} className="px-2 py-2 text-xs leading-relaxed text-muted-foreground">{n}</div>
@@ -150,21 +150,21 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Logo compact={collapsed} />
         </div>
         <div className="mt-4 flex-1 overflow-y-auto">
-          {!collapsed && <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Không gian làm việc</p>}
+          {!collapsed && <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Workspace</p>}
           <NavList collapsed={collapsed} />
         </div>
         <button
           onClick={() => setCollapsed((c) => !c)}
           className={cn("mb-4 flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-muted-foreground hover:bg-muted", collapsed && "justify-center")}
-          aria-label={collapsed ? "Mở rộng thanh bên" : "Thu gọn thanh bên"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          {collapsed ? <ChevronsRight className="h-4 w-4" /> : <><ChevronsLeft className="h-4 w-4" /> Thu gọn</>}
+          {collapsed ? <ChevronsRight className="h-4 w-4" /> : <><ChevronsLeft className="h-4 w-4" /> Collapse</>}
         </button>
       </aside>
 
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-72 bg-sidebar p-4">
-          <SheetTitle className="sr-only">Điều hướng</SheetTitle>
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
           <div className="mb-6 flex h-10 items-center"><Logo /></div>
           <NavList onNavigate={() => setMobileOpen(false)} />
         </SheetContent>
@@ -175,13 +175,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         {!isApiConfigured && (
           <div className="flex items-center gap-2 border-b border-warning/30 bg-warning-soft px-4 py-2 text-xs font-medium md:px-8">
             <WifiOff className="h-3.5 w-3.5 text-warning" />
-            API chưa kết nối — chỉ xem giao diện minh họa
-            <span className="hidden text-muted-foreground md:inline">· Đặt biến VITE_API_BASE_URL để kết nối mô hình.</span>
+            API not connected — preview mode only
+            <span className="hidden text-muted-foreground md:inline">· Set VITE_API_BASE_URL to connect to the model.</span>
           </div>
         )}
         <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-8 md:px-8">{children}</main>
         <footer className="px-4 pb-6 text-[11px] text-muted-foreground md:px-8">
-          VioletBank Analytics · Công cụ nội bộ cho nhân viên{isApiConfigured && <> · API: <span className="font-mono">{API_BASE_URL}</span></>}
+          BaBank Analytics · Internal staff analytics tool{isApiConfigured && <> · API: <span className="font-mono">{API_BASE_URL}</span></>}
         </footer>
       </div>
     </div>
