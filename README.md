@@ -1,27 +1,34 @@
 # VioletBank Analytics
 
-Customer retention dashboard and XGBoost churn-risk API for a digital banking analytics project.
+Bank-staff analytics interface for customer churn risk, with an XGBoost API. The `demo` branch is isolated from the group's `main` branch.
 
-## Structure
+## Official dataset
 
-- `frontend/`: React, Vite, Tailwind CSS, staff dashboard
-- `api/`: FastAPI inference and dataset lookup
-- `config/`, `preprocessing/`, `models/`: model training code from the classification branch
-- `data/cleaned_bank_data.csv`: integrated study dataset
+The project's **source of truth** is [Full Dataset Intro2BA on Kaggle](https://www.kaggle.com/datasets/maythepd/full-dataset-intro2ba), as referenced in the current `main` README and `synth_data_dict.md`. It contains six related behavioral tables (`accounts`, `login`, `transactions`, `savings_cycles`, `complaints`, `customer_context`) and uses a **2026-10-01 exclusive snapshot boundary**. The original Bank Customer Churn Prediction table provides customer profiles and labels.
 
-## Run locally
+The version in `data/cleaned_bank_data.csv` is **legacy experimental data from `model/xgboost`**. It must not be used as the official dataset for the live demo.
 
-Python 3.11 or 3.12 is recommended.
+Download and aggregate the official tables into one model-ready customer feature table:
 
 ```bash
 pip install -r requirements.txt
+python -m api.official_data --download
+```
+
+The output is `data/official/customer_features.csv`; local materialized Kaggle data is generated at runtime and must not be committed. If the Kaggle API is inaccessible or a file's schema differs from the documented dictionary, the preparation task should fail rather than silently use artificial records. The aggregation rules in `api/official_data.py` are **derived features**, not original columns in Kaggle. Review their appropriateness before presentation.
+
+## Temporary XGBoost model
+
+```bash
 python -m api.export_bundle
 uvicorn api.main:app --reload
 ```
 
-The model bundle includes the fitted transformer and classifier. A model file is deliberately not committed. If it is missing, `/api/predict` returns 503 instead of fabricated values.
+This trains a **temporary experimental model** using the official feature table (when available) and saves `artifacts/churn_bundle.joblib` containing the fitted preprocessing and trained XGBoost model. It is *not* the final group checkpoint. `/health` indicates if a fitted bundle is loaded; `/api/predict` returns 503 without it. Later replace the bundle via `MODEL_BUNDLE_PATH` without changing the API schema, provided the saved pipeline and expected features are compatible.
 
-In a separate terminal:
+Training currently uses the existing classification trainer's holdout for early stopping, so report its metrics as illustrative development results only, **not independent generalization performance**. Before final submission, train with separate train/validation/test partitions.
+
+## Frontend
 
 ```bash
 cd frontend
@@ -30,26 +37,12 @@ cp .env.example .env
 npm run dev
 ```
 
-`VITE_API_BASE_URL=http://localhost:8000` connects the frontend to FastAPI. The default interface without an API only shows clearly labelled demonstration records and diagrams.
-
-## HTTP endpoints
-
-- `GET /health`
-- `GET /api/customers?search=...&limit=20`
-- `GET /api/customers/{customer_id}`
-- `POST /api/predict`
-- `GET /api/metrics`
-- `GET /api/monitoring`
-- `GET /api/segments` (503 while clustering model is unavailable)
-
-Open `http://localhost:8000/docs` for the API schema.
+Set `VITE_API_BASE_URL=http://localhost:8000` or your hosted API URL. Customer listing and lookup now depend on the official-data API. If the API is unavailable, no synthetic customer records are silently substituted. Some dashboard charts are explicitly labelled as *Minh họa* until actual measurements are provided.
 
 ## Deployment
 
-`render.yaml` defines the FastAPI Render service and builds the model bundle when deployed. Configure `CORS_ORIGINS` to exactly match the frontend domain. Deploy `frontend` as a static site and define `VITE_API_BASE_URL` at build time. For client-side routing, enable SPA fallback to `index.html` (the `frontend/public/_redirects` file works on hosts that support that syntax).
+A Render API Blueprint is in `render.yaml`; it downloads Kaggle data and trains the temporary model at build time. This requires outbound access to Kaggle and sufficient build resources. Deployment has **not yet been verified**. Set `CORS_ORIGINS` to the frontend origin. Frontend can be deployed as a Vite static site, with SPA rewrite fallback.
 
-## Evaluation and limitations
+API docs after startup: `http://localhost:8000/docs`. Segmentation still requires the team's clustering model; `/api/segments` returns 503 until then.
 
-The displayed baseline churn rate and XGBoost metrics are from the group's study. Model performance was measured with a synthetic behavior extension and the current classification code uses its holdout for early stopping; this is not a valid unbiased production evaluation. Clustering and measured data drift are not yet implemented. A separate validation split and independent test holdout are recommended before a final report.
-
-Only use datasets with appropriate permission for any public demo. The demo records are synthetic and labelled.
+Do not present the study data, synthetic extension, or temporary trained model as live bank operational information.
