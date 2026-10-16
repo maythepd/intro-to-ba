@@ -19,7 +19,7 @@ Six tables extend the original customer dataset. Account IDs remain unchanged du
 | closed_at | TIMESTAMP, nullable | Actual closure time; renewal does not close the account. Closing savings alone is not customer churn. | created_at ≤ closed_at < snapshot boundary; NULL if still open |
 | balance | DECIMAL(18,2) | Posted balance at snapshot. Open savings hold the current cycle's principal only; unposted interest is excluded. Zero when closed. | ≥ 0 CU; two decimal places |
 | renewal_type | STRING, nullable | Maturity instruction: auto starts a new cycle using principal plus posted interest; manual pays principal and interest to the payout account and closes the savings account | manual, auto; NULL for everyday |
-| payout_account_id | STRING, nullable | Everyday accounts that receive savings + interests after payout. Need guardrail so that payout account cannot be closed when there exists a saving account linked to it | everyday account of the same customer, NULL for everyday
+| payout_account_id | STRING, nullable | Everyday account receiving savings principal and interest at settlement. Must remain open until settlement. | Existing everyday account owned by the same customer for savings; NULL for everyday |
 
 ## login
 
@@ -74,7 +74,7 @@ Six tables extend the original customer dataset. Account IDs remain unchanged du
 | Field | Type | Description / generation rule | Valid values / range |
 |---|---|---|---|
 | account_id | STRING | Savings account to which this cycle belongs (FK). | Existing accounts.account_id with account_type = savings |
-| started_at | TIMESTAMP | Account opening ≤ started_at < snapshot boundary; (account_id, started_at) must be unique. | Account opening ≤ started_at < snapshot boundary; unique per account |
+| started_at | TIMESTAMP | First deposit time for the first cycle, or renewal time for later cycles. Preserve cycles overlapping W. | created_at ≤ started_at < snapshot boundary; (account_id, started_at) must be unique |
 | term_months | INT | Agreed term for this cycle. | 1,3,6 |
 | init_balance | DECIMAL(18,2) | Money committed at cycle start. On renewal, previous balance plus posted interest. | > 0 CU; two decimal places |
 | interest_rate | DECIMAL | Annual maturity rate agreed for this cycle; generated from documented parameters. | 0–1 (0.04 = 4% per year) |
