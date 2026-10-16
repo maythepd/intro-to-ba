@@ -2,9 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, BrainCircuit } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DemoBadge, EmptyState, ErrorState, PageHeader, Panel } from "@/components/common";
+import { EmptyState, ErrorState, PageHeader, Panel } from "@/components/common";
 import { api, ApiError, describeError, isApiConfigured, type CustomerFeatures } from "@/lib/api";
-import { findDemoCustomer } from "@/lib/demo-data";
 import { fmtInt, fmtMoney, yesNo } from "@/lib/format";
 import { pageMeta } from "@/lib/seo";
 
@@ -30,8 +29,7 @@ function CustomerDetail() {
     enabled: isApiConfigured,
     retry: false,
   });
-  const demo = !isApiConfigured ? findDemoCustomer(id) : undefined;
-  const c: CustomerFeatures | undefined = isApiConfigured ? q.data : demo;
+  const c: CustomerFeatures | undefined = q.data;
 
   const back = (
     <Button variant="ghost" size="sm" asChild className="mb-4 -ml-2"><Link to="/customers"><ArrowLeft /> Danh sách khách hàng</Link></Button>
@@ -59,10 +57,10 @@ function CustomerDetail() {
       <PageHeader
         eyebrow="Customer profile"
         title={c.customer_id}
-        description={<span className="inline-flex items-center gap-2">{c.country} · {c.gender === "Female" ? "Nữ" : "Nam"} · {c.age} tuổi {demo && <DemoBadge />}</span>}
+        description={<span className="inline-flex items-center gap-2">{c.country} · {c.gender === "Female" ? "Nữ" : "Nam"} · {c.age} tuổi </span>}
         actions={<Button asChild><Link to="/predict" search={{ customer_id: c.customer_id }}><BrainCircuit /> Chấm điểm rủi ro</Link></Button>}
       />
-      {demo && <p className="-mt-4 mb-6 text-xs text-muted-foreground">Bản ghi Demo do nhóm phát triển tự tạo — không phải khách hàng thật.</p>}
+      
 
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         {[

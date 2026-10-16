@@ -9,7 +9,6 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ErrorState, Notice, PageHeader, Panel, RiskBadge } from "@/components/common";
 import { api, describeError, isApiConfigured, type CustomerFeatures } from "@/lib/api";
-import { findDemoCustomer } from "@/lib/demo-data";
 import { fmtPct } from "@/lib/format";
 import { pageMeta } from "@/lib/seo";
 
@@ -58,11 +57,11 @@ function PredictPage() {
 
   useEffect(() => {
     if (!customer_id) return;
-    const src = isApiConfigured ? lookup.data : findDemoCustomer(customer_id);
+    const src = lookup.data;
     if (src) {
       setForm(src);
       setCustomDevice(!DEVICES.includes(src.primary_device));
-      setPrefillSource(isApiConfigured ? "api" : "demo");
+      setPrefillSource("api");
     }
   }, [customer_id, lookup.data]);
 

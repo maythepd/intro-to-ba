@@ -4,9 +4,8 @@ import { useEffect, useState } from "react";
 import { ChevronRight, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { DemoBadge, ErrorState, Notice, PageHeader, Panel } from "@/components/common";
+import { ErrorState, Notice, PageHeader, Panel } from "@/components/common";
 import { api, describeError, isApiConfigured, normalizeCustomerList, type CustomerFeatures } from "@/lib/api";
-import { filterDemoCustomers } from "@/lib/demo-data";
 import { fmtMoney } from "@/lib/format";
 import { pageMeta } from "@/lib/seo";
 
@@ -37,16 +36,15 @@ function CustomersPage() {
     retry: false,
   });
 
-  const isDemo = !isApiConfigured;
-  const rows: CustomerFeatures[] = isDemo ? filterDemoCustomers(search) : (q.data ?? []);
+  const rows: CustomerFeatures[] = q.data ?? [];
 
   return (
     <>
       <PageHeader eyebrow="Customers" title="Danh sách khách hàng" description="Tìm kiếm theo mã khách hàng, quốc gia, kênh hoặc thiết bị." />
-      {isDemo && (
+      {!isApiConfigured && (
         <div className="mb-5">
-          <Notice tone="warning" title="Đang hiển thị bản ghi Demo">
-            Các dòng dưới đây là dữ liệu mẫu tự tạo để xem giao diện, không phải khách hàng thật. Kết nối API để tra cứu dữ liệu thực.
+          <Notice tone="warning" title="Chưa kết nối dữ liệu chính thức">
+            Kết nối API và nạp dữ liệu Kaggle chính thức để hiển thị hồ sơ.
           </Notice>
         </div>
       )}
@@ -86,7 +84,7 @@ function CustomersPage() {
                 {rows.map((c) => (
                   <TableRow key={c.customer_id} className="cursor-pointer" onClick={() => navigate({ to: "/customers/$id", params: { id: c.customer_id } })}>
                     <TableCell className="font-mono text-xs font-semibold">
-                      <span className="flex items-center gap-2">{c.customer_id}{isDemo && <DemoBadge />}</span>
+                      <span className="flex items-center gap-2">{c.customer_id}</span>
                     </TableCell>
                     <TableCell>{c.country}</TableCell>
                     <TableCell className="text-right tabular">{c.age}</TableCell>

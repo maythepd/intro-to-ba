@@ -8,7 +8,11 @@ from models import XGBoostChurnModel
 
 def main():
     cfg=load_unified_config("config/config.yaml")
-    df=pd.read_csv(cfg.features.data_path)
+    import os
+    data_path=os.environ.get("OFFICIAL_FEATURES_PATH","data/official/customer_features.csv")
+    if not Path(data_path).is_file():
+        raise FileNotFoundError(f"Official features missing: {data_path}. Run python -m api.official_data --download first.")
+    df=pd.read_csv(data_path)
     features_cfg=PipelineConfig(**{**cfg.features.__dict__,"enable_smote":False})
     pipeline=FeatureEngineeringPipeline(features_cfg)
     result=pipeline.prepare_train_test(df)

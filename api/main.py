@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 MODEL_PATH = Path(os.environ.get("MODEL_BUNDLE_PATH", "artifacts/churn_bundle.joblib"))
-DATA_PATH = Path(os.environ.get("CUSTOMERS_CSV_PATH", "data/cleaned_bank_data.csv"))
+DATA_PATH = Path(os.environ.get("CUSTOMERS_CSV_PATH", "data/official/customer_features.csv"))
 
 class CustomerInput(BaseModel):
     customer_id: int | None = None
