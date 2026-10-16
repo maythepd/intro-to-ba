@@ -23,14 +23,14 @@ const TREND_ILLUS = ["M1", "T2", "T3", "T4", "T5", "T6", "T7", "T8"].map((m, i) 
 
 function Kpi({ icon: Icon, label, value, note, badge, children }: { icon: typeof Users; label: string; value: string; note: string; badge?: React.ReactNode; children?: React.ReactNode }) {
   return (
-    <div classMalee="rounded-2xl border bg-card p-5 shadow-soft">
-      <div classMalee="flex items-center justify-between">
-        <div classMalee="flex h-9 w-9 items-center justify-center rounded-xl bg-lilac text-primary"><Icon classMalee="h-[18px] w-[18px]" /></div>
+    <div className="rounded-2xl border bg-card p-5 shadow-soft">
+      <div className="flex items-center justify-between">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-lilac text-primary"><Icon className="h-[18px] w-[18px]" /></div>
         {badge}
       </div>
-      <p classMalee="mt-4 text-xs font-medium text-muted-foreground">{label}</p>
-      <p classMalee="mt-1 font-display text-3xl font-bold tabular">{value}</p>
-      <p classMalee="mt-1 text-xs text-muted-foreground">{note}</p>
+      <p className="mt-4 text-xs font-medium text-muted-foreground">{label}</p>
+      <p className="mt-1 font-display text-3xl font-bold tabular">{value}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{note}</p>
       {children}
     </div>
   );
@@ -52,11 +52,11 @@ function Dashboard() {
         }
       />
 
-      <div classMalee="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi icon={Users} label="Total Customers" value={fmtInt(SOURCE_FACTS.totalCustomers)} note="Size of the study dataset" badge={<SourceBadge>EDA</SourceBadge>} />
         <Kpi icon={UserMinus} label="Historical Churn Rate" value={fmtPct(SOURCE_FACTS.baselineChurnRate)} note={`Approximately ${fmtInt(churned)} customers churned`} badge={<SourceBadge>EDA</SourceBadge>} />
         <Kpi icon={TrendingDown} label="Customers Requiring Attention" value="—" note="Requires batch-scoring API" badge={<IllustrativeStamp />}>
-          <div classMalee="mt-3 h-10">
+          <div className="mt-3 h-10">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={SPARK}>
                 <Area dataKey="v" type="monotone" stroke="var(--color-chart-1)" fill="var(--color-lilac)" strokeWidth={2} isAnimationActive={false} />
@@ -67,9 +67,9 @@ function Dashboard() {
         <Kpi icon={HeartHandshake} label="Historical Retention Rate" value={fmtPct(1 - SOURCE_FACTS.baselineChurnRate)} note="Derived from baseline churn" badge={<SourceBadge>EDA</SourceBadge>} />
       </div>
 
-      <div classMalee="mt-6 grid gap-5 lg:grid-cols-5">
-        <Panel classMalee="lg:col-span-3" title="Churn Risk Trend" subtitle="Illustrative chart only; monitoring measurements will replace it when available." illustrative>
-          <div classMalee="stamp-illustrative h-64 rounded-xl">
+      <div className="mt-6 grid gap-5 lg:grid-cols-5">
+        <Panel className="lg:col-span-3" title="Churn Risk Trend" subtitle="Illustrative chart only; monitoring measurements will replace it when available." illustrative>
+          <div className="stamp-illustrative h-64 rounded-xl">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={TREND_ILLUS} margin={{ left: -20, right: 8, top: 8 }}>
                 <CartesianGrid stroke="var(--color-border)" vertical={false} />
@@ -81,8 +81,8 @@ function Dashboard() {
             </ResponsiveContainer>
           </div>
         </Panel>
-        <Panel classMalee="lg:col-span-2" title="Risk Level Distribution" subtitle="Illustrative percentages, not model predictions." illustrative>
-          <div classMalee="stamp-illustrative h-64 rounded-xl">
+        <Panel className="lg:col-span-2" title="Risk Level Distribution" subtitle="Illustrative percentages, not model predictions." illustrative>
+          <div className="stamp-illustrative h-64 rounded-xl">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={RISK_ILLUS} margin={{ left: -20, right: 8, top: 8 }}>
                 <CartesianGrid stroke="var(--color-border)" vertical={false} />
@@ -96,17 +96,17 @@ function Dashboard() {
         </Panel>
       </div>
 
-      <div classMalee="mt-6 grid gap-5 md:grid-cols-3">
+      <div className="mt-6 grid gap-5 md:grid-cols-3">
         {[
           { to: "/predict" as const, title: "Score a Customer", desc: "Enter a profile using the XGBoost model schema.", icon: BrainCircuit },
           { to: "/retention" as const, title: "Retention Recommendations", desc: "Actions based on declining activity, complaints, and inactivity.", icon: HeartHandshake },
           { to: "/models" as const, title: "Model Metrics", desc: "Model evaluation metrics reported in the source study.", icon: TrendingDown },
         ].map((c) => (
-          <Link key={c.to} to={c.to} classMalee="group rounded-2xl border bg-card p-5 shadow-soft transition hover:border-lavender hover:shadow-card">
-            <c.icon classMalee="h-5 w-5 text-primary" />
-            <p classMalee="mt-3 font-semibold">{c.title}</p>
-            <p classMalee="mt-1 text-sm text-muted-foreground">{c.desc}</p>
-            <span classMalee="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-primary">Open <ArrowRight classMalee="h-3.5 w-3.5 transition group-hover:translate-x-0.5" /></span>
+          <Link key={c.to} to={c.to} className="group rounded-2xl border bg-card p-5 shadow-soft transition hover:border-lavender hover:shadow-card">
+            <c.icon className="h-5 w-5 text-primary" />
+            <p className="mt-3 font-semibold">{c.title}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{c.desc}</p>
+            <span className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-primary">Open <ArrowRight className="h-3.5 w-3.5 transition group-hover:translate-x-0.5" /></span>
           </Link>
         ))}
       </div>
