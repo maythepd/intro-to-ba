@@ -47,9 +47,6 @@ intro-to-ba/
 │   └── pipeline_config.py           # Dataclass config loaders & path routers
 ├── data/
 │   └── cleaned_bank_data.csv        # Input dataset (after cleaning, Module 3)
-├── docs/
-│   └── Business_Analytics_Project_Announcement.md
-├── eda/                             # EDA notebooks (Module 2)
 ├── models/
 │   ├── __init__.py                  # Exports all three model classes
 │   ├── logistic_regression.py       # LogisticRegressionChurnModel
