@@ -18,10 +18,11 @@ DEFAULT_UNIFIED_CONFIG_PATH = DEFAULT_CONFIG_PATH
 
 @dataclass
 class ModelConfig:
-    """Configuration for Machine Learning model."""
+    """Configuration for Machine Learning models (XGBoost, Logistic Regression, Random Forest)."""
 
-    name: str = "xgboost"
-    params: Dict[str, Any] = field(
+    name: str = "xgboost"  # "xgboost" | "lr" | "rf"
+    # Unified model-specific hyperparameter dictionaries
+    xgboost_params: Dict[str, Any] = field(
         default_factory=lambda: {
             "n_estimators": 300,
             "max_depth": 5,
@@ -37,6 +38,56 @@ class ModelConfig:
         }
     )
     early_stopping_rounds: Optional[int] = 30
+    lr_params: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "C": 0.05,
+            "solver": "saga",
+            "penalty": "l1",
+            "l1_ratio": 1.0,
+            "max_iter": 3000,
+            "class_weight": "balanced",
+            "random_state": 42,
+        }
+    )
+    rf_params: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "n_estimators": 500,
+            "max_depth": 12,
+            "min_samples_split": 15,
+            "min_samples_leaf": 5,
+            "max_features": "sqrt",
+            "class_weight": "balanced_subsample",
+            "oob_score": True,
+            "random_state": 42,
+            "n_jobs": -1,
+        }
+    )
+    # Generic params dict for backward compatibility or direct overrides
+    params: Dict[str, Any] = field(default_factory=dict)
+
+    def get_params_for_model(self, model_type: str) -> Dict[str, Any]:
+        """
+        Returns the resolved hyperparameters for the requested model type:
+        1. Model-specific dictionary (xgboost_params, lr_params, rf_params)
+        2. Fallback to generic `params` if matching `name` or model-specific dict is empty.
+        """
+        mtype = model_type.lower()
+        if mtype == "xgboost":
+            p = dict(self.xgboost_params) if self.xgboost_params else dict(self.params)
+            if self.name.lower() == "xgboost" and self.params:
+                p.update(self.params)
+            return p
+        elif mtype in ("lr", "logistic_regression"):
+            p = dict(self.lr_params) if self.lr_params else dict(self.params)
+            if self.name.lower() in ("lr", "logistic_regression") and self.params:
+                p.update(self.params)
+            return p
+        elif mtype in ("rf", "random_forest"):
+            p = dict(self.rf_params) if self.rf_params else dict(self.params)
+            if self.name.lower() in ("rf", "random_forest") and self.params:
+                p.update(self.params)
+            return p
+        return dict(self.params)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModelConfig":
@@ -47,12 +98,74 @@ class ModelConfig:
 
 @dataclass
 class ExperimentConfig:
-    """Configuration for Experiment tracking and artifacts."""
+    """Configuration for Experiment tracking, model serialization, and reporting."""
 
     output_dir: str = "results"
     save_model: bool = True
-    model_save_path: str = "models/saved/xgboost_churn.json"
-    report_filename: str = "xgboost_ablation_report.md"
+    model_save_path: str = "models/saved/{model}_churn.{ext}"
+    report_filename: str = "{mode}_{model}_report.md"
+
+    def get_output_dir(self, mode: str, model_type: Optional[str] = None) -> str:
+        """
+        Dynamically returns the dedicated subfolder inside output_dir:
+          - mode == 'compare' -> {output_dir}/comparison
+          - model_type == 'lr' -> {output_dir}/lr
+          - model_type == 'rf' -> {output_dir}/rf
+          - model_type == 'xgboost' -> {output_dir}/xgboost
+        """
+        base = Path(self.output_dir)
+        mode_clean = mode.lower()
+        if mode_clean in ("compare", "comparison", "comparision"):
+            sub = "comparison"
+        else:
+            sub = (model_type or "common").lower()
+        target = base / sub
+        target.mkdir(parents=True, exist_ok=True)
+        return str(target)
+
+    def get_model_save_path(self, model_type: str) -> str:
+        """
+        Dynamically formats and returns the model artifact filepath for any model.
+        Maps model types to appropriate extensions:
+          - xgboost -> .json
+          - lr / rf -> .pkl
+        """
+        m = model_type.lower()
+        ext_map = {"xgboost": "json", "lr": "pkl", "rf": "pkl"}
+        ext = ext_map.get(m, "pkl")
+
+        raw = self.model_save_path
+        if "{model}" in raw or "{model_type}" in raw or "{ext}" in raw:
+            return raw.format(model=m, model_type=m, ext=ext)
+
+        p = Path(raw)
+        stem = p.stem
+        # If path is fixed (e.g. models/saved/xgboost_churn.json), adapt stem and extension
+        if "xgboost" in stem:
+            stem = stem.replace("xgboost", m)
+        elif not stem.startswith(m):
+            stem = f"{m}_{stem}"
+        return str(p.parent / f"{stem}.{ext}")
+
+    def get_report_filename(self, mode: str, model_type: Optional[str] = None) -> str:
+        """
+        Dynamically formats and returns report filename for any mode (compare | ablation | train)
+        and model type (xgboost | lr | rf).
+        """
+        m = (model_type or "all").lower()
+        mode_clean = mode.lower()
+        if mode_clean == "compare":
+            return "model_comparison_report.md"
+
+        raw = self.report_filename
+        if "{mode}" in raw or "{model}" in raw:
+            return raw.format(mode=mode_clean, model=m)
+
+        if mode_clean == "ablation":
+            return f"{m}_ablation_report.md"
+        if mode_clean == "train":
+            return f"{m}_train_report.md"
+        return f"{m}_{mode_clean}_report.md"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ExperimentConfig":

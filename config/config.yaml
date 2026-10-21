@@ -80,10 +80,12 @@ features:
     feature_selection_metric: "RF_Importance"
     compute_feature_importance: false
 
-# 3. CẤU HÌNH MÔ HÌNH XGBOOST (Model Hyperparameters)
+# 3. CẤU HÌNH MÔ HÌNH (Model Configuration: xgboost | lr | rf)
 model:
-  name: "xgboost"
-  params:
+  name: "xgboost"                   # Mô hình mặc định khi train đơn lẻ: "xgboost" | "lr" | "rf"
+
+  # Cấu hình XGBoost (Gradient Boosting)
+  xgboost_params:
     n_estimators: 300
     max_depth: 5
     learning_rate: 0.05
@@ -97,9 +99,34 @@ model:
     n_jobs: -1
   early_stopping_rounds: 30
 
+  # Cấu hình Logistic Regression (Linear Model — ghi đè DEFAULT_PARAMS)
+  lr_params:
+    C: 0.05                         # Tăng regularization (C nhỏ hơn) để giảm variance
+    solver: "saga"                  # saga hỗ trợ L1/ElasticNet, phù hợp khi cần sparsity
+    penalty: "l1"                   # L1: tự động zero-out các feature ít quan trọng
+    l1_ratio: 1.0                   # l1_ratio=1.0 cho thuần túy L1 penalty
+    max_iter: 3000                  # Cần nhiều iteration hơn cho saga + L1
+    class_weight: "balanced"
+    random_state: 42
+
+  # Cấu hình Random Forest (Ensemble Bagging — ghi đè DEFAULT_PARAMS)
+  rf_params:
+    n_estimators: 500               # Nhiều cây hơn → phương sai thấp hơn
+    max_depth: 12                   # Thấp hơn default (15) → regularization chặt hơn
+    min_samples_split: 15           # Node phải đủ mẫu trước khi chia
+    min_samples_leaf: 5             # Lá cây tối thiểu 5 mẫu
+    max_features: "sqrt"
+    class_weight: "balanced_subsample"
+    oob_score: true
+    random_state: 42
+    n_jobs: -1
+
 # 4. CẤU HÌNH THÍ NGHIỆM & KẾT QUẢ (Experiment & Reporting Settings)
 experiment:
   output_dir: "results"
   save_model: true
-  model_save_path: "models/saved/xgboost_churn.json"
-  report_filename: "xgboost_ablation_report.md"
+  # Template lưu model tự động cho từng model ({model} = xgboost|lr|rf, {ext} = json|pkl)
+  model_save_path: "models/saved/{model}_churn.{ext}"
+  # Template tên file báo cáo tự động ({mode} = compare|ablation|train, {model} = xgboost|lr|rf)
+  report_filename: "{mode}_{model}_report.md"
+

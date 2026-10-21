@@ -1,0 +1,2 @@
+ROC_AUC,PR_AUC,F1_Score,Precision,Recall,Accuracy,Balanced_Accuracy,Log_Loss,TP,FP,TN,FN,Experiment,Model,Num_Features,X_train_Shape,X_test_Shape,SMOTE_Applied
+0.902,0.7246,0.639,0.505,0.8698,0.8,0.826,0.4202,354,347,1246,53,Single Run,LR,55,12740x55,2000x55,True
