@@ -4,7 +4,7 @@ Encapsulates Feature Engineering, Dataset, Model (XGBoost), and Experiment setti
 All configurations are defined in config/config.yaml.
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -43,8 +43,7 @@ class ModelConfig:
             "C": 0.05,
             "solver": "saga",
             "penalty": "l1",
-            "l1_ratio": 1.0,
-            "max_iter": 3000,
+            "max_iter": 2000,
             "class_weight": "balanced",
             "random_state": 42,
         }
@@ -179,9 +178,14 @@ class PipelineConfig:
     """Configuration class for the FeatureEngineeringPipeline."""
 
     # Dataset partition & exclusion defaults
-    data_path: str = "data/cleaned_bank_data.csv"
+    data_path: str = "data/full_bank_data.csv"
+    raw_full_dataset_dir: str = "data/full_dataset"
+    rebuild_full_dataset: bool = False
     target_col: str = "churn"
     test_size: float = 0.20
+    val_size: float = 0.10
+    enable_cv: bool = True
+    cv_folds: int = 5
     random_state: int = 42
     stratify: bool = True
     exclude_cols: List[str] = field(
@@ -197,6 +201,7 @@ class PipelineConfig:
     )
 
     # High-level module toggles (Ablations)
+    use_raw_kaggle_features_only: bool = False  # Ablation baseline: only original 10 Kaggle features
     enable_skewness: bool = True
     enable_scaling: bool = True
     enable_domain_features: bool = True
@@ -234,7 +239,7 @@ class PipelineConfig:
 
     # Feature selection configuration
     top_k_features: Optional[int] = None
-    feature_selection_metric: str = "RF_Importance"
+    feature_selection_metric: str = "MI_Score"  # Default: Mutual Information Classif
     compute_feature_importance: bool = False
 
     @classmethod
@@ -304,19 +309,42 @@ class PipelineConfig:
 
 
 @dataclass
+class TuningConfig:
+    """Configuration for Optuna Hyperparameter Optimization."""
+
+    enabled: bool = False
+    n_trials: int = 30
+    timeout: Optional[int] = None
+    metric: str = "PR_AUC"  # "PR_AUC" | "ROC_AUC" | "F1_Score"
+    cv_folds: int = 5
+    study_name: str = "churn_optuna_tuning"
+    direction: str = "maximize"
+    random_state: int = 42
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TuningConfig":
+        if not data:
+            return cls()
+        fields_set = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in fields_set})
+
+
+@dataclass
 class UnifiedConfig:
-    """Master Unified Configuration combining features, model, and experiment."""
+    """Master Unified Configuration combining features, model, experiment, and tuning."""
 
     features: PipelineConfig = field(default_factory=PipelineConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
+    tuning: TuningConfig = field(default_factory=TuningConfig)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "UnifiedConfig":
         features_cfg = PipelineConfig.from_dict(data)
         model_cfg = ModelConfig.from_dict(data.get("model", {}))
         experiment_cfg = ExperimentConfig.from_dict(data.get("experiment", {}))
-        return cls(features=features_cfg, model=model_cfg, experiment=experiment_cfg)
+        tuning_cfg = TuningConfig.from_dict(data.get("tuning", {}))
+        return cls(features=features_cfg, model=model_cfg, experiment=experiment_cfg, tuning=tuning_cfg)
 
     @classmethod
     def from_yaml(cls, path: Optional[Union[str, Path]] = None) -> "UnifiedConfig":

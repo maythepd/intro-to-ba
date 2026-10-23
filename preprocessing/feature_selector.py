@@ -26,7 +26,7 @@ class FeatureSelector(BaseFeatureTransformer):
         self,
         enabled: bool = False,
         top_k: Optional[int] = None,
-        ranking_metric: str = "RF_Importance",
+        ranking_metric: str = "MI_Score",
         rf_n_estimators: int = 100,
         rf_max_depth: int = 8,
         random_state: int = 42,

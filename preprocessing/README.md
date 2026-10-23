@@ -16,21 +16,25 @@ intro-to-ba/
 │   ├── Bank Customer Churn Prediction.csv  # Dữ liệu gốc (12 cột)
 │   └── cleaned_bank_data.csv               # Dữ liệu sạch sau Data Cleaning (21 cột - INPUT của pipeline)
 ├── preprocessing/
-│   ├── __init__.py                # Export các transformer và pipeline
+│   ├── __init__.py                # Export các transformer, processor và pipeline
 │   ├── base.py                    # BaseFeatureTransformer (chuẩn fit/transform)
+│   ├── etl.py                     # BankDataETL: Ingest & aggregate 7 bảng quan hệ từ full_dataset
+│   ├── splitting.py               # DataSplitter: Stratified Train/Val/Test split & K-Fold CV
 │   ├── skewness_transform.py      # SkewnessTransformer: Log1p, zero-inflation hurdle, Yeo-Johnson
 │   ├── scaling.py                 # FeatureScaler: RobustScaler & StandardScaler
 │   ├── domain_features.py         # DomainFeatureEngineer: Momentum, Friction, Bundling, Interaction
 │   ├── categorical_encoding.py    # CategoricalEncoder: One-Hot & Smoothed Target Encoding (m-estimate)
 │   ├── balancing.py               # ClassBalancer: SMOTE resampling cho tập Train
-│   ├── feature_selector.py        # FeatureSelector: Xếp hạng Mutual Info / Random Forest & lọc Top-K
-│   ├── pipeline.py                # FeatureEngineeringPipeline: Lớp điều phối tổng thể
+│   ├── feature_selector.py        # FeatureSelector: Xếp hạng Mutual Info & lọc Top-K
+│   ├── pipeline.py                # FeatureEngineeringPipeline & load_dataset: Lớp điều phối tổng thể
 │   └── README.md                  # Hướng dẫn chi tiết
 ├── models/
 │   ├── __init__.py
-│   └── xgboost.py                 # Mô hình XGBoost Churn Classifier
-├── main.py                        # Entrypoint chạy huấn luyện & Ablation
-└── test_pipeline.py               # Script kiểm thử và demo
+│   ├── logistic_regression.py     # Logistic Regression Churn Classifier
+│   ├── random_forest.py           # Random Forest Churn Classifier
+│   └── xgboost.py                 # XGBoost Churn Classifier
+├── main.py                        # Entrypoint chạy huấn luyện, Ablation & So sánh mô hình
+└── test_pipeline.py               # Script kiểm thử pipeline và config
 ```
 
 ---

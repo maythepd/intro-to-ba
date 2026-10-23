@@ -2,11 +2,16 @@
 # UNIFIED CONFIGURATION: FEATURE ENGINEERING & MODELS
 # ==============================================================================
 
-# 1. CẤU HÌNH DỮ LIỆU & PHÂN CHIA TRAIN/TEST (Dataset & Partition Settings)
+# 1. CẤU HÌNH DỮ LIỆU & PHÂN CHIA TRAIN/VAL/TEST/CV (Dataset & Partition Settings)
 dataset:
-  data_path: "data/cleaned_bank_data.csv"
+  data_path: "data/full_bank_data.csv"
+  raw_full_dataset_dir: "data/full_dataset"
+  rebuild_full_dataset: false
   target_col: "churn"
-  test_size: 0.20
+  test_size: 0.20                   # 20% tập Test độc lập
+  val_size: 0.10                    # 10% tập Validation
+  enable_cv: true                   # Kích hoạt K-Fold Cross-Validation
+  cv_folds: 5                       # Số fold cho Stratified K-Fold CV
   random_state: 42
   stratify: true
   exclude_cols:
@@ -77,7 +82,7 @@ features:
   # Chi tiết lựa chọn đặc trưng (Feature selection)
   feature_selection:
     top_k_features: null
-    feature_selection_metric: "RF_Importance"
+    feature_selection_metric: "MI_Score"  # Sử dụng Mutual Information Classif theo chuẩn dự án
     compute_feature_importance: false
 
 # 3. CẤU HÌNH MÔ HÌNH (Model Configuration: xgboost | lr | rf)
@@ -104,8 +109,7 @@ model:
     C: 0.05                         # Tăng regularization (C nhỏ hơn) để giảm variance
     solver: "saga"                  # saga hỗ trợ L1/ElasticNet, phù hợp khi cần sparsity
     penalty: "l1"                   # L1: tự động zero-out các feature ít quan trọng
-    l1_ratio: 1.0                   # l1_ratio=1.0 cho thuần túy L1 penalty
-    max_iter: 3000                  # Cần nhiều iteration hơn cho saga + L1
+    max_iter: 2000                  # Cần nhiều iteration hơn cho saga + L1
     class_weight: "balanced"
     random_state: 42
 
@@ -127,6 +131,18 @@ experiment:
   save_model: true
   # Template lưu model tự động cho từng model ({model} = xgboost|lr|rf, {ext} = json|pkl)
   model_save_path: "models/saved/{model}_churn.{ext}"
-  # Template tên file báo cáo tự động ({mode} = compare|ablation|train, {model} = xgboost|lr|rf)
+  # Template tên file báo cáo tự động ({mode} = compare|ablation|train|tune, {model} = xgboost|lr|rf)
   report_filename: "{mode}_{model}_report.md"
+
+# 5. CẤU HÌNH TỐI ƯU HÓA SIÊU THAM SỐ (Optuna Hyperparameter Tuning Settings)
+tuning:
+  enabled: false
+  n_trials: 30                      # Số lượng trials tối ưu
+  timeout: 600                      # Giới hạn thời gian (giây), null nếu không giới hạn
+  metric: "PR_AUC"                  # Mục tiêu tối ưu ("PR_AUC" | "ROC_AUC" | "F1_Score")
+  cv_folds: 5                       # Số fold Cross-Validation trên tập Train
+  study_name: "bank_churn_tuning"
+  direction: "maximize"
+  random_state: 42
+
 

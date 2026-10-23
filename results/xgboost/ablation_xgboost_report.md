@@ -1,7 +1,7 @@
 # BÁO CÁO THỰC NGHIỆM MÔ HÌNH XGBOOST & ABLATION STUDY
 ## DỰ BÁO RỦI RO RỜI BỎ KHÁCH HÀNG (CUSTOMER CHURN PREDICTION)
 
-**Thời gian thực thi:** `2026-10-21 20:20:55`  
+**Thời gian thực thi:** `2026-10-24 00:36:32`  
 **Mô hình cốt lõi:** `XGBoost`  
 **Cấu hình hợp nhất:** [`config/config.yaml`](../config/config.yaml)  
 
@@ -11,29 +11,30 @@
 
 Bảng dưới đây so sánh toàn diện hiệu năng của mô hình **XGBoost** qua 7 cấu hình kỹ nghệ đặc trưng và chiến lược xử lý dữ liệu khác nhau:
 
-| Experiment                                  |   Num_Features |   ROC_AUC |   PR_AUC |   F1_Score |   Precision |   Recall |   Accuracy |   Log_Loss |
-|:--------------------------------------------|---------------:|----------:|---------:|-----------:|------------:|---------:|-----------:|-----------:|
-| 1. Full Pipeline (Default)                  |             55 |    0.9999 |   0.9996 |     0.9876 |      0.995  |   0.9803 |     0.995  |     0.0132 |
-| 2. No SMOTE (Native scale_pos_weight)       |             55 |    0.9999 |   0.9997 |     0.9889 |      0.9926 |   0.9853 |     0.9955 |     0.011  |
-| 3. No Domain Features                       |             44 |    0.9999 |   0.9996 |     0.9864 |      0.9925 |   0.9803 |     0.9945 |     0.0123 |
-| 4. No Target Encoding                       |             51 |    0.9999 |   0.9996 |     0.9876 |      0.995  |   0.9803 |     0.995  |     0.0127 |
-| 5. No One-Hot Encoding                      |             43 |    0.9999 |   0.9996 |     0.9876 |      0.995  |   0.9803 |     0.995  |     0.0125 |
-| 6. No Scaling & No Skewness Transform       |             42 |    0.9995 |   0.9981 |     0.9754 |      0.9754 |   0.9754 |     0.99   |     0.4978 |
-| 7. Top 15 Features Only (Feature Selection) |             15 |    0.9998 |   0.9993 |     0.9839 |      0.9925 |   0.9754 |     0.9935 |     0.0185 |
+| Experiment                                               |   Num_Features |   ROC_AUC |   PR_AUC |   F1_Score |   Precision |   Recall |   Accuracy |   Log_Loss |
+|:---------------------------------------------------------|---------------:|----------:|---------:|-----------:|------------:|---------:|-----------:|-----------:|
+| 0. Raw Kaggle Baseline (Original 10 Features Only)       |             21 |    0.8677 |   0.705  |     0.6263 |      0.6585 |   0.5971 |     0.855  |     0.352  |
+| 1. Full Pipeline (Default - All Multi-Table & Domain)    |            119 |    0.8665 |   0.7056 |     0.6194 |      0.7125 |   0.5479 |     0.863  |     0.339  |
+| 2. No SMOTE (Native scale_pos_weight)                    |            119 |    0.8638 |   0.7025 |     0.6167 |      0.5407 |   0.7174 |     0.8185 |     0.4387 |
+| 3. No Domain Features                                    |             84 |    0.8685 |   0.7027 |     0.6148 |      0.6923 |   0.5528 |     0.859  |     0.3492 |
+| 4. No Target Encoding                                    |            115 |    0.8631 |   0.6914 |     0.6158 |      0.6911 |   0.5553 |     0.859  |     0.3469 |
+| 5. No One-Hot Encoding                                   |            108 |    0.8669 |   0.7041 |     0.6081 |      0.7032 |   0.5356 |     0.8595 |     0.3389 |
+| 6. No Scaling & No Skewness Transform                    |            109 |    0.8633 |   0.7032 |     0.6019 |      0.679  |   0.5405 |     0.8545 |     0.3427 |
+| 7. Top 15 Features Only (Feature Selection - MI Classif) |             15 |    0.851  |   0.6951 |     0.6292 |      0.6396 |   0.6192 |     0.8515 |     0.3605 |
 
 ---
 
 ## 2. PHÂN TÍCH VÀ ĐÁNH GIÁ CHUYÊN SÂU
 
-### 2.1. Cấu hình đạt hiệu năng tối ưu nhất: **2. No SMOTE (Native scale_pos_weight)**
-- **ROC-AUC:** `0.9999` — Khả năng xếp hạng xác suất churn vượt trội trên toàn miền ngưỡng.
-- **PR-AUC (Average Precision):** `0.9997` — Đo lường chuẩn xác trên tập dữ liệu mất cân bằng (tỷ lệ churn ~20.37%).
-- **F1-Score:** `0.9889` (Precision: `0.9926`, Recall: `0.9853`).
+### 2.1. Cấu hình đạt hiệu năng tối ưu nhất: **1. Full Pipeline (Default - All Multi-Table & Domain)**
+- **ROC-AUC:** `0.8665` — Khả năng xếp hạng xác suất churn vượt trội trên toàn miền ngưỡng.
+- **PR-AUC (Average Precision):** `0.7056` — Đo lường chuẩn xác trên tập dữ liệu mất cân bằng (tỷ lệ churn ~20.37%).
+- **F1-Score:** `0.6194` (Precision: `0.7125`, Recall: `0.5479`).
 - **Ma trận nhầm lẫn (Confusion Matrix trên 2,000 khách hàng kiểm thử):**
-  - **True Positives (TP - Bắt đúng khách hàng rời bỏ):** `401`
-  - **False Negatives (FN - Bỏ sót khách hàng rời bỏ):** `6`
-  - **True Negatives (TN - Nhận diện đúng khách hàng ở lại):** `1590`
-  - **False Positives (FP - Cảnh báo nhầm khách hàng ở lại):** `3`
+  - **True Positives (TP - Bắt đúng khách hàng rời bỏ):** `223`
+  - **False Negatives (FN - Bỏ sót khách hàng rời bỏ):** `184`
+  - **True Negatives (TN - Nhận diện đúng khách hàng ở lại):** `1503`
+  - **False Positives (FP - Cảnh báo nhầm khách hàng ở lại):** `90`
 
 ### 2.2. Ý nghĩa từ các thí nghiệm Ablation:
 1. **Vai trò của Domain Features (Kịch bản 3):**
@@ -43,7 +44,7 @@ Bảng dưới đây so sánh toàn diện hiệu năng của mô hình **XGBoos
 3. **Mã hóa Target Encoding (Kịch bản 4):**
    - Bayesian $m$-estimate target encoding cung cấp thông tin liên tục về xu hướng rời bỏ theo từng quốc gia, giới tính và kênh giao dịch mà không làm bùng nổ số chiều.
 4. **Hiệu năng của Top 15 Features (Kịch bản 7):**
-   - Chỉ với **15 đặc trưng quan trọng nhất**, mô hình vẫn duy trì ROC-AUC đạt `0.9998`, chứng minh tính khả thi cao khi cần triển khai thời gian thực (real-time low-latency serving).
+   - Chỉ với **15 đặc trưng quan trọng nhất**, mô hình vẫn duy trì ROC-AUC đạt `0.8510`, chứng minh tính khả thi cao khi cần triển khai thời gian thực (real-time low-latency serving).
 
 ---
 
@@ -51,23 +52,25 @@ Bảng dưới đây so sánh toàn diện hiệu năng của mô hình **XGBoos
 
 **Phương pháp đo độ quan trọng:** Average Gain (mức giảm hàm mục tiêu bình quân khi chia nút)
 
-| Feature                     |   Importance |   Relative_Pct |
-|:----------------------------|-------------:|---------------:|
-| is_spending_collapsing      |    469.671   |          42.9  |
-| robust_trans_trend_ratio    |    256.305   |          23.41 |
-| trans_trend_ratio           |    196.397   |          17.94 |
-| interaction_velocity        |     24.4265  |           2.23 |
-| log_recency_days            |     23.9148  |           2.18 |
-| recency_days                |     19.4984  |           1.78 |
-| robust_monthly_transactions |     14.7661  |           1.35 |
-| monthly_transactions        |     11.366   |           1.04 |
-| robust_recency_days         |      6.45925 |           0.59 |
-| has_unresolved_complaint    |      5.89662 |           0.54 |
-| app_logins_monthly          |      4.70191 |           0.43 |
-| friction_index              |      4.30723 |           0.39 |
-| wealth_deceleration_risk    |      3.76241 |           0.34 |
-| tenure                      |      3.24413 |           0.3  |
-| products_number             |      2.82392 |           0.26 |
+![Biểu đồ đặc trưng quan trọng nhất](ablation_feature_importance.png)
+
+| Feature                   |   Importance |   Relative_Pct |
+|:--------------------------|-------------:|---------------:|
+| is_product_sweetspot      |     422.215  |          19.29 |
+| gender_Female             |     107.261  |           4.9  |
+| active_member             |      88.3506 |           4.04 |
+| country_Germany           |      85.2093 |           3.89 |
+| gender_Male               |      70.6229 |           3.23 |
+| country_target_enc        |      65.3052 |           2.98 |
+| std_age                   |      64.0339 |           2.93 |
+| inactive_high_balance     |      61.4926 |           2.81 |
+| primary_device_target_enc |      59.0274 |           2.7  |
+| primary_device_iOS        |      55.1064 |           2.52 |
+| gender_target_enc         |      39.7488 |           1.82 |
+| multi_account_holder      |      37.6158 |           1.72 |
+| products_number           |      36.0236 |           1.65 |
+| bank_fee_amount           |      35.5778 |           1.63 |
+| country_Spain             |      35.1586 |           1.61 |
 
 ---
 

@@ -6,11 +6,12 @@ categorical encoding, SMOTE class balancing, and feature selection.
 Configuration is decoupled into the config/ module with YAML support.
 """
 
+import copy
 from dataclasses import dataclass
 import os
 from pathlib import Path
 import sys
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -23,12 +24,56 @@ except ImportError:
     from config import PipelineConfig
 
 from .base import BaseFeatureTransformer
+from .etl import BankDataETL, load_or_build_dataset
 from .skewness_transform import SkewnessTransformer
 from .scaling import FeatureScaler
 from .domain_features import DomainFeatureEngineer
 from .categorical_encoding import CategoricalEncoder
 from .balancing import ClassBalancer
 from .feature_selector import FeatureSelector
+from .splitting import DataSplitter, DatasetSplit, CVFold, CVResult
+
+
+def load_dataset(
+    features_cfg: Optional[PipelineConfig] = None,
+    force_rebuild: bool = False,
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    Unified dataset ingestion & loading function.
+    Resolves data_path, checks cache, and builds from raw multi-table files via BankDataETL if needed.
+    """
+    cfg = features_cfg or PipelineConfig()
+    target_data_str = cfg.data_path
+    rebuild = force_rebuild or getattr(cfg, "rebuild_full_dataset", False)
+
+    target_path = Path(target_data_str)
+    if not target_path.is_absolute():
+        repo_root = Path(__file__).resolve().parent.parent
+        resolved = (repo_root / target_path).resolve()
+        if not resolved.exists() and not rebuild:
+            cwd_cand = Path.cwd() / target_path
+            resolved = cwd_cand if cwd_cand.exists() else resolved
+    else:
+        resolved = target_path
+
+    if rebuild or not resolved.exists() or resolved.is_dir():
+        raw_dir = getattr(cfg, "raw_full_dataset_dir", "data/full_dataset")
+        out_path = str(resolved) if not resolved.is_dir() else "data/full_bank_data.csv"
+        return load_or_build_dataset(
+            raw_data_dir=raw_dir,
+            output_path=out_path,
+            force_rebuild=rebuild,
+            verbose=verbose,
+        )
+
+    if verbose:
+        print(f"[OK] Ingesting dataset from: {resolved}")
+    return pd.read_csv(resolved)
+
+
+# Backward-compatible alias
+load_or_build_full_dataset = load_or_build_dataset
 
 
 @dataclass
@@ -42,6 +87,8 @@ class PipelineResult:
     X_train_resampled: pd.DataFrame
     y_train_resampled: pd.Series
     model_features: List[str]
+    X_val: Optional[pd.DataFrame] = None
+    y_val: Optional[pd.Series] = None
     feature_importance: Optional[pd.DataFrame] = None
     full_transformed_df: Optional[pd.DataFrame] = None
 
@@ -218,24 +265,38 @@ class FeatureEngineeringPipeline:
         if target not in df.columns:
             raise KeyError(f"Target column '{target}' not found in dataframe.")
 
-        # 1. Stratified Train/Test Split
-        stratify_col = df[target] if self.config.stratify else None
-        train_df, test_df = train_test_split(
-            df,
-            test_size=self.config.test_size,
-            random_state=self.config.random_state,
-            stratify=stratify_col,
-        )
+        # If baseline mode is requested, restrict dataframe strictly to original raw Kaggle features
+        if getattr(self.config, "use_raw_kaggle_features_only", False):
+            raw_cols = [
+                "credit_score", "country", "gender", "age", "tenure",
+                "balance", "products_number", "credit_card", "active_member",
+                "estimated_salary", target
+            ]
+            available_raw = [c for c in raw_cols if c in df.columns]
+            df = df[available_raw].copy()
+            self.config.enable_domain_features = False
+            self.domain_engineer.enabled = False
 
-        train_df = train_df.copy()
-        test_df = test_df.copy()
+        # 1. Stratified Partitioning via DataSplitter
+        splitter = DataSplitter(
+            test_size=self.config.test_size,
+            val_size=getattr(self.config, "val_size", 0.0),
+            stratify=self.config.stratify,
+            random_state=self.config.random_state,
+        )
+        split = splitter.train_val_test_split(df, target_col=target)
+
+        train_df = split.train_df
+        test_df = split.test_df
+        val_df = split.val_df
 
         # 2. Fit transformers exclusively on train_df
         self.fit(train_df, target_col=target)
 
-        # 3. Transform both train and test partitions
+        # 3. Transform partitions
         train_tr = self.transform(train_df)
         test_tr = self.transform(test_df)
+        val_tr = self.transform(val_df) if split.has_val else None
 
         # 4. Extract numeric feature matrices
         feature_cols = self.extract_model_features(train_tr)
@@ -243,6 +304,13 @@ class FeatureEngineeringPipeline:
         y_train = train_tr[target].copy()
         X_test = test_tr[feature_cols].copy()
         y_test = test_tr[target].copy()
+
+        if val_tr is not None:
+            X_val = val_tr[feature_cols].copy()
+            y_val = val_tr[target].copy()
+        else:
+            X_val = None
+            y_val = None
 
         # 5. Class Imbalance Remediation (SMOTE) strictly on training set
         X_train_res, y_train_res = self.balancer.fit_resample(X_train, y_train)
@@ -259,6 +327,8 @@ class FeatureEngineeringPipeline:
             X_train = self.feature_selector.transform(X_train)
             X_test = self.feature_selector.transform(X_test)
             X_train_res = self.feature_selector.transform(X_train_res)
+            if X_val is not None:
+                X_val = self.feature_selector.transform(X_val)
             feature_cols = list(X_train.columns)
 
         # Full transformed df (fit_transform on whole dataset for exploratory export)
@@ -272,8 +342,47 @@ class FeatureEngineeringPipeline:
             X_train_resampled=X_train_res,
             y_train_resampled=y_train_res,
             model_features=feature_cols,
+            X_val=X_val,
+            y_val=y_val,
             feature_importance=df_importance,
             full_transformed_df=full_transformed,
+        )
+
+    def cross_validate(
+        self,
+        df: pd.DataFrame,
+        model_builder: Callable[[Any, pd.Series], Any],
+        target_col: Optional[str] = None,
+        n_splits: Optional[int] = None,
+        verbose: bool = False,
+    ) -> Any:
+        """
+        Executes leak-free Cross-Validation using DataSplitter.
+        """
+        target = target_col or self.config.target_col
+        if getattr(self.config, "use_raw_kaggle_features_only", False):
+            raw_cols = [
+                "credit_score", "country", "gender", "age", "tenure",
+                "balance", "products_number", "credit_card", "active_member",
+                "estimated_salary", target
+            ]
+            available_raw = [c for c in raw_cols if c in df.columns]
+            df = df[available_raw].copy()
+            self.config.enable_domain_features = False
+
+        k = n_splits or getattr(self.config, "cv_folds", 5)
+        splitter = DataSplitter(
+            n_splits=k,
+            stratify=self.config.stratify,
+            random_state=self.config.random_state,
+        )
+        return splitter.evaluate_cv(
+            df=df,
+            pipeline_builder=lambda: FeatureEngineeringPipeline(copy.deepcopy(self.config)),
+            model_builder=model_builder,
+            target_col=target,
+            n_splits=k,
+            verbose=verbose,
         )
 
     def export_artifacts(

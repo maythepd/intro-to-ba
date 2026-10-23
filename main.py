@@ -23,8 +23,13 @@ from models import (
     LogisticRegressionChurnModel,
     RandomForestChurnModel,
     XGBoostChurnModel,
+    OptunaTuner,
 )
-from preprocessing import FeatureEngineeringPipeline
+from preprocessing import pipeline
+from visualization import (
+    plot_feature_importance,
+    plot_model_comparison,
+)
 
 # Supported model registry
 MODEL_REGISTRY = {
@@ -116,25 +121,30 @@ def run_single_experiment(
     model_cfg: Dict[str, Any],
     experiment_name: str,
     model_type: str = "xgboost",
+    run_cv: bool = False,
 ) -> Tuple[Dict[str, Any], AnyChurnModel, pd.DataFrame]:
     """
     Executes a single experiment:
-      1. Prepares train/test sets using FeatureEngineeringPipeline.
+      1. Prepares train/val/test sets using FeatureEngineeringPipeline and DataSplitter.
       2. Instantiates and trains the requested model (xgboost | lr | rf).
       3. Evaluates metrics on held-out test partition.
-      4. Extracts feature importances.
+      4. Optionally evaluates K-Fold Cross-Validation.
+      5. Extracts feature importances.
     """
     print(f"\n>>> Running Experiment: [{experiment_name}] | Model: {model_type.upper()}")
-    pipeline = FeatureEngineeringPipeline(features_cfg)
-    res = pipeline.prepare_train_test(df)
+    pipe = pipeline.FeatureEngineeringPipeline(features_cfg)
+    res = pipe.prepare_train_test(df)
 
     model = _build_model(model_type, model_cfg, features_cfg, res.y_train_resampled)
+
+    X_val = res.X_val if res.X_val is not None else res.X_test
+    y_val = res.y_val if res.y_val is not None else res.y_test
 
     model.fit(
         X_train=res.X_train_resampled,
         y_train=res.y_train_resampled,
-        X_val=res.X_test,
-        y_val=res.y_test,
+        X_val=X_val,
+        y_val=y_val,
         verbose=False,
     )
 
@@ -143,15 +153,42 @@ def run_single_experiment(
     metrics["Model"] = model_type.upper()
     metrics["Num_Features"] = len(res.model_features)
     metrics["X_train_Shape"] = f"{res.X_train_resampled.shape[0]}x{res.X_train_resampled.shape[1]}"
+    if res.X_val is not None:
+        metrics["X_val_Shape"] = f"{res.X_val.shape[0]}x{res.X_val.shape[1]}"
     metrics["X_test_Shape"] = f"{res.X_test.shape[0]}x{res.X_test.shape[1]}"
     metrics["SMOTE_Applied"] = features_cfg.enable_smote
+
+    # Optional K-Fold Cross-Validation evaluation
+    if run_cv and getattr(features_cfg, "enable_cv", False) and not features_cfg.enable_feature_selection:
+        k_folds = getattr(features_cfg, "cv_folds", 5)
+        print(f"    Evaluating {k_folds}-Fold Stratified Cross-Validation...")
+        try:
+            cv_res = pipe.cross_validate(
+                df=df,
+                model_builder=lambda p_cfg, y_tr: _build_model(model_type, model_cfg, p_cfg, y_tr),
+                n_splits=k_folds,
+                verbose=False,
+            )
+            metrics["CV_ROC_AUC"] = round(cv_res.mean_metrics.get("ROC_AUC", 0.0), 4)
+            metrics["CV_ROC_AUC_Std"] = round(cv_res.std_metrics.get("ROC_AUC", 0.0), 4)
+            metrics["CV_PR_AUC"] = round(cv_res.mean_metrics.get("PR_AUC", 0.0), 4)
+            metrics["CV_F1"] = round(cv_res.mean_metrics.get("F1_Score", 0.0), 4)
+            print(
+                f"    {k_folds}-Fold CV Scores  | "
+                f"ROC-AUC: {metrics['CV_ROC_AUC']} ± {metrics['CV_ROC_AUC_Std']} | "
+                f"PR-AUC: {metrics['CV_PR_AUC']} | "
+                f"F1: {metrics['CV_F1']}"
+            )
+        except Exception as e:
+            print(f"    [WARN] CV execution skipped: {e}")
 
     # Use default importance_type per model family
     imp_type = "gain" if model_type == "xgboost" else "gini" if model_type == "rf" else "coefficient"
     df_imp = model.get_feature_importances(importance_type=imp_type)
 
     print(
-        f"    Features: {metrics['Num_Features']} | "
+        f"    Test Set Scores   | "
+        f"Features: {metrics['Num_Features']} | "
         f"ROC-AUC: {metrics['ROC_AUC']:.4f} | "
         f"PR-AUC: {metrics['PR_AUC']:.4f} | "
         f"F1-Score: {metrics['F1_Score']:.4f} | "
@@ -181,6 +218,7 @@ def run_model_comparison(
 
     feat_cfg = copy.deepcopy(base_config.features)
     model_dict = copy.deepcopy(base_config.model.__dict__)
+    run_cv = getattr(feat_cfg, "enable_cv", True)
 
     for name, mtype in model_types:
         metrics, trained_model, df_imp = run_single_experiment(
@@ -189,6 +227,7 @@ def run_model_comparison(
             model_cfg=model_dict,
             experiment_name=name,
             model_type=mtype,
+            run_cv=run_cv,
         )
         results.append(metrics)
         models_dict[name] = trained_model
@@ -210,7 +249,14 @@ def run_ablation_suite(
     print(f"\n[INFO] Ablation suite using model: {model_type.upper()}") 
     experiments: List[Tuple[str, Dict[str, Any]]] = [
         (
-            "1. Full Pipeline (Default)",
+            "0. Raw Kaggle Baseline (Original 10 Features Only)",
+            {
+                "use_raw_kaggle_features_only": True,
+                "enable_domain_features": False,
+            },
+        ),
+        (
+            "1. Full Pipeline (Default - All Multi-Table & Domain)",
             {},
         ),
         (
@@ -234,8 +280,12 @@ def run_ablation_suite(
             {"enable_scaling": False, "enable_skewness": False},
         ),
         (
-            "7. Top 15 Features Only (Feature Selection)",
-            {"enable_feature_selection": True, "top_k_features": 15},
+            "7. Top 15 Features Only (Feature Selection - MI Classif)",
+            {
+                "enable_feature_selection": True,
+                "top_k_features": 15,
+                "feature_selection_metric": "MI_Score",
+            },
         ),
     ]
 
@@ -303,6 +353,16 @@ def generate_ablation_report(
         "lr": "Absolute Coefficient |β| (proxy độ quan trọng tuyến tính)",
     }.get(model_type.lower(), "Feature Importance")
 
+    # Save feature importance chart
+    chart_filename = "ablation_feature_importance.png"
+    chart_path = Path(output_filepath).parent / chart_filename
+    plot_feature_importance(
+        df_imp=best_imp,
+        output_path=chart_path,
+        model_name=f"{model_display} (Ablation Champion)",
+        top_k=15,
+    )
+
     md_content = f"""# BÁO CÁO THỰC NGHIỆM MÔ HÌNH {model_display.upper()} & ABLATION STUDY
 ## DỰ BÁO RỦI RO RỜI BỎ KHÁCH HÀNG (CUSTOMER CHURN PREDICTION)
 
@@ -340,13 +400,15 @@ Bảng dưới đây so sánh toàn diện hiệu năng của mô hình **{model
 3. **Mã hóa Target Encoding (Kịch bản 4):**
    - Bayesian $m$-estimate target encoding cung cấp thông tin liên tục về xu hướng rời bỏ theo từng quốc gia, giới tính và kênh giao dịch mà không làm bùng nổ số chiều.
 4. **Hiệu năng của Top 15 Features (Kịch bản 7):**
-   - Chỉ với **15 đặc trưng quan trọng nhất**, mô hình vẫn duy trì ROC-AUC đạt `{df_results.loc[df_results['Experiment'] == '7. Top 15 Features Only (Feature Selection)', 'ROC_AUC'].values[0]:.4f}`, chứng minh tính khả thi cao khi cần triển khai thời gian thực (real-time low-latency serving).
+   - Chỉ với **15 đặc trưng quan trọng nhất**, mô hình vẫn duy trì ROC-AUC đạt `{df_results.loc[df_results['Experiment'].str.startswith('7.'), 'ROC_AUC'].values[0]:.4f}`, chứng minh tính khả thi cao khi cần triển khai thời gian thực (real-time low-latency serving).
 
 ---
 
 ## 3. TOP 15 ĐẶC TRƯNG QUAN TRỌNG NHẤT
 
 **Phương pháp đo độ quan trọng:** {imp_type_label}
+
+![Biểu đồ đặc trưng quan trọng nhất]({chart_filename})
 
 {top15_imp.to_markdown(index=False)}
 
@@ -403,17 +465,35 @@ def generate_comparison_report(
         "Balanced_Accuracy",
         "Log_Loss",
     ]
-    df_table = df_results[display_cols].copy()
+    if "CV_ROC_AUC" in df_results.columns:
+        display_cols.insert(1, "CV_ROC_AUC")
+        display_cols.insert(2, "CV_PR_AUC")
+    df_table = df_results[[c for c in display_cols if c in df_results.columns]].copy()
 
     # Determine best model based on PR_AUC and ROC_AUC
     best_row = df_results.sort_values(by=["PR_AUC", "ROC_AUC"], ascending=False).iloc[0]
     best_model_name = best_row["Model"]
 
+    # Render and save comparison chart and feature importances
+    comp_chart_name = "model_comparison_chart.png"
+    comp_chart_path = Path(output_filepath).parent / comp_chart_name
+    plot_model_comparison(df_results, comp_chart_path)
+
+    for name, df_imp in importances_dict.items():
+        safe_name = name.lower().replace(" ", "_")
+        plot_feature_importance(
+            df_imp=df_imp,
+            output_path=Path(output_filepath).parent / f"feature_importance_{safe_name}.png",
+            model_name=name,
+            top_k=15,
+        )
+
     # Build Top 5 features per model for side-by-side comparison
     top_features_md = ""
     for name, df_imp in importances_dict.items():
+        safe_name = name.lower().replace(" ", "_")
         top5 = df_imp.head(5)[["Feature", "Relative_Pct"]].to_markdown(index=False)
-        top_features_md += f"#### Top 5 Đặc trưng — {name}\n\n{top5}\n\n"
+        top_features_md += f"#### Top 5 Đặc trưng — {name}\n\n![{name} Top Features](feature_importance_{safe_name}.png)\n\n{top5}\n\n"
 
     md_content = f"""# BÁO CÁO ĐỐI ĐẦU VÀ SO SÁNH TOÀN DIỆN CÁC MÔ HÌNH (MODEL COMPARISON)
 ## LOGISTIC REGRESSION vs. RANDOM FOREST vs. XGBOOST
@@ -428,6 +508,8 @@ def generate_comparison_report(
 ## 1. BẢNG TỔNG HỢP SO SÁNH CHỈ SỐ HIỆU NĂNG (BENCHMARK TABLE)
 
 Bảng đối đầu trực tiếp giữa 3 họ thuật toán đại diện: Tuyến tính (Logistic Regression), Ensemble Bagging (Random Forest), và Gradient Boosting (XGBoost):
+
+![Biểu đồ đối đầu mô hình]({comp_chart_name})
 
 {df_table.to_markdown(index=False)}
 
@@ -491,6 +573,11 @@ def generate_train_report(
     model_names = {"xgboost": "XGBoost", "lr": "Logistic Regression", "rf": "Random Forest"}
     model_display = model_names.get(model_type.lower(), model_type.upper())
 
+    # Save feature importance chart
+    chart_name = f"{model_type}_feature_importance.png"
+    chart_path = Path(output_filepath).parent / chart_name
+    plot_feature_importance(df_imp, chart_path, model_name=model_display, top_k=15)
+
     top15 = df_imp.head(15).to_markdown(index=False)
     metrics_table = pd.DataFrame([{
         "Metric": k,
@@ -523,6 +610,8 @@ def generate_train_report(
 ---
 
 ## 3. TOP 15 ĐẶC TRƯNG QUAN TRỌNG NHẤT
+
+![Biểu đồ đặc trưng quan trọng]({chart_name})
 
 {top15}
 
@@ -591,11 +680,12 @@ def main() -> None:
         "--mode",
         type=str,
         default="compare",
-        choices=["ablation", "train", "compare"],
+        choices=["ablation", "train", "compare", "tune"],
         help=(
             "Run mode: "
             "'compare' (LR vs RF vs XGBoost, same pipeline), "
             "'ablation' (feature ablation on one model), "
+            "'tune' (Optuna hyperparameter tuning on CV), "
             "'train' (single model training)"
         ),
     )
@@ -604,7 +694,20 @@ def main() -> None:
         type=str,
         default="xgboost",
         choices=["xgboost", "lr", "rf"],
-        help="Model to use in 'ablation' or 'train' mode (ignored in 'compare' mode)",
+        help="Model to use in 'ablation', 'train', or 'tune' mode (ignored in 'compare' mode)",
+    )
+    parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=None,
+        help="Number of trials for Optuna hyperparameter optimization",
+    )
+    parser.add_argument(
+        "--tuning-metric",
+        type=str,
+        default=None,
+        choices=["PR_AUC", "ROC_AUC", "F1_Score"],
+        help="Target metric for Optuna tuning (PR_AUC | ROC_AUC | F1_Score)",
     )
     parser.add_argument(
         "--output-dir",
@@ -618,6 +721,11 @@ def main() -> None:
         default=None,
         help="Custom filename for the generated markdown report (auto-resolved from config if omitted)",
     )
+    parser.add_argument(
+        "--rebuild-dataset",
+        action="store_true",
+        help="Force rebuild of full dataset from raw multi-table relational files in data/full_dataset/",
+    )
 
     args = parser.parse_args()
 
@@ -625,10 +733,9 @@ def main() -> None:
     cfg = load_unified_config(args.config)
     print(f"[OK] Loaded unified configuration from: {args.config}")
 
-    # 2. Resolve dataset path
-    data_path = resolve_data_path(cfg.features.data_path)
-    print(f"[OK] Ingesting dataset from: {data_path}")
-    df = pd.read_csv(data_path)
+    # 2. Ingest / load dataset via pipeline (auto-orchestrates ETL if needed)
+    force_rebuild = args.rebuild_dataset or getattr(cfg.features, "rebuild_full_dataset", False)
+    df = pipeline.load_dataset(cfg.features, force_rebuild=force_rebuild)
     print(f"     Dataset shape: {df.shape[0]} rows, {df.shape[1]} columns")
 
     # 3. Determine structured output subfolder:
@@ -768,6 +875,35 @@ def main() -> None:
             df_imp=df_imp,
             model_type=model_type,
             model_save_path=save_path,
+        )
+
+    elif args.mode == "tune":
+        model_type = args.model_type
+        trials_count = args.n_trials or getattr(cfg.tuning, "n_trials", 30)
+        tune_metric = args.tuning_metric or getattr(cfg.tuning, "metric", "PR_AUC")
+        cv_folds = getattr(cfg.tuning, "cv_folds", 5)
+        timeout = getattr(cfg.tuning, "timeout", None)
+
+        print("\n=======================================================")
+        print(f"HYPERPARAMETER OPTIMIZATION (OPTUNA): [{model_type.upper()}]")
+        print("=======================================================")
+
+        tuner = OptunaTuner(
+            model_type=model_type,
+            config=cfg,
+            target_metric=tune_metric,
+            cv_folds=cv_folds,
+            n_trials=trials_count,
+            timeout=timeout,
+            random_state=getattr(cfg.tuning, "random_state", 42),
+        )
+
+        tuner.tune(
+            df=df,
+            n_trials=trials_count,
+            timeout=timeout,
+            output_dir=str(output_dir),
+            verbose=True,
         )
 
 
