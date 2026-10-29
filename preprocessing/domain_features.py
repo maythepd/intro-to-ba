@@ -51,6 +51,12 @@ class DomainFeatureEngineer(BaseFeatureTransformer):
         self.enable_risk_interactions = enable_risk_interactions
 
     def fit(self, X: pd.DataFrame, y: Optional[pd.Series] = None) -> "DomainFeatureEngineer":
+        """Fit empirical baseline statistics on training data (leak-free)."""
+        exp_m = X["exposure_months"] if "exposure_months" in X.columns else 6.0
+        m_tx = (X["total_transactions"] / exp_m) if "total_transactions" in X.columns else 0.0
+        prods = np.maximum(X["products_number"], 1) if "products_number" in X.columns else 1.0
+        util = m_tx / prods
+        self.median_utilization_ = float(util.median()) if len(X) > 0 else 1.0
         self.is_fitted = True
         return self
 
@@ -63,6 +69,13 @@ class DomainFeatureEngineer(BaseFeatureTransformer):
 
         # Safe helper for exposure months
         exp_m = out["exposure_months"] if "exposure_months" in out.columns else 6.0
+
+        # Identify newly joined customers (exposure <= 3 months, i.e. joined in Q3)
+        # Per synth_data_dict.md: History before joining is unobserved, not zero activity.
+        is_new_cust = (exp_m <= 3.0)
+        if "is_new_customer" not in out.columns:
+            out["is_new_customer"] = is_new_cust.astype(int)
+            created.append("is_new_customer")
 
         # ----------------------------------------------------------------------
         # 1. Behavioral Momentum & Velocity Features
@@ -82,18 +95,22 @@ class DomainFeatureEngineer(BaseFeatureTransformer):
                 created.append("app_logins_monthly")
 
             # Momentum trend ratios (Q3 vs Q2)
+            # For new customers who joined in Q3, Q2 is unobserved. Set neutral ratio (1.0) and collapse flags to 0.
             if "trans_amount_3m" in out.columns and "trans_amount_prior_3m" in out.columns:
-                out["trans_trend_ratio"] = out["trans_amount_3m"] / (out["trans_amount_prior_3m"] + 1.0)
-                out["is_spending_collapsing"] = (out["trans_trend_ratio"] < 0.50).astype(int)
+                raw_trend = out["trans_amount_3m"] / (out["trans_amount_prior_3m"] + 1.0)
+                out["trans_trend_ratio"] = np.where(is_new_cust, 1.0, raw_trend)
+                out["is_spending_collapsing"] = np.where(is_new_cust, 0, (out["trans_trend_ratio"] < 0.50).astype(int))
                 created.extend(["trans_trend_ratio", "is_spending_collapsing"])
 
             if "trans_count_3m" in out.columns and "trans_count_prior_3m" in out.columns:
-                out["trans_count_trend_ratio"] = out["trans_count_3m"] / (out["trans_count_prior_3m"] + 1.0)
+                raw_count_trend = out["trans_count_3m"] / (out["trans_count_prior_3m"] + 1.0)
+                out["trans_count_trend_ratio"] = np.where(is_new_cust, 1.0, raw_count_trend)
                 created.append("trans_count_trend_ratio")
 
             if "login_count_q3" in out.columns and "login_count_q2" in out.columns:
-                out["login_trend_ratio"] = out["login_count_q3"] / (out["login_count_q2"] + 1.0)
-                out["is_login_collapsing"] = (out["login_trend_ratio"] < 0.50).astype(int)
+                raw_login_trend = out["login_count_q3"] / (out["login_count_q2"] + 1.0)
+                out["login_trend_ratio"] = np.where(is_new_cust, 1.0, raw_login_trend)
+                out["is_login_collapsing"] = np.where(is_new_cust, 0, (out["login_trend_ratio"] < 0.50).astype(int))
                 created.extend(["login_trend_ratio", "is_login_collapsing"])
 
             # Interaction recency velocities
@@ -106,9 +123,15 @@ class DomainFeatureEngineer(BaseFeatureTransformer):
                 created.append("login_velocity")
 
             # Ticket size and cross-channel engagement
+            # Calculate avg ticket size within Q3 using trans_count_3m (Q3 transactions)
             has_amt = "trans_amount_3m" in out.columns
+            has_cnt_3m = "trans_count_3m" in out.columns
             has_m_tx = "monthly_transactions" in out.columns
-            if has_amt and has_m_tx:
+
+            if has_amt and has_cnt_3m:
+                out["avg_ticket_size"] = out["trans_amount_3m"] / (out["trans_count_3m"] + 1.0)
+                created.append("avg_ticket_size")
+            elif has_amt and has_m_tx:
                 out["avg_ticket_size"] = out["trans_amount_3m"] / (3.0 * (out["monthly_transactions"] + 1.0))
                 created.append("avg_ticket_size")
 
@@ -181,13 +204,68 @@ class DomainFeatureEngineer(BaseFeatureTransformer):
                 created.append("has_fee_penalty")
 
         # ----------------------------------------------------------------------
-        # 3. Product Bundling & Account Portfolio
+        # 3. Product Bundling & Account Portfolio (Dynamic Market-Regime Approach)
         # ----------------------------------------------------------------------
         if self.enable_product_bundling:
-            if "products_number" in out.columns:
-                out["is_product_sweetspot"] = (out["products_number"] == 2).astype(int)
-                out["is_product_danger_zone"] = (out["products_number"] >= 3).astype(int)
-                created.extend(["is_product_sweetspot", "is_product_danger_zone"])
+            has_prods = "products_number" in out.columns
+            prods = np.maximum(out["products_number"], 1) if has_prods else 1.0
+
+            # Dynamic portfolio utilization ratios
+            if "monthly_transactions" in out.columns and has_prods:
+                out["portfolio_utilization"] = out["monthly_transactions"] / prods
+                created.append("portfolio_utilization")
+
+            if "balance" in out.columns and has_prods:
+                out["balance_per_product"] = np.maximum(0, out["balance"]) / prods
+                created.append("balance_per_product")
+
+            if has_prods:
+                has_act = "active_member" in out.columns
+                has_sp_col = "is_spending_collapsing" in out.columns
+                has_fric = "is_high_friction" in out.columns
+                has_unres = "has_unresolved_complaint" in out.columns
+
+                util = out["portfolio_utilization"] if "portfolio_utilization" in out.columns else 1.0
+                med_util = getattr(self, "median_utilization_", 1.0)
+                act = out["active_member"] if has_act else 1
+                sp_col = out["is_spending_collapsing"] if has_sp_col else 0
+                fric = out["is_high_friction"] if has_fric else 0
+                unres = out["has_unresolved_complaint"] if has_unres else 0
+
+                # 1. Dynamic Sweetspot (Bull Regime):
+                # Khách hàng có danh mục đa dạng (>=2 sản phẩm), mức độ sử dụng thực tế tích cực (util >= median),
+                # duy trì hoạt động (active_member == 1), xung lượng chi tiêu lành mạnh (không collapse), không ma sát.
+                out["is_product_sweetspot"] = (
+                    (out["products_number"] >= 2)
+                    & (act == 1)
+                    & (util >= med_util)
+                    & (sp_col == 0)
+                    & (fric == 0)
+                ).astype(int)
+
+                # 2. Dynamic Danger Zone (Bear Regime):
+                # Khách hàng rơi vào vùng nguy hiểm khi danh mục bị "bỏ xó" (3+ sản phẩm nhưng không dùng hoặc dưới median),
+                # HOẶC xung lượng sụp đổ đi kèm ngừng hoạt động, HOẶC gặp ma sát tranh chấp gay gắt chưa giải quyết.
+                out["is_product_danger_zone"] = (
+                    ((out["products_number"] >= 3) & ((act == 0) | (util < med_util)))
+                    | ((sp_col == 1) & (act == 0))
+                    | ((fric == 1) & (unres == 1))
+                ).astype(int)
+
+                # 3. Continuous Portfolio Health Score (Tương tự Composite Momentum Oscillator trong tài chính)
+                trend_val = out["trans_trend_ratio"] if "trans_trend_ratio" in out.columns else 1.0
+                trend_dev = np.log1p(np.clip(trend_val, 0.0, 10.0)) - np.log1p(1.0)
+                out["portfolio_health_score"] = (
+                    0.35 * (act - 0.5) * 2.0
+                    + 0.25 * trend_dev
+                    + 0.20 * np.log1p(util)
+                    - 0.20 * (fric * 1.5 + unres * 2.0)
+                )
+                created.extend([
+                    "is_product_sweetspot",
+                    "is_product_danger_zone",
+                    "portfolio_health_score",
+                ])
 
             if "num_savings_accounts" in out.columns:
                 out["has_savings_account"] = (out["num_savings_accounts"] > 0).astype(int)

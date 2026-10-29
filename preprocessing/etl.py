@@ -97,12 +97,12 @@ class BankDataETL:
 
         # 3. Account Schema Aggregation
         acc["is_everyday"] = (acc["account_type"] == "everyday").astype(int)
-        acc["is_savings"] = (acc["account_type"] == "term_deposit").astype(int)
-        acc["is_closed"] = (acc["status"] == "closed").astype(int)
-        acc["is_auto_renewal"] = (acc["renewal_mode"] == "auto").astype(int)
-        acc["is_manual_renewal"] = (acc["renewal_mode"] == "manual").astype(int)
+        acc["is_savings"] = (acc["account_type"] == "savings").astype(int)
+        acc["is_closed"] = acc["closed_at"].notna().astype(int)
+        acc["is_auto_renewal"] = (acc["renewal_type"] == "auto").astype(int)
+        acc["is_manual_renewal"] = (acc["renewal_type"] == "manual").astype(int)
 
-        acc["savings_bal"] = np.where(acc["account_type"] == "term_deposit", acc["balance"], 0.0)
+        acc["savings_bal"] = np.where(acc["account_type"] == "savings", acc["balance"], 0.0)
         acc["everyday_bal"] = np.where(acc["account_type"] == "everyday", acc["balance"], 0.0)
 
         acc_feat = acc.groupby("customer_id").agg(
@@ -175,7 +175,8 @@ class BankDataETL:
         df["customer_service_complaints"] = df["customer_service_complaints"].fillna(0).astype(int)
         df["unresolved_complaints_count"] = df["unresolved_complaints_count"].fillna(0).astype(int)
         df["resolved_complaints_count"] = df["resolved_complaints_count"].fillna(0).astype(int)
-        df["avg_resolution_delay_days"] = df["avg_resolution_delay_days"].fillna(0.0)
+        # Note: avg_resolution_delay_days is deliberately kept as NaN/None for customers without resolved complaints
+        # (avoiding conflating instant 0-day resolution with unresolved complaints or zero complaints).
         df["complaint_recency_days"] = df["complaint_recency_days"].fillna(df["exposure_days"])
 
         # 6. Digital Logins Schema Aggregation
@@ -183,10 +184,11 @@ class BankDataETL:
         log["is_success"] = (log["login_status"] == "success").astype(int)
         log["is_failed"] = (log["login_status"] == "failed").astype(int)
         log["is_app"] = (log["is_success"] & log["device_type"].isin(["ios", "android"])).astype(int)
-        log["is_desktop"] = (log["device_type"] == "desktop").astype(int)
-        log["is_mobile"] = log["device_type"].isin(["ios", "android"]).astype(int)
-        log["is_q3"] = (log["sign_in_datetime"] >= self.q3_start).astype(int)
-        log["is_q2"] = (log["sign_in_datetime"] < self.q3_start).astype(int)
+        log["is_desktop"] = (log["is_success"] & (log["device_type"] == "desktop")).astype(int)
+        log["is_mobile"] = (log["is_success"] & log["device_type"].isin(["ios", "android"])).astype(int)
+        # Engagement counts strictly measure successful logins per data dictionary (synth_data_dict.md: L33)
+        log["is_q3"] = (log["is_success"] & (log["sign_in_datetime"] >= self.q3_start)).astype(int)
+        log["is_q2"] = (log["is_success"] & (log["sign_in_datetime"] < self.q3_start)).astype(int)
 
         log_feat = log.groupby("customer_id").agg(
             total_logins=("login_id", "count"),
@@ -204,8 +206,8 @@ class BankDataETL:
         rec_login = (self.snapshot_boundary - last_login).dt.total_seconds() / 86400.0
         log_feat = log_feat.merge(rec_login.rename("login_recency_days"), on="customer_id", how="left")
 
-        # Dominant primary device
-        dev_counts = log.groupby(["customer_id", "device_type"]).size().unstack(fill_value=0)
+        # Dominant primary device (determined strictly from successful logins)
+        dev_counts = log_succ.groupby(["customer_id", "device_type"]).size().unstack(fill_value=0)
         dev_map = {"ios": "iOS", "android": "Android", "desktop": "Desktop"}
         primary_dev_series = dev_counts.idxmax(axis=1).map(dev_map)
         log_feat = log_feat.merge(primary_dev_series.rename("primary_device"), on="customer_id", how="left")
@@ -223,41 +225,63 @@ class BankDataETL:
         ]:
             df[col] = df[col].fillna(0).astype(int)
         df["login_recency_days"] = df["login_recency_days"].fillna(df["exposure_days"])
-        df["primary_device"] = df["primary_device"].fillna("Android")
+        df["primary_device"] = df["primary_device"].fillna("None")
 
         # 7. Financial Transactions Schema Aggregation
         acc_map = acc.set_index("account_id")["customer_id"].to_dict()
         tx["customer_id"] = tx["account_id"].map(acc_map)
         tx["transaction_datetime"] = pd.to_datetime(tx["transaction_datetime"], format="ISO8601")
 
-        tx["is_failed"] = (tx["status"] == "failed").astype(int)
-        tx["is_cancelled"] = (tx["status"] == "cancelled").astype(int)
-        tx["is_posted"] = (tx["status"] == "posted").astype(int)
+        tx["is_failed"] = (tx["transaction_status"] == "failed").astype(int)
+        tx["is_cancelled"] = (tx["transaction_status"] == "cancelled").astype(int)
+        tx["is_posted"] = (tx["transaction_status"] == "success").astype(int)
 
         posted_tx = tx[tx["is_posted"] == 1].copy()
 
+        # In banking transactions, internal transfers between two accounts of the same customer
+        # produce 2 linked records (1 debit 'out' and 1 credit 'in' with the same transfer_id).
+        # To count distinct customer transaction actions/attempts (avoiding double-counting
+        # internal transfers for the same customer), we take 1 record per internal transfer action (direction == 'out').
+        action_tx = tx[(tx["transaction_type"] != "internal_transfer") | (tx["direction"] == "out")]
+
         # Group by customer for overall counts and attempts
-        tx_all = tx.groupby("customer_id").agg(
+        tx_all = action_tx.groupby("customer_id").agg(
             total_tx_attempts=("transaction_id", "count"),
             failed_transactions=("is_failed", "sum"),
             cancelled_transactions=("is_cancelled", "sum"),
         ).reset_index()
 
-        # Inflow / Outflow aggregations
-        posted_tx["outflow_amount"] = np.where(posted_tx["direction"] == "outflow", posted_tx["amount"], 0.0)
-        posted_tx["inflow_amount"] = np.where(posted_tx["direction"] == "inflow", posted_tx["amount"], 0.0)
-        posted_tx["is_q3"] = (posted_tx["transaction_datetime"] >= self.q3_start).astype(int)
-        posted_tx["is_q2"] = (posted_tx["transaction_datetime"] < self.q3_start).astype(int)
+        # Inflow / Outflow aggregations:
+        # Customer-portfolio flows exclude internal transfers between a customer's own accounts
+        # (which are internal balance reallocations rather than external spending or incoming funds).
+        is_ext_out = (posted_tx["direction"] == "out") & (posted_tx["transaction_type"] != "internal_transfer")
+        is_ext_in = (posted_tx["direction"] == "in") & (posted_tx["transaction_type"] != "internal_transfer")
+
+        posted_tx["outflow_amount"] = np.where(is_ext_out, posted_tx["amount"], 0.0)
+        posted_tx["inflow_amount"] = np.where(is_ext_in, posted_tx["amount"], 0.0)
+        posted_tx["is_q3"] = (
+            (posted_tx["transaction_datetime"] >= self.q3_start) & is_ext_out
+        ).astype(int)
+        posted_tx["is_q2"] = (
+            (posted_tx["transaction_datetime"] < self.q3_start) & is_ext_out
+        ).astype(int)
 
         posted_tx["q3_amount"] = np.where(posted_tx["is_q3"] == 1, posted_tx["amount"], 0.0)
         posted_tx["q2_amount"] = np.where(posted_tx["is_q2"] == 1, posted_tx["amount"], 0.0)
 
         # Transaction types aggregations
-        for t_type in ["payment", "cash_withdrawal", "cash_deposit", "external_transfer_out", "bank_fee"]:
+        for t_type in ["payment", "cash_withdrawal", "cash_deposit", "bank_fee"]:
             posted_tx[f"{t_type}_amt"] = np.where(posted_tx["transaction_type"] == t_type, posted_tx["amount"], 0.0)
             posted_tx[f"{t_type}_cnt"] = (posted_tx["transaction_type"] == t_type).astype(int)
 
-        tx_feat = posted_tx.groupby("customer_id").agg(
+        is_ext_out_type = (posted_tx["transaction_type"] == "external_transfer") & (posted_tx["direction"] == "out")
+        posted_tx["external_transfer_out_amt"] = np.where(is_ext_out_type, posted_tx["amount"], 0.0)
+        posted_tx["external_transfer_out_cnt"] = is_ext_out_type.astype(int)
+
+        # Action-level posted transactions for count
+        action_posted = posted_tx[(posted_tx["transaction_type"] != "internal_transfer") | (posted_tx["direction"] == "out")]
+
+        tx_feat = action_posted.groupby("customer_id").agg(
             total_transactions=("transaction_id", "count"),
             total_outflow=("outflow_amount", "sum"),
             total_inflow=("inflow_amount", "sum"),
@@ -277,17 +301,18 @@ class BankDataETL:
             bank_fee_count=("bank_fee_cnt", "sum"),
         ).reset_index()
 
-        last_tx = posted_tx.groupby("customer_id")["transaction_datetime"].max()
+        # Recency: Calculated strictly on customer-initiated transactions (channel != "system"),
+        # preventing automated system postings (fees, interest, passive receipts) from faking active engagement.
+        cust_tx = posted_tx[posted_tx["channel"] != "system"]
+        last_tx = cust_tx.groupby("customer_id")["transaction_datetime"].max()
         rec_tx = (self.snapshot_boundary - last_tx).dt.total_seconds() / 86400.0
         tx_feat = tx_feat.merge(rec_tx.rename("recency_days"), on="customer_id", how="left")
 
-        # Preferred channel
-        channel_counts = posted_tx.groupby(["customer_id", "channel"]).size().unstack(fill_value=0)
+        # Preferred channel (customer-initiated channels only, excluding automated system postings)
+        channel_counts = cust_tx.groupby(["customer_id", "channel"]).size().unstack(fill_value=0)
         chan_map = {
             "mobile_app": "Mobile App",
-            "online_banking": "Online Banking",
             "atm": "ATM",
-            "pos": "POS",
             "branch": "Branch",
         }
         pref_chan_series = channel_counts.idxmax(axis=1).map(chan_map)
@@ -327,7 +352,7 @@ class BankDataETL:
             df[col] = df[col].fillna(0.0)
 
         df["recency_days"] = df["recency_days"].fillna(df["exposure_days"])
-        df["preferred_channel"] = df["preferred_channel"].fillna("Mobile App")
+        df["preferred_channel"] = df["preferred_channel"].fillna("None")
 
         # Ensure correct column ordering and types
         if "id" in df.columns:

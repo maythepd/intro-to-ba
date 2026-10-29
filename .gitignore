@@ -2,6 +2,5 @@ __pycache__/
 *.joblib
 saved/
 *.db
-docs/
 eda/
 data/

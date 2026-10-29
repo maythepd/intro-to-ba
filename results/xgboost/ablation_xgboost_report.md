@@ -1,7 +1,7 @@
 # BÁO CÁO THỰC NGHIỆM MÔ HÌNH XGBOOST & ABLATION STUDY
 ## DỰ BÁO RỦI RO RỜI BỎ KHÁCH HÀNG (CUSTOMER CHURN PREDICTION)
 
-**Thời gian thực thi:** `2026-10-24 00:36:32`  
+**Thời gian thực thi:** `2026-10-29 10:18:39`  
 **Mô hình cốt lõi:** `XGBoost`  
 **Cấu hình hợp nhất:** [`config/config.yaml`](../config/config.yaml)  
 
@@ -13,28 +13,28 @@ Bảng dưới đây so sánh toàn diện hiệu năng của mô hình **XGBoos
 
 | Experiment                                               |   Num_Features |   ROC_AUC |   PR_AUC |   F1_Score |   Precision |   Recall |   Accuracy |   Log_Loss |
 |:---------------------------------------------------------|---------------:|----------:|---------:|-----------:|------------:|---------:|-----------:|-----------:|
-| 0. Raw Kaggle Baseline (Original 10 Features Only)       |             21 |    0.8677 |   0.705  |     0.6263 |      0.6585 |   0.5971 |     0.855  |     0.352  |
-| 1. Full Pipeline (Default - All Multi-Table & Domain)    |            119 |    0.8665 |   0.7056 |     0.6194 |      0.7125 |   0.5479 |     0.863  |     0.339  |
-| 2. No SMOTE (Native scale_pos_weight)                    |            119 |    0.8638 |   0.7025 |     0.6167 |      0.5407 |   0.7174 |     0.8185 |     0.4387 |
-| 3. No Domain Features                                    |             84 |    0.8685 |   0.7027 |     0.6148 |      0.6923 |   0.5528 |     0.859  |     0.3492 |
-| 4. No Target Encoding                                    |            115 |    0.8631 |   0.6914 |     0.6158 |      0.6911 |   0.5553 |     0.859  |     0.3469 |
-| 5. No One-Hot Encoding                                   |            108 |    0.8669 |   0.7041 |     0.6081 |      0.7032 |   0.5356 |     0.8595 |     0.3389 |
-| 6. No Scaling & No Skewness Transform                    |            109 |    0.8633 |   0.7032 |     0.6019 |      0.679  |   0.5405 |     0.8545 |     0.3427 |
-| 7. Top 15 Features Only (Feature Selection - MI Classif) |             15 |    0.851  |   0.6951 |     0.6292 |      0.6396 |   0.6192 |     0.8515 |     0.3605 |
+| 0. Raw Kaggle Baseline (Original 10 Features Only)       |             21 |    0.8701 |   0.7192 |     0.6301 |      0.7368 |   0.5504 |     0.8685 |     0.3307 |
+| 1. Full Pipeline (Default - All Multi-Table & Domain)    |            125 |    0.8694 |   0.7084 |     0.6061 |      0.75   |   0.5086 |     0.8655 |     0.3333 |
+| 2. No SMOTE (Native scale_pos_weight)                    |            125 |    0.8678 |   0.7103 |     0.6117 |      0.5266 |   0.7297 |     0.8115 |     0.4323 |
+| 3. No Domain Features                                    |             86 |    0.8668 |   0.7118 |     0.6248 |      0.7449 |   0.5381 |     0.8685 |     0.3375 |
+| 4. No Target Encoding                                    |            121 |    0.8725 |   0.7132 |     0.6181 |      0.7599 |   0.5209 |     0.869  |     0.3285 |
+| 5. No One-Hot Encoding                                   |            112 |    0.8682 |   0.7073 |     0.6134 |      0.7509 |   0.5184 |     0.867  |     0.3358 |
+| 6. No Scaling & No Skewness Transform                    |            115 |    0.8672 |   0.7047 |     0.6156 |      0.7474 |   0.5233 |     0.867  |     0.3377 |
+| 7. Top 15 Features Only (Feature Selection - MI Classif) |             15 |    0.8608 |   0.7007 |     0.6116 |      0.6807 |   0.5553 |     0.8565 |     0.3466 |
 
 ---
 
 ## 2. PHÂN TÍCH VÀ ĐÁNH GIÁ CHUYÊN SÂU
 
-### 2.1. Cấu hình đạt hiệu năng tối ưu nhất: **1. Full Pipeline (Default - All Multi-Table & Domain)**
-- **ROC-AUC:** `0.8665` — Khả năng xếp hạng xác suất churn vượt trội trên toàn miền ngưỡng.
-- **PR-AUC (Average Precision):** `0.7056` — Đo lường chuẩn xác trên tập dữ liệu mất cân bằng (tỷ lệ churn ~20.37%).
-- **F1-Score:** `0.6194` (Precision: `0.7125`, Recall: `0.5479`).
+### 2.1. Cấu hình đạt hiệu năng tối ưu nhất: **0. Raw Kaggle Baseline (Original 10 Features Only)**
+- **ROC-AUC:** `0.8701` — Khả năng xếp hạng xác suất churn vượt trội trên toàn miền ngưỡng.
+- **PR-AUC (Average Precision):** `0.7192` — Đo lường chuẩn xác trên tập dữ liệu mất cân bằng (tỷ lệ churn ~20.37%).
+- **F1-Score:** `0.6301` (Precision: `0.7368`, Recall: `0.5504`).
 - **Ma trận nhầm lẫn (Confusion Matrix trên 2,000 khách hàng kiểm thử):**
-  - **True Positives (TP - Bắt đúng khách hàng rời bỏ):** `223`
-  - **False Negatives (FN - Bỏ sót khách hàng rời bỏ):** `184`
-  - **True Negatives (TN - Nhận diện đúng khách hàng ở lại):** `1503`
-  - **False Positives (FP - Cảnh báo nhầm khách hàng ở lại):** `90`
+  - **True Positives (TP - Bắt đúng khách hàng rời bỏ):** `224`
+  - **False Negatives (FN - Bỏ sót khách hàng rời bỏ):** `183`
+  - **True Negatives (TN - Nhận diện đúng khách hàng ở lại):** `1513`
+  - **False Positives (FP - Cảnh báo nhầm khách hàng ở lại):** `80`
 
 ### 2.2. Ý nghĩa từ các thí nghiệm Ablation:
 1. **Vai trò của Domain Features (Kịch bản 3):**
@@ -44,7 +44,7 @@ Bảng dưới đây so sánh toàn diện hiệu năng của mô hình **XGBoos
 3. **Mã hóa Target Encoding (Kịch bản 4):**
    - Bayesian $m$-estimate target encoding cung cấp thông tin liên tục về xu hướng rời bỏ theo từng quốc gia, giới tính và kênh giao dịch mà không làm bùng nổ số chiều.
 4. **Hiệu năng của Top 15 Features (Kịch bản 7):**
-   - Chỉ với **15 đặc trưng quan trọng nhất**, mô hình vẫn duy trì ROC-AUC đạt `0.8510`, chứng minh tính khả thi cao khi cần triển khai thời gian thực (real-time low-latency serving).
+   - Chỉ với **15 đặc trưng quan trọng nhất**, mô hình vẫn duy trì ROC-AUC đạt `0.8608`, chứng minh tính khả thi cao khi cần triển khai thời gian thực (real-time low-latency serving).
 
 ---
 
@@ -54,23 +54,23 @@ Bảng dưới đây so sánh toàn diện hiệu năng của mô hình **XGBoos
 
 ![Biểu đồ đặc trưng quan trọng nhất](ablation_feature_importance.png)
 
-| Feature                   |   Importance |   Relative_Pct |
-|:--------------------------|-------------:|---------------:|
-| is_product_sweetspot      |     422.215  |          19.29 |
-| gender_Female             |     107.261  |           4.9  |
-| active_member             |      88.3506 |           4.04 |
-| country_Germany           |      85.2093 |           3.89 |
-| gender_Male               |      70.6229 |           3.23 |
-| country_target_enc        |      65.3052 |           2.98 |
-| std_age                   |      64.0339 |           2.93 |
-| inactive_high_balance     |      61.4926 |           2.81 |
-| primary_device_target_enc |      59.0274 |           2.7  |
-| primary_device_iOS        |      55.1064 |           2.52 |
-| gender_target_enc         |      39.7488 |           1.82 |
-| multi_account_holder      |      37.6158 |           1.72 |
-| products_number           |      36.0236 |           1.65 |
-| bank_fee_amount           |      35.5778 |           1.63 |
-| country_Spain             |      35.1586 |           1.61 |
+| Feature              |   Importance |   Relative_Pct |
+|:---------------------|-------------:|---------------:|
+| active_member        |    112.532   |          17.08 |
+| gender_Male          |     83.3413  |          12.65 |
+| gender_target_enc    |     69.2482  |          10.51 |
+| gender_Female        |     63.9537  |           9.71 |
+| products_number      |     50.1229  |           7.61 |
+| country_Germany      |     43.259   |           6.57 |
+| country_target_enc   |     41.6644  |           6.32 |
+| age                  |     39.324   |           5.97 |
+| std_age              |     36.2387  |           5.5  |
+| country_France       |     28.0323  |           4.25 |
+| credit_card          |     24.8402  |           3.77 |
+| country_Spain        |     16.0612  |           2.44 |
+| is_zero_balance      |     10.5051  |           1.59 |
+| log_positive_balance |      8.37696 |           1.27 |
+| balance              |      6.86996 |           1.04 |
 
 ---
 

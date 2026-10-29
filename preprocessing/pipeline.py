@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from sklearn.impute import SimpleImputer
 
 # Ensure config module is discoverable
 try:
@@ -209,6 +210,12 @@ class FeatureEngineeringPipeline:
 
         # Step 4: Categorical
         self.categorical_encoder.fit(current, y)
+        current = self.categorical_encoder.transform(current)
+
+        # Step 5: Numeric Imputer (handles genuine NaNs like avg_resolution_delay_days cleanly without leakage)
+        feature_cols = self.extract_model_features(current)
+        self.imputer = SimpleImputer(strategy="median")
+        self.imputer.fit(current[feature_cols])
 
         return self
 
@@ -229,6 +236,11 @@ class FeatureEngineeringPipeline:
 
         # Step 4: Categorical
         out = self.categorical_encoder.transform(out)
+
+        # Step 5: Numeric Imputer
+        if hasattr(self, "imputer"):
+            feature_cols = self.extract_model_features(out)
+            out[feature_cols] = self.imputer.transform(out[feature_cols])
 
         return out
 
@@ -312,6 +324,8 @@ class FeatureEngineeringPipeline:
             X_val = None
             y_val = None
 
+
+
         # 5. Class Imbalance Remediation (SMOTE) strictly on training set
         X_train_res, y_train_res = self.balancer.fit_resample(X_train, y_train)
 
@@ -385,54 +399,71 @@ class FeatureEngineeringPipeline:
             verbose=verbose,
         )
 
-    def export_artifacts(
+    def export_processed_data(
         self,
         result: PipelineResult,
-        output_dir: str = "artifacts",
+        output_dir: str = "data/processed",
+        verbose: bool = True,
     ) -> Dict[str, str]:
         """
-        Export all transformed feature matrices and reports matching notebook outputs.
+        Export all transformed feature matrices and splits into data/processed/.
         """
         os.makedirs(output_dir, exist_ok=True)
         exported: Dict[str, str] = {}
 
         # 1. Full transformed dataset
         if result.full_transformed_df is not None:
-            p = os.path.join(output_dir, "transformed_features.csv")
+            p = os.path.join(output_dir, "full_transformed.csv")
             result.full_transformed_df.to_csv(p, index=False)
-            exported["transformed_features"] = p
+            exported["full_transformed"] = p
 
-        # 2. X_train and X_test transformed
-        p_xtrain = os.path.join(output_dir, "X_train_transformed.csv")
-        result.X_train.to_csv(p_xtrain, index=False)
-        exported["X_train"] = p_xtrain
+        # 2. Complete split datasets with target
+        p_train = os.path.join(output_dir, "train.csv")
+        df_train = result.X_train.copy()
+        df_train["churn"] = result.y_train.values
+        df_train.to_csv(p_train, index=False)
+        exported["train"] = p_train
 
-        p_xtest = os.path.join(output_dir, "X_test_transformed.csv")
-        result.X_test.to_csv(p_xtest, index=False)
-        exported["X_test"] = p_xtest
+        p_test = os.path.join(output_dir, "test.csv")
+        df_test = result.X_test.copy()
+        df_test["churn"] = result.y_test.values
+        df_test.to_csv(p_test, index=False)
+        exported["test"] = p_test
 
-        # 3. y_train and y_test
-        p_ytrain = os.path.join(output_dir, "y_train.csv")
-        result.y_train.to_csv(p_ytrain, index=False)
-        exported["y_train"] = p_ytrain
+        if result.X_val is not None and result.y_val is not None:
+            p_val = os.path.join(output_dir, "val.csv")
+            df_val = result.X_val.copy()
+            df_val["churn"] = result.y_val.values
+            df_val.to_csv(p_val, index=False)
+            exported["val"] = p_val
 
-        p_ytest = os.path.join(output_dir, "y_test.csv")
-        result.y_test.to_csv(p_ytest, index=False)
-        exported["y_test"] = p_ytest
+        # 3. SMOTE balanced sets
+        p_smote = os.path.join(output_dir, "train_smote.csv")
+        df_smote = result.X_train_resampled.copy()
+        df_smote["churn"] = result.y_train_resampled.values
+        df_smote.to_csv(p_smote, index=False)
+        exported["train_smote"] = p_smote
 
-        # 4. SMOTE balanced sets
-        p_xsmote = os.path.join(output_dir, "X_train_smote.csv")
-        result.X_train_resampled.to_csv(p_xsmote, index=False)
-        exported["X_train_smote"] = p_xsmote
-
-        p_ysmote = os.path.join(output_dir, "y_train_smote.csv")
-        result.y_train_resampled.to_csv(p_ysmote, index=False)
-        exported["y_train_smote"] = p_ysmote
-
-        # 5. Feature importance ranking
+        # 4. Feature importance ranking
         if result.feature_importance is not None:
             p_imp = os.path.join(output_dir, "feature_importance_ranking.csv")
             result.feature_importance.to_csv(p_imp, index=False)
             exported["feature_importance"] = p_imp
 
+        # 5. Metadata JSON (list of feature names)
+        import json
+        p_meta = os.path.join(output_dir, "feature_metadata.json")
+        with open(p_meta, "w", encoding="utf-8") as f:
+            json.dump({
+                "num_features": len(result.model_features),
+                "model_features": result.model_features,
+            }, f, indent=2)
+        exported["feature_metadata"] = p_meta
+
+        if verbose:
+            print(f"[OK] Saved processed datasets to: {output_dir}")
+
         return exported
+
+    # Backward-compatible alias
+    export_artifacts = export_processed_data
