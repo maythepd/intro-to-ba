@@ -175,8 +175,9 @@ class BankDataETL:
         df["customer_service_complaints"] = df["customer_service_complaints"].fillna(0).astype(int)
         df["unresolved_complaints_count"] = df["unresolved_complaints_count"].fillna(0).astype(int)
         df["resolved_complaints_count"] = df["resolved_complaints_count"].fillna(0).astype(int)
-        # Note: avg_resolution_delay_days is deliberately kept as NaN/None for customers without resolved complaints
-        # (avoiding conflating instant 0-day resolution with unresolved complaints or zero complaints).
+        # Note: Customers without complaints have resolution delay set to 0.0 (no friction/delay).
+        # Customers with complaints but unresolved remain NaN, which are properly imputed by the median of genuine complaints.
+        df.loc[df["customer_service_complaints"] == 0, "avg_resolution_delay_days"] = 0.0
         df["complaint_recency_days"] = df["complaint_recency_days"].fillna(df["exposure_days"])
 
         # 6. Digital Logins Schema Aggregation
@@ -225,7 +226,7 @@ class BankDataETL:
         ]:
             df[col] = df[col].fillna(0).astype(int)
         df["login_recency_days"] = df["login_recency_days"].fillna(df["exposure_days"])
-        df["primary_device"] = df["primary_device"].fillna("None")
+        df["primary_device"] = df["primary_device"].fillna("No_Device")
 
         # 7. Financial Transactions Schema Aggregation
         acc_map = acc.set_index("account_id")["customer_id"].to_dict()
@@ -257,13 +258,17 @@ class BankDataETL:
         is_ext_out = (posted_tx["direction"] == "out") & (posted_tx["transaction_type"] != "internal_transfer")
         is_ext_in = (posted_tx["direction"] == "in") & (posted_tx["transaction_type"] != "internal_transfer")
 
+        # Customer-initiated external outflows strictly exclude automated system postings (fees, auto-recurring),
+        # ensuring that Q3 activity/spending reflects actual user engagement rather than passive system deductions.
+        is_cust_ext_out = is_ext_out & (posted_tx["channel"] != "system")
+
         posted_tx["outflow_amount"] = np.where(is_ext_out, posted_tx["amount"], 0.0)
         posted_tx["inflow_amount"] = np.where(is_ext_in, posted_tx["amount"], 0.0)
         posted_tx["is_q3"] = (
-            (posted_tx["transaction_datetime"] >= self.q3_start) & is_ext_out
+            (posted_tx["transaction_datetime"] >= self.q3_start) & is_cust_ext_out
         ).astype(int)
         posted_tx["is_q2"] = (
-            (posted_tx["transaction_datetime"] < self.q3_start) & is_ext_out
+            (posted_tx["transaction_datetime"] < self.q3_start) & is_cust_ext_out
         ).astype(int)
 
         posted_tx["q3_amount"] = np.where(posted_tx["is_q3"] == 1, posted_tx["amount"], 0.0)
@@ -352,7 +357,7 @@ class BankDataETL:
             df[col] = df[col].fillna(0.0)
 
         df["recency_days"] = df["recency_days"].fillna(df["exposure_days"])
-        df["preferred_channel"] = df["preferred_channel"].fillna("None")
+        df["preferred_channel"] = df["preferred_channel"].fillna("No_Channel")
 
         # Ensure correct column ordering and types
         if "id" in df.columns:

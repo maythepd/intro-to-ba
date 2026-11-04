@@ -228,6 +228,20 @@ class PipelineConfig:
     enable_product_bundling: bool = True
     enable_risk_interactions: bool = True
 
+    # Domain features parameters (Avoiding hardcoding)
+    spending_collapse_threshold: float = 0.50
+    login_collapse_threshold: float = 0.50
+    velocity_smoothing: float = 1.0
+    unresolved_weight: float = 3.0
+    complaint_count_weight: float = 1.5
+    tx_failure_weight: float = 2.0
+    high_friction_complaints_thresh: int = 2
+    sweetspot_min_products: int = 2
+    danger_zone_min_products: int = 3
+    vulnerable_age_min: int = 45
+    vulnerable_age_max: int = 60
+    high_risk_country: str = "Germany" 
+
     # Categorical encoding configuration
     categorical_cols: Optional[List[str]] = None
     target_encoding_m_weight: float = 10.0

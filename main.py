@@ -9,6 +9,9 @@ import copy
 from datetime import datetime
 import os
 from pathlib import Path
+
+os.environ.setdefault("LOKY_MAX_CPU_COUNT", "4")
+os.environ.setdefault("MPLCONFIGDIR", str(Path(__file__).resolve().parent / ".matplotlib_cache"))
 from typing import Any, Dict, List, Optional, Tuple, Union
 import pandas as pd
 
@@ -25,6 +28,7 @@ from models import (
     XGBoostChurnModel,
     OptunaTuner,
 )
+from models.recall_eval import export_lift_artifacts
 from preprocessing import pipeline
 from visualization import (
     plot_feature_importance,
@@ -186,6 +190,18 @@ def run_single_experiment(
     imp_type = "gain" if model_type == "xgboost" else "gini" if model_type == "rf" else "coefficient"
     df_imp = model.get_feature_importances(importance_type=imp_type)
 
+    # Attach evaluation predictions to model instance for universal lift export
+    p_te = model.predict_proba(res.X_test)
+    model.last_test_y = res.y_test.values
+    model.last_test_prob = p_te[:, 1] if getattr(p_te, "ndim", 1) > 1 else p_te
+    if res.X_val is not None:
+        p_va = model.predict_proba(res.X_val)
+        model.last_val_y = res.y_val.values
+        model.last_val_prob = p_va[:, 1] if getattr(p_va, "ndim", 1) > 1 else p_va
+    else:
+        model.last_val_y = None
+        model.last_val_prob = None
+
     print(
         f"    Test Set Scores   | "
         f"Features: {metrics['Num_Features']} | "
@@ -264,8 +280,24 @@ def run_ablation_suite(
             {"enable_smote": False},
         ),
         (
-            "3. No Domain Features",
+            "3. No Domain Features (All 4 Groups Disabled)",
             {"enable_domain_features": False},
+        ),
+        (
+            "3a. Ablation: No Behavioral Momentum",
+            {"enable_behavioral_momentum": False},
+        ),
+        (
+            "3b. Ablation: No Customer Friction",
+            {"enable_customer_friction": False},
+        ),
+        (
+            "3c. Ablation: No Product Portfolio",
+            {"enable_product_bundling": False},
+        ),
+        (
+            "3d. Ablation: No Risk Interactions",
+            {"enable_risk_interactions": False},
         ),
         (
             "4. No Target Encoding",
@@ -325,6 +357,7 @@ def generate_ablation_report(
     output_filepath: str,
     config: UnifiedConfig,
     model_type: str = "xgboost",
+    lift_res: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Generates an executive-level Markdown ablation report for any of the three supported models."""
     os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
@@ -362,6 +395,30 @@ def generate_ablation_report(
         model_name=f"{model_display} (Ablation Champion)",
         top_k=15,
     )
+
+    lift_section = ""
+    if lift_res:
+        df_dec = lift_res.get("df_deciles")
+        df_comp = lift_res.get("df_comparison")
+        top10_lift = df_dec.iloc[0]["Decile_Lift"] if df_dec is not None and len(df_dec) > 0 else "N/A"
+        top20_lift = df_dec.iloc[1]["Cum_Lift"] if df_dec is not None and len(df_dec) > 1 else "N/A"
+        lift_section = f"""
+
+---
+
+## 4. ĐÁNH GIÁ HỆ SỐ LIFT CỦA CẤU HÌNH TỐI ƯU NHẤT ({best_exp_name})
+
+![Lift and Cumulative Gains Curve](lift_and_gains_curve.png)
+
+### 4.1. Bảng 10 phân vị rủi ro (Decile Lift Analysis):
+* **Top 10% rủi ro cao nhất (Decile D1):** Đạt hệ số **Lift {top10_lift}** so với chọn ngẫu nhiên.
+* **Top 20% rủi ro cao nhất (Decile D1 + D2):** Đạt hệ số **Cumulative Lift {top20_lift}**.
+
+{df_dec.to_markdown(index=False) if df_dec is not None else ""}
+
+### 4.2. So sánh với các Baselines & Điểm vận hành tối ưu:
+{df_comp.to_markdown(index=False) if df_comp is not None else ""}
+"""
 
     md_content = f"""# BÁO CÁO THỰC NGHIỆM MÔ HÌNH {model_display.upper()} & ABLATION STUDY
 ## DỰ BÁO RỦI RO RỜI BỎ KHÁCH HÀNG (CUSTOMER CHURN PREDICTION)
@@ -410,11 +467,11 @@ Bảng dưới đây so sánh toàn diện hiệu năng của mô hình **{model
 
 ![Biểu đồ đặc trưng quan trọng nhất]({chart_filename})
 
-{top15_imp.to_markdown(index=False)}
+{top15_imp.to_markdown(index=False)}{lift_section}
 
 ---
 
-## 4. HƯỚNG DẪN TÁI HIỆN VÀ SỬ DỤNG MÔ HÌNH
+## 5. HƯỚNG DẪN TÁI HIỆN VÀ SỬ DỤNG MÔ HÌNH
 
 ### 4.1. So sánh cả 3 model (LR / RF / XGBoost)
 ```bash
@@ -449,6 +506,7 @@ def generate_comparison_report(
     importances_dict: Dict[str, pd.DataFrame],
     output_filepath: str,
     config: UnifiedConfig,
+    lift_res_dict: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> None:
     """Generates an executive-level Markdown comparison report for all 3 models (LR vs RF vs XGBoost)."""
     os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
@@ -494,6 +552,32 @@ def generate_comparison_report(
         safe_name = name.lower().replace(" ", "_")
         top5 = df_imp.head(5)[["Feature", "Relative_Pct"]].to_markdown(index=False)
         top_features_md += f"#### Top 5 Đặc trưng — {name}\n\n![{name} Top Features](feature_importance_{safe_name}.png)\n\n{top5}\n\n"
+
+    lift_section = ""
+    if lift_res_dict:
+        lift_summary_rows = []
+        for name, l_res in lift_res_dict.items():
+            df_dec = l_res.get("df_deciles")
+            if df_dec is not None and len(df_dec) > 1:
+                lift_summary_rows.append({
+                    "Model": name,
+                    "Top 10% Lift (D1)": df_dec.iloc[0]["Decile_Lift"],
+                    "Top 10% Churn Captured": df_dec.iloc[0]["Cum_Recall"],
+                    "Top 20% Cumulative Lift": df_dec.iloc[1]["Cum_Lift"],
+                    "Top 20% Churn Captured": df_dec.iloc[1]["Cum_Recall"],
+                })
+        if lift_summary_rows:
+            df_lift_summary = pd.DataFrame(lift_summary_rows)
+            lift_section = f"""
+
+---
+
+## 5. SO SÁNH HỆ SỐ LIFT VÀ PHÂN VỊ RỦI RO (DECILE LIFT COMPARISON)
+
+![Champion Model Lift and Cumulative Gains Curve](lift_and_gains_curve.png)
+
+{df_lift_summary.to_markdown(index=False)}
+"""
 
     md_content = f"""# BÁO CÁO ĐỐI ĐẦU VÀ SO SÁNH TOÀN DIỆN CÁC MÔ HÌNH (MODEL COMPARISON)
 ## LOGISTIC REGRESSION vs. RANDOM FOREST vs. XGBOOST
@@ -548,7 +632,7 @@ Bảng đối đầu trực tiếp giữa 3 họ thuật toán đại diện: Tu
    - Sử dụng **XGBoost** làm engine tính điểm rủi ro rời bỏ định kỳ hàng ngày (Batch Scoring) cho toàn bộ khách hàng hoạt động, cung cấp danh sách ưu tiên cao cho đội ngũ chăm sóc khách hàng (Retention RM).
 2. **Mô hình giải trình & Baseline (Challenger / Fallback):**
    - Sử dụng **Logistic Regression** để kiểm tra tính nhất quán và giải trình các nguyên nhân rời bỏ vĩ mô cho cấp quản lý.
-
+{lift_section}
 ---
 *Báo cáo được sinh tự động bởi hệ thống Digital Bank Churn Prediction Pipeline — Module 5: Model Development.*
 """
@@ -565,6 +649,7 @@ def generate_train_report(
     config: UnifiedConfig,
     model_type: str = "xgboost",
     model_save_path: Optional[str] = None,
+    lift_res: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Generates an executive-level Markdown report for a single model training run."""
     os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
@@ -583,6 +668,30 @@ def generate_train_report(
         "Metric": k,
         "Value": f"{v:.4f}" if isinstance(v, float) else str(v)
     } for k, v in metrics.items() if k not in ("X_train_Shape", "X_test_Shape")]).to_markdown(index=False)
+
+    lift_section = ""
+    if lift_res:
+        df_dec = lift_res.get("df_deciles")
+        df_comp = lift_res.get("df_comparison")
+        top10_lift = df_dec.iloc[0]["Decile_Lift"] if df_dec is not None and len(df_dec) > 0 else "N/A"
+        top20_lift = df_dec.iloc[1]["Cum_Lift"] if df_dec is not None and len(df_dec) > 1 else "N/A"
+        lift_section = f"""
+
+---
+
+## 4. ĐÁNH GIÁ HỆ SỐ LIFT & 10 PHÂN VỊ RỦI RO (DECILE LIFT & GAINS)
+
+![Lift and Cumulative Gains Curve](lift_and_gains_curve.png)
+
+### 4.1. Bảng 10 phân vị rủi ro (Decile Lift Analysis):
+* **Top 10% rủi ro cao nhất (Decile D1):** Đạt hệ số **Lift {top10_lift}** so với chọn ngẫu nhiên.
+* **Top 20% rủi ro cao nhất (Decile D1 + D2):** Đạt hệ số **Cumulative Lift {top20_lift}**.
+
+{df_dec.to_markdown(index=False) if df_dec is not None else ""}
+
+### 4.2. So sánh với các Baselines & Điểm vận hành tối ưu:
+{df_comp.to_markdown(index=False) if df_comp is not None else ""}
+"""
 
     md_content = f"""# BÁO CÁO HUẤN LUYỆN MÔ HÌNH {model_display.upper()} (TRAINING REPORT)
 ## DỰ BÁO RỦI RO RỜI BỎ KHÁCH HÀNG (CUSTOMER CHURN PREDICTION)
@@ -613,7 +722,7 @@ def generate_train_report(
 
 ![Biểu đồ đặc trưng quan trọng]({chart_name})
 
-{top15}
+{top15}{lift_section}
 
 ---
 *Báo cáo được sinh tự động bởi hệ thống Digital Bank Churn Prediction Pipeline — Module 5: Model Development.*
@@ -643,6 +752,7 @@ def generate_report(
             importances_dict=kwargs["importances_dict"],
             output_filepath=output_filepath,
             config=config,
+            lift_res_dict=kwargs.get("lift_res_dict"),
         )
     elif mode == "ablation":
         generate_ablation_report(
@@ -653,6 +763,7 @@ def generate_report(
             output_filepath=output_filepath,
             config=config,
             model_type=kwargs.get("model_type", "xgboost"),
+            lift_res=kwargs.get("lift_res"),
         )
     elif mode == "train":
         generate_train_report(
@@ -663,6 +774,7 @@ def generate_report(
             config=config,
             model_type=kwargs.get("model_type", "xgboost"),
             model_save_path=kwargs.get("model_save_path"),
+            lift_res=kwargs.get("lift_res"),
         )
     else:
         raise ValueError(f"Unknown report mode '{mode}'. Expected: compare | ablation | train")
@@ -680,13 +792,14 @@ def main() -> None:
         "--mode",
         type=str,
         default="compare",
-        choices=["ablation", "train", "compare", "tune"],
+        choices=["ablation", "train", "compare", "tune", "recall"],
         help=(
             "Run mode: "
             "'compare' (LR vs RF vs XGBoost, same pipeline), "
             "'ablation' (feature ablation on one model), "
             "'tune' (Optuna hyperparameter tuning on CV), "
-            "'train' (single model training)"
+            "'train' (single model training), "
+            "'recall' (threshold optimization, high-recall analysis & baseline lift comparison)"
         ),
     )
     parser.add_argument(
@@ -694,7 +807,7 @@ def main() -> None:
         type=str,
         default="xgboost",
         choices=["xgboost", "lr", "rf"],
-        help="Model to use in 'ablation', 'train', or 'tune' mode (ignored in 'compare' mode)",
+        help="Model to use in 'ablation', 'train', 'tune', or 'recall' mode (ignored in 'compare' mode)",
     )
     parser.add_argument(
         "--n-trials",
@@ -706,8 +819,20 @@ def main() -> None:
         "--tuning-metric",
         type=str,
         default=None,
-        choices=["PR_AUC", "ROC_AUC", "F1_Score"],
-        help="Target metric for Optuna tuning (PR_AUC | ROC_AUC | F1_Score)",
+        choices=["PR_AUC", "ROC_AUC", "F1_Score", "Recall", "F2_Score", "recall"],
+        help="Target metric for Optuna tuning (PR_AUC | ROC_AUC | F1_Score | Recall | F2_Score)",
+    )
+    parser.add_argument(
+        "--target-recall",
+        type=float,
+        default=0.75,
+        help="Target minimum recall for threshold optimization in recall mode (default: 0.75)",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Manually specified decision threshold for evaluation in recall mode",
     )
     parser.add_argument(
         "--output-dir",
@@ -788,6 +913,37 @@ def main() -> None:
             df_imp.to_csv(str(output_dir / f"feature_importance_{safe_name}.csv"), index=False)
         print(f"[OK] Feature importances saved to: {output_dir}/feature_importance_*.csv")
 
+        # Export Lift & Gains artifacts across all 3 models
+        lift_res_dict = {}
+        for name, mtype in [("Logistic Regression", "lr"), ("Random Forest", "rf"), ("XGBoost", "xgboost")]:
+            m_inst = models_dict[name]
+            if hasattr(m_inst, "last_test_y") and hasattr(m_inst, "last_test_prob"):
+                l_res = export_lift_artifacts(
+                    y_test=m_inst.last_test_y,
+                    test_prob=m_inst.last_test_prob,
+                    output_dir=output_dir,
+                    model_type=mtype,
+                    file_prefix=mtype,
+                    y_val=getattr(m_inst, "last_val_y", None),
+                    val_prob=getattr(m_inst, "last_val_prob", None),
+                    quiet=True,
+                )
+                lift_res_dict[name] = l_res
+
+        # Export champion model as generic lift_and_gains_curve.png
+        best_inst = models_dict[best_name]
+        if hasattr(best_inst, "last_test_y") and hasattr(best_inst, "last_test_prob"):
+            export_lift_artifacts(
+                y_test=best_inst.last_test_y,
+                test_prob=best_inst.last_test_prob,
+                output_dir=output_dir,
+                model_type=best_inst.model_type if hasattr(best_inst, "model_type") else "xgboost",
+                file_prefix="champion",
+                y_val=getattr(best_inst, "last_val_y", None),
+                val_prob=getattr(best_inst, "last_val_prob", None),
+                quiet=False,
+            )
+
         # Generate comprehensive markdown comparison report
         generate_report(
             mode="compare",
@@ -796,12 +952,20 @@ def main() -> None:
             df_results=df_results,
             models_dict=models_dict,
             importances_dict=importances_dict,
+            lift_res_dict=lift_res_dict,
         )
 
 
 
     elif args.mode == "ablation":
         model_type = args.model_type
+        if args.n_trials is not None:
+            tune_metric = args.tuning_metric or "PR_AUC"
+            print("\n" + "=" * 65)
+            print(f"[TIP] You passed '--n-trials {args.n_trials}' and '--tuning-metric {tune_metric}'.")
+            print("To run the Optuna Hyperparameter Optimization Tuner (with colored trial logs):")
+            print(f"    python main.py --mode tune --model-type {model_type} --n-trials {args.n_trials} --tuning-metric {tune_metric}")
+            print("=" * 65 + "\n")
         print("\n=======================================================")
         print(f"STARTING ABLATION BENCHMARK SUITE  [{model_type.upper()}]")
         print("=======================================================")
@@ -829,6 +993,19 @@ def main() -> None:
         df_results.to_csv(metrics_csv_path, index=False)
         print(f"[OK] Exported metrics CSV to: {metrics_csv_path}")
 
+        # Export Lift & Gains artifacts for best performing ablation configuration
+        lift_res = None
+        if hasattr(best_model, "last_test_y") and hasattr(best_model, "last_test_prob"):
+            lift_res = export_lift_artifacts(
+                y_test=best_model.last_test_y,
+                test_prob=best_model.last_test_prob,
+                output_dir=output_dir,
+                model_type=model_type,
+                y_val=getattr(best_model, "last_val_y", None),
+                val_prob=getattr(best_model, "last_val_prob", None),
+                quiet=False,
+            )
+
         # Generate comprehensive markdown ablation report
         generate_report(
             mode="ablation",
@@ -839,6 +1016,7 @@ def main() -> None:
             best_model=best_model,
             best_imp=best_imp,
             model_type=model_type,
+            lift_res=lift_res,
         )
 
     elif args.mode == "train":
@@ -865,6 +1043,19 @@ def main() -> None:
         df_imp.to_csv(str(output_dir / f"{model_type}_feature_importance.csv"), index=False)
         print(f"[OK] Saved training metrics and feature importances to: {output_dir}")
 
+        # Export Lift & Gains artifacts for single model training run
+        lift_res = None
+        if hasattr(model, "last_test_y") and hasattr(model, "last_test_prob"):
+            lift_res = export_lift_artifacts(
+                y_test=model.last_test_y,
+                test_prob=model.last_test_prob,
+                output_dir=output_dir,
+                model_type=model_type,
+                y_val=getattr(model, "last_val_y", None),
+                val_prob=getattr(model, "last_val_prob", None),
+                quiet=False,
+            )
+
         # Generate markdown train report
         generate_report(
             mode="train",
@@ -875,6 +1066,7 @@ def main() -> None:
             df_imp=df_imp,
             model_type=model_type,
             model_save_path=save_path,
+            lift_res=lift_res,
         )
 
     elif args.mode == "tune":
@@ -904,6 +1096,22 @@ def main() -> None:
             timeout=timeout,
             output_dir=str(output_dir),
             verbose=True,
+        )
+
+    elif args.mode == "recall":
+        from models.recall_eval import run_recall_optimization
+
+        model_type = args.model_type
+        target_rec = args.target_recall if hasattr(args, "target_recall") and args.target_recall is not None else 0.75
+        manual_th = args.threshold if hasattr(args, "threshold") else None
+
+        res_recall = run_recall_optimization(
+            df=df,
+            cfg=cfg,
+            model_type=model_type,
+            target_recall=target_rec,
+            manual_threshold=manual_th,
+            output_dir=str(output_dir),
         )
 
 

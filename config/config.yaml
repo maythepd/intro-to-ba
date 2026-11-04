@@ -8,7 +8,7 @@ dataset:
   raw_full_dataset_dir: "data/full_dataset"
   rebuild_full_dataset: false
   target_col: "churn"
-  test_size: 0.20                   # 20% tập Test độc lập
+  test_size: 0.10                   # 20% tập Test độc lập
   val_size: 0.10                    # 10% tập Validation
   enable_cv: true                   # Kích hoạt K-Fold Cross-Validation
   cv_folds: 5                       # Số fold cho Stratified K-Fold CV
@@ -64,6 +64,26 @@ features:
     enable_product_bundling: true     # is_product_sweetspot, is_product_danger_zone
     enable_risk_interactions: true    # wealth_deceleration_risk, germany_high_balance, middle-aged
 
+    # Tham số động lượng hành vi (Behavioral momentum - không hardcode)
+    spending_collapse_threshold: 0.50
+    login_collapse_threshold: 0.50
+    velocity_smoothing: 1.0
+
+    # Tham số ma sát dịch vụ (Customer friction - không hardcode)
+    unresolved_weight: 3.0
+    complaint_count_weight: 1.5
+    tx_failure_weight: 2.0
+    high_friction_complaints_thresh: 2
+
+    # Tham số danh mục sản phẩm (Product portfolio - không hardcode)
+    sweetspot_min_products: 2
+    danger_zone_min_products: 3
+
+    # Tham số tương tác rủi ro (Risk interactions - không hardcode)
+    vulnerable_age_min: 45
+    vulnerable_age_max: 60
+    high_risk_country: "Germany" 
+
   # Chi tiết mã hóa danh mục (Categorical encoding)
   categorical_encoding:
     categorical_cols:
@@ -92,8 +112,8 @@ model:
   # Cấu hình XGBoost (Gradient Boosting)
   xgboost_params:
     n_estimators: 300
-    max_depth: 5
-    learning_rate: 0.05
+    max_depth: 30
+    learning_rate: 0.001
     subsample: 0.8
     colsample_bytree: 0.8
     gamma: 0.1
@@ -136,9 +156,9 @@ experiment:
 
 # 5. CẤU HÌNH TỐI ƯU HÓA SIÊU THAM SỐ (Optuna Hyperparameter Tuning Settings)
 tuning:
-  enabled: false
+  enabled: true
   n_trials: 30                      # Số lượng trials tối ưu
-  timeout: 600                      # Giới hạn thời gian (giây), null nếu không giới hạn
+  timeout: null                      # Giới hạn thời gian (giây), null nếu không giới hạn
   metric: "PR_AUC"                  # Mục tiêu tối ưu ("PR_AUC" | "ROC_AUC" | "F1_Score")
   cv_folds: 5                       # Số fold Cross-Validation trên tập Train
   study_name: "bank_churn_tuning"

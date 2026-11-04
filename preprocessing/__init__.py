@@ -9,6 +9,10 @@ from .base import BaseFeatureTransformer
 from .etl import BankDataETL, load_or_build_dataset, FullDatasetProcessor, load_or_build_full_dataset
 from .skewness_transform import SkewnessTransformer
 from .scaling import FeatureScaler
+from .behavioral_momentum import BehavioralMomentumEngineer
+from .customer_friction import CustomerFrictionEngineer
+from .product_portfolio import ProductPortfolioEngineer
+from .risk_interactions import RiskInteractionsEngineer
 from .domain_features import DomainFeatureEngineer
 from .categorical_encoding import CategoricalEncoder
 from .balancing import ClassBalancer
@@ -30,6 +34,10 @@ __all__ = [
     "load_or_build_full_dataset",
     "SkewnessTransformer",
     "FeatureScaler",
+    "BehavioralMomentumEngineer",
+    "CustomerFrictionEngineer",
+    "ProductPortfolioEngineer",
+    "RiskInteractionsEngineer",
     "DomainFeatureEngineer",
     "CategoricalEncoder",
     "ClassBalancer",

@@ -17,13 +17,34 @@ import optuna
 from config.pipeline_config import PipelineConfig, UnifiedConfig
 from preprocessing.pipeline import FeatureEngineeringPipeline
 from preprocessing.splitting import DataSplitter
+from models.recall_eval import export_lift_artifacts
 from visualization.plots import (
     plot_feature_importance,
     plot_optuna_tuning_history,
 )
 
-# Silence verbose Optuna logs by default
-optuna.logging.set_verbosity(optuna.logging.WARNING)
+# Configure Optuna logger with the familiar green INFO logs on terminal
+os.system('')  # Enable ANSI VT100 color support on Windows console
+try:
+    import colorlog
+    optuna.logging.enable_default_handler()
+    for _h in optuna.logging._get_library_root_logger().handlers:
+        _h.setFormatter(
+            colorlog.ColoredFormatter(
+                "%(log_color)s[%(levelname)1.1s %(asctime)s]%(reset)s %(message)s",
+                log_colors={
+                    "DEBUG": "cyan",
+                    "INFO": "green",
+                    "WARNING": "yellow",
+                    "ERROR": "red",
+                    "CRITICAL": "red,bg_white",
+                },
+            )
+        )
+except ImportError:
+    optuna.logging.enable_default_handler()
+
+optuna.logging.set_verbosity(optuna.logging.INFO)
 
 
 @dataclass
@@ -78,6 +99,12 @@ class OptunaTuner:
     def _sample_params(self, trial: optuna.Trial) -> Dict[str, Any]:
         """Defines the hyperparameter search space tailored to the model family."""
         if self.model_type == "xgboost":
+            is_recall_mode = self.target_metric.lower() in ("recall", "f2_score", "f2")
+            scale_weight = (
+                trial.suggest_float("scale_pos_weight", 1.5, 4.5, step=0.5)
+                if is_recall_mode
+                else 1.0
+            )
             return {
                 "n_estimators": trial.suggest_int("n_estimators", 150, 450, step=50),
                 "max_depth": trial.suggest_int("max_depth", 3, 8),
@@ -88,7 +115,7 @@ class OptunaTuner:
                 "min_child_weight": trial.suggest_int("min_child_weight", 1, 7),
                 "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 5.0, log=True),
                 "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 5.0, log=True),
-                "scale_pos_weight": 1.0,
+                "scale_pos_weight": scale_weight,
                 "eval_metric": "auc",
                 "random_state": self.random_state,
                 "n_jobs": -1,
@@ -208,7 +235,14 @@ class OptunaTuner:
                     model.fit(X_tr_res, y_tr_res)
 
                 metrics = model.evaluate(X_va, y_va)
-                score = float(metrics.get(self.target_metric, 0.0))
+                if self.target_metric.lower() in ("recall", "rec"):
+                    score = float(metrics.get("Recall", 0.0))
+                elif self.target_metric.lower() in ("f2_score", "f2"):
+                    p = metrics.get("Precision", 0.0)
+                    r = metrics.get("Recall", 0.0)
+                    score = float((5.0 * p * r) / (4.0 * p + r + 1e-5))
+                else:
+                    score = float(metrics.get(self.target_metric, 0.0))
                 fold_scores.append(score)
 
                 # Intermediate pruning check
@@ -305,6 +339,17 @@ class OptunaTuner:
         save_path = self.config.experiment.get_model_save_path(self.model_type)
         best_model.save(save_path)
 
+        # Export Lift & Gains artifacts universally across flags
+        p_final = best_model.predict_proba(X_test_final)
+        test_prob_final = p_final[:, 1] if getattr(p_final, "ndim", 1) > 1 else p_final
+        lift_res = export_lift_artifacts(
+            y_test=y_test_final,
+            test_prob=test_prob_final,
+            output_dir=out_dir,
+            model_type=self.model_type,
+            quiet=not verbose,
+        )
+
         # Generate markdown report
         report_path = out_dir / f"optuna_tuning_{self.model_type}_report.md"
         self._generate_tuning_report(
@@ -316,6 +361,7 @@ class OptunaTuner:
             plot_history_path=plot_history_path.name,
             plot_imp_path=plot_imp_path.name,
             df_imp=df_imp,
+            lift_res=lift_res,
         )
 
         if verbose:
@@ -346,6 +392,7 @@ class OptunaTuner:
         plot_history_path: str,
         plot_imp_path: str,
         df_imp: pd.DataFrame,
+        lift_res: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Generates an executive-level Markdown report for the tuning experiment."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -365,6 +412,30 @@ class OptunaTuner:
         ]).to_markdown(index=False)
 
         top15_imp = df_imp.head(15).to_markdown(index=False)
+
+        lift_section = ""
+        if lift_res:
+            df_dec = lift_res.get("df_deciles")
+            df_comp = lift_res.get("df_comparison")
+            top10_lift = df_dec.iloc[0]["Decile_Lift"] if df_dec is not None and len(df_dec) > 0 else "N/A"
+            top20_lift = df_dec.iloc[1]["Cum_Lift"] if df_dec is not None and len(df_dec) > 1 else "N/A"
+            lift_section = f"""
+
+---
+
+## 5. ĐÁNH GIÁ HỆ SỐ LIFT & 10 PHÂN VỊ RỦI RO (DECILE LIFT & GAINS)
+
+![Lift and Cumulative Gains Curve](lift_and_gains_curve.png)
+
+### 5.1. Bảng 10 phân vị rủi ro (Decile Lift Analysis):
+* **Top 10% rủi ro cao nhất (Decile D1):** Đạt hệ số **Lift {top10_lift}** so với chọn ngẫu nhiên.
+* **Top 20% rủi ro cao nhất (Decile D1 + D2):** Đạt hệ số **Cumulative Lift {top20_lift}**.
+
+{df_dec.to_markdown(index=False) if df_dec is not None else ""}
+
+### 5.2. So sánh với các Baselines & Điểm vận hành tối ưu:
+{df_comp.to_markdown(index=False) if df_comp is not None else ""}
+"""
 
         md = f"""# BÁO CÁO TỐI ƯU HÓA SIÊU THAM SỐ (OPTUNA TUNING REPORT)
 ## MÔ HÌNH: {self.model_type.upper()} CHURN PREDICTION
@@ -406,10 +477,10 @@ class OptunaTuner:
 
 ![Đặc trưng quan trọng]({plot_imp_path})
 
-{top15_imp}
+{top15_imp}{lift_section}
 
 ---
-*Báo cáo được sinh tự động bởi Optuna Tuner Engine — Digital Bank Churn Prediction.*
+*Báo cáo được sinh tự động bởi Optuna Tuner Engine - Digital Bank Churn Prediction.*
 """
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(md)

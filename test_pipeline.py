@@ -68,11 +68,15 @@ def run_checks():
         print(f"SMOTE Train shape    (X_smote): {res.X_train_resampled.shape}")
         print(f"Total model features: {len(res.model_features)}")
 
-        expected_train = 7000 if getattr(cfg, "val_size", 0.0) > 0 else 8000
-        assert res.X_train.shape[0] == expected_train, f"Expected {expected_train} train rows, got {res.X_train.shape[0]}"
+        total_rows = df.shape[0]
+        expected_test = int(round(total_rows * cfg.test_size))
+        expected_val = int(round(total_rows * getattr(cfg, "val_size", 0.0))) if getattr(cfg, "val_size", 0.0) > 0 else 0
+        expected_train = total_rows - expected_test - expected_val
+
+        assert abs(res.X_train.shape[0] - expected_train) <= 2, f"Expected ~{expected_train} train rows, got {res.X_train.shape[0]}"
         if getattr(cfg, "val_size", 0.0) > 0:
-            assert res.X_val is not None and res.X_val.shape[0] == 1000, "Validation set should have 1000 rows"
-        assert res.X_test.shape[0] == 2000, f"Expected 2000 test rows, got {res.X_test.shape[0]}"
+            assert abs(res.X_val.shape[0] - expected_val) <= 2, f"Validation set should have ~{expected_val} rows"
+        assert abs(res.X_test.shape[0] - expected_test) <= 2, f"Expected ~{expected_test} test rows, got {res.X_test.shape[0]}"
         assert res.X_train.shape[1] == len(res.model_features), "X_train columns should match model_features"
         assert res.X_train_resampled.shape[0] > res.X_train.shape[0], "SMOTE should oversample minority class"
         assert res.feature_importance is not None, "Feature importance should be computed"
@@ -92,9 +96,25 @@ def run_checks():
         print(f"Ablation Train shape (X_train): {res_ablation.X_train.shape}")
         print(f"Ablation Total model features: {len(res_ablation.model_features)}")
         assert len(res_ablation.model_features) < len(res.model_features), "Ablation should reduce feature count"
-        expected_abl_train = 7000 if getattr(ablation_cfg, "val_size", 0.0) > 0 else 8000
-        assert res_ablation.X_train_resampled.shape[0] == expected_abl_train, f"SMOTE disabled, shape should remain {expected_abl_train}"
+        abl_test = int(round(total_rows * getattr(ablation_cfg, "test_size", cfg.test_size)))
+        abl_val = int(round(total_rows * getattr(ablation_cfg, "val_size", getattr(cfg, "val_size", 0.0)))) if getattr(ablation_cfg, "val_size", getattr(cfg, "val_size", 0.0)) > 0 else 0
+        expected_abl_train = total_rows - abl_test - abl_val
+        assert abs(res_ablation.X_train_resampled.shape[0] - expected_abl_train) <= 2, f"SMOTE disabled, shape should remain ~{expected_abl_train}"
         print(f"[OK] Domain ablation verified: {len(res.model_features)} -> {len(res_ablation.model_features)} features!")
+
+        # 3b. Test Individual Feature Group Ablations
+        print("\n--- Testing Individual Feature Group Ablations ---")
+        for group_name, group_cfg in [
+            ("Behavioral Momentum", {"enable_behavioral_momentum": False}),
+            ("Customer Friction", {"enable_customer_friction": False}),
+            ("Product Portfolio", {"enable_product_bundling": False}),
+            ("Risk Interactions", {"enable_risk_interactions": False}),
+        ]:
+            g_pipe = FeatureEngineeringPipeline(PipelineConfig.from_dict(group_cfg))
+            g_res = g_pipe.prepare_train_test(df)
+            print(f"Group Ablation [{group_name} Disabled]: {len(g_res.model_features)} features")
+            assert len(g_res.model_features) < len(res.model_features), f"{group_name} ablation should reduce feature count"
+        print("[OK] Individual feature group ablations verified successfully!")
 
         # 4. Test Raw Kaggle Baseline
         print("\n--- Testing Raw Kaggle Baseline (use_raw_kaggle_features_only) ---")

@@ -227,3 +227,119 @@ def plot_optuna_tuning_history(
     plt.close(fig)
 
     return str(output_path)
+
+
+def plot_lift_and_gains_curve(
+    y_true: Union[np.ndarray, pd.Series],
+    y_prob: Union[np.ndarray, pd.Series],
+    output_path: Union[str, Path],
+    model_name: str = "XGBoost",
+    figsize: Tuple[int, int] = (14, 6),
+) -> str:
+    """
+    Renders a 2-panel business diagnostic chart:
+      Panel 1: Cumulative Gains Chart (% of Churners Captured vs % of Customers Contacted)
+      Panel 2: Decile Lift Chart (Relative Lift vs Random Guessing per decile)
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    y_t = np.asarray(y_true)
+    y_p = np.asarray(y_prob)
+
+    df_eval = pd.DataFrame({"actual": y_t, "prob": y_p})
+    df_eval = df_eval.sort_values(by="prob", ascending=False).reset_index(drop=True)
+    df_eval["decile"] = pd.qcut(df_eval.index, q=10, labels=[f"D{i}" for i in range(1, 11)])
+
+    base_rate = float(df_eval["actual"].mean())
+    total_churners = float(df_eval["actual"].sum())
+
+    deciles = []
+    decile_lifts = []
+    cum_gains = [0.0]
+    pct_pop = [0.0]
+
+    cum_churn = 0.0
+    cum_pop = 0.0
+    n_total = len(df_eval)
+
+    for dec, grp in df_eval.groupby("decile", observed=False):
+        n_cust = len(grp)
+        n_churn = float(grp["actual"].sum())
+        cum_churn += n_churn
+        cum_pop += n_cust
+        
+        churn_rate = n_churn / max(n_cust, 1)
+        lift = churn_rate / max(base_rate, 1e-5)
+        
+        deciles.append(str(dec))
+        decile_lifts.append(lift)
+        cum_gains.append((cum_churn / max(total_churners, 1e-5)) * 100.0)
+        pct_pop.append((cum_pop / max(n_total, 1)) * 100.0)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+
+    # Panel 1: Cumulative Gains Chart
+    ax1.plot(pct_pop, cum_gains, marker="o", color="#2980b9", linewidth=2.5, label=f"{model_name} Model")
+    ax1.plot([0, 100], [0, 100], linestyle="--", color="#7f8c8d", linewidth=1.8, label="Random Guess Baseline (1.0x)")
+    ax1.fill_between(pct_pop, cum_gains, pct_pop, color="#3498db", alpha=0.15, label="Model Advantage Zone")
+
+    # Annotate Top 10% and Top 20%
+    if len(cum_gains) > 2:
+        top10_gains = cum_gains[1]
+        top20_gains = cum_gains[2]
+        ax1.annotate(
+            f"Top 10%: {top10_gains:.1f}% Churners ({decile_lifts[0]:.2f}x Lift)",
+            xy=(pct_pop[1], top10_gains),
+            xytext=(pct_pop[1] + 8, top10_gains - 8),
+            arrowprops=dict(facecolor="#e74c3c", shrink=0.08, width=1.5, headwidth=6),
+            fontweight="bold",
+            fontsize=9.5,
+            color="#c0392b",
+        )
+        ax1.annotate(
+            f"Top 20%: {top20_gains:.1f}% Churners",
+            xy=(pct_pop[2], top20_gains),
+            xytext=(pct_pop[2] + 8, top20_gains - 8),
+            arrowprops=dict(facecolor="#27ae60", shrink=0.08, width=1.5, headwidth=6),
+            fontweight="bold",
+            fontsize=9.5,
+            color="#27ae60",
+        )
+
+    ax1.set_title(f"Cumulative Gains Chart ({model_name})", fontweight="bold", pad=12)
+    ax1.set_xlabel("% Customers Contacted (Ranked by Risk)", labelpad=10)
+    ax1.set_ylabel("% Churners Captured (Cumulative Recall)", labelpad=10)
+    ax1.set_xlim([0, 100])
+    ax1.set_ylim([0, 105])
+    ax1.legend(loc="lower right", frameon=True, facecolor="white")
+    ax1.grid(True, linestyle="--", alpha=0.5)
+
+    # Panel 2: Decile Lift Chart
+    bar_colors = ["#e74c3c" if l >= 2.0 else "#3498db" if l >= 1.0 else "#95a5a6" for l in decile_lifts]
+    bars = ax2.bar(deciles, decile_lifts, color=bar_colors, width=0.6, alpha=0.88)
+    ax2.axhline(1.0, color="#e74c3c", linestyle="--", linewidth=1.8, label="Random Guess Baseline (1.0x)")
+
+    for bar, l in zip(bars, decile_lifts):
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            bar.get_height() + 0.08,
+            f"{l:.2f}x",
+            ha="center",
+            va="bottom",
+            fontsize=9.5,
+            fontweight="semibold",
+        )
+
+    ax2.set_title(f"Decile Lift Chart vs Random Baseline ({model_name})", fontweight="bold", pad=12)
+    ax2.set_xlabel("Risk Decile (D1 = Highest Risk, D10 = Safest)", labelpad=10)
+    ax2.set_ylabel("Lift Factor (x Baseline)", labelpad=10)
+    ax2.set_ylim([0, max(decile_lifts) * 1.25])
+    ax2.legend(loc="upper right", frameon=True, facecolor="white")
+    ax2.grid(True, linestyle="--", alpha=0.5, axis="y")
+
+    plt.tight_layout()
+    fig.savefig(str(output_path), dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    return str(output_path)

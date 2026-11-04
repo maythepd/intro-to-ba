@@ -151,14 +151,30 @@ class FeatureEngineeringPipeline:
             standard_features=cfg.standard_features,
         )
 
-        # 3. Domain Features
+        # 3. Domain Features (Coordinated modular transformers)
         self.domain_engineer = DomainFeatureEngineer(
             enabled=cfg.enable_domain_features,
             enable_behavioral_momentum=cfg.enable_behavioral_momentum,
             enable_customer_friction=cfg.enable_customer_friction,
             enable_product_bundling=cfg.enable_product_bundling,
             enable_risk_interactions=cfg.enable_risk_interactions,
+            spending_collapse_threshold=getattr(cfg, "spending_collapse_threshold", 0.50),
+            login_collapse_threshold=getattr(cfg, "login_collapse_threshold", 0.50),
+            velocity_smoothing=getattr(cfg, "velocity_smoothing", 1.0),
+            unresolved_weight=getattr(cfg, "unresolved_weight", 3.0),
+            complaint_count_weight=getattr(cfg, "complaint_count_weight", 1.5),
+            tx_failure_weight=getattr(cfg, "tx_failure_weight", 2.0),
+            high_friction_complaints_thresh=getattr(cfg, "high_friction_complaints_thresh", 2),
+            sweetspot_min_products=getattr(cfg, "sweetspot_min_products", 2),
+            danger_zone_min_products=getattr(cfg, "danger_zone_min_products", 3),
+            vulnerable_age_min=getattr(cfg, "vulnerable_age_min", 45),
+            vulnerable_age_max=getattr(cfg, "vulnerable_age_max", 60),
+            high_risk_country=getattr(cfg, "high_risk_country", "Germany"),
         )
+        self.momentum_engineer = self.domain_engineer.momentum_engineer
+        self.friction_engineer = self.domain_engineer.friction_engineer
+        self.portfolio_engineer = self.domain_engineer.portfolio_engineer
+        self.risk_engineer = self.domain_engineer.risk_engineer
 
         # 4. Categorical Encoding
         self.categorical_encoder = CategoricalEncoder(
@@ -200,13 +216,13 @@ class FeatureEngineeringPipeline:
         self.skewness_transformer.fit(current, y)
         current = self.skewness_transformer.transform(current)
 
-        # Step 2: Scaling
-        self.scaler.fit(current, y)
-        current = self.scaler.transform(current)
-
-        # Step 3: Domain
+        # Step 2: Domain Features (Run before scaling so domain features can be scaled)
         self.domain_engineer.fit(current, y)
         current = self.domain_engineer.transform(current)
+
+        # Step 3: Scaling (Properly scales raw and domain features like monthly_transactions, trans_trend_ratio, app_logins_monthly)
+        self.scaler.fit(current, y)
+        current = self.scaler.transform(current)
 
         # Step 4: Categorical
         self.categorical_encoder.fit(current, y)
@@ -228,11 +244,11 @@ class FeatureEngineeringPipeline:
         # Step 1: Skewness
         out = self.skewness_transformer.transform(out)
 
-        # Step 2: Scaling
-        out = self.scaler.transform(out)
-
-        # Step 3: Domain
+        # Step 2: Domain Features
         out = self.domain_engineer.transform(out)
+
+        # Step 3: Scaling
+        out = self.scaler.transform(out)
 
         # Step 4: Categorical
         out = self.categorical_encoder.transform(out)
