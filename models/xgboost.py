@@ -111,6 +111,12 @@ class XGBoostChurnModel:
             if sample_weight is not None:
                 val_weight = sample_weight_val if sample_weight_val is not None else np.ones(len(y_val))
                 sample_weight_eval_set = [sample_weight, val_weight]
+            if self.early_stopping_rounds is not None:
+                self.model.set_params(early_stopping_rounds=self.early_stopping_rounds)
+        else:
+            # If no validation set is provided, disable early stopping to prevent ValueError
+            if hasattr(self.model, "get_params") and "early_stopping_rounds" in self.model.get_params():
+                self.model.set_params(early_stopping_rounds=None)
 
         fit_kwargs: Dict[str, Any] = {
             "eval_set": eval_set,

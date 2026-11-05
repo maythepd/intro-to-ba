@@ -65,10 +65,12 @@ class CustomerFrictionEngineer(BaseFeatureTransformer):
             out["has_resolved_complaint"] = (out["resolved_complaints_count"] > 0).astype(int)
             created.append("has_resolved_complaint")
 
-        # 2. Unresolved complaint ratio
+        # 2. Unresolved complaint ratio (strictly bounded in [0.0, 1.0])
         if "unresolved_complaints_count" in out.columns and "customer_service_complaints" in out.columns:
-            out["unresolved_complaint_ratio"] = out["unresolved_complaints_count"] / (
-                out["customer_service_complaints"] + 1e-5
+            out["unresolved_complaint_ratio"] = np.where(
+                out["customer_service_complaints"] > 0,
+                np.clip(out["unresolved_complaints_count"] / out["customer_service_complaints"], 0.0, 1.0),
+                0.0,
             )
             created.append("unresolved_complaint_ratio")
 
@@ -114,7 +116,11 @@ class CustomerFrictionEngineer(BaseFeatureTransformer):
             created.append("has_fee_penalty")
 
         if "bank_fee_amount" in out.columns and "total_outflow" in out.columns:
-            out["fee_burden_ratio"] = out["bank_fee_amount"] / (out["total_outflow"] + 1.0)
+            out["fee_burden_ratio"] = np.where(
+                out["total_outflow"] > 0,
+                np.clip(out["bank_fee_amount"] / out["total_outflow"], 0.0, 1.0),
+                0.0,
+            )
             created.append("fee_burden_ratio")
 
         self.created_features = created

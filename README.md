@@ -133,13 +133,18 @@ Sub-modules (such as `etl.py`, `splitting.py`, `tuner.py`) contain no standalone
 ### Execution Synopsis
 
 ```
-python main.py [--mode {compare,ablation,tune,train,recall}]
+python main.py [--mode {compare,ablation,tune,train,recall,separability,representation}]
                [--model-type {xgboost,lr,rf}]
                [--config CONFIG_PATH]
                [--n-trials N_TRIALS]
-               [--tuning-metric {PR_AUC,ROC_AUC,F1_Score,Recall,F2_Score}]
+               [--tuning-metric {PR_AUC,ROC_AUC,F1_Score,Recall,F2_Score,Precision}]
                [--target-recall TARGET_RECALL]
                [--threshold THRESHOLD]
+               [--sample-weights]
+               [--decay-half-life DECAY_HALF_LIFE]
+               [--focal-loss]
+               [--focal-gamma FOCAL_GAMMA]
+               [--focal-alpha FOCAL_ALPHA]
                [--rebuild-dataset]
                [--output-dir OUTPUT_DIR]
                [--report-name REPORT_FILENAME]
@@ -283,11 +288,53 @@ python main.py --mode recall --model-type xgboost --threshold 0.35
 
 ---
 
+#### 6. Customer Separability & Dimensionality Reduction (`--mode separability`)
+Explores the high-dimensional feature geometry of churned ($y=1$) vs retained ($y=0$) customers using linear projections, non-linear manifolds, and statistical distributions:
+- **PCA Projection (`pca_separability_2d.png`):** 2D linear projection, class centroids, 95% covariance confidence ellipses, scree plot of cumulative explained variance, and top feature loadings on $PC_1$ and $PC_2$.
+- **t-SNE Manifold (`tsne_separability_2d.png`):** 2D non-linear manifold projection, density contour overlays, and localized churn rate danger zones (hexbin heatmap).
+- **Categorical Churn Rate Bars (`categorical_churn_bars.png`):** Multi-panel bar charts showing churn rate (%) across categories with customer counts and population baseline comparisons.
+- **Continuous Distribution Boxplots (`continuous_boxplots.png`):** Multi-panel boxplots with median notches, mean markers, and annotated Cohen's $d$ effect sizes and Mann-Whitney U test p-values.
+- **Continuous KDE Distributions (`continuous_kde_distributions.png`):** Overlaid Kernel Density Estimation curves revealing distribution shifts and bimodality.
+- **Separability Metrics Table (`feature_separability_metrics.csv`):** Information Value (IV), Chi-square, Kolmogorov-Smirnov (KS) statistic, and Cohen's $d$ ranking across all features.
+- **Executive Report (`separability_analysis_report.md`):** Complete business diagnostic synthesis.
+
+```bash
+# Run full separability diagnostics suite via main CLI
+python main.py --mode separability
+
+# Or run standalone module
+python -m visualization.separability --output-dir results/visualizations --sample-size 3000
+```
+
+---
+
+#### 7. Representation Learning & Feature Space Transformation (`--mode representation`)
+Evaluates 4 distinct feature space transformation paradigms to transform non-linearly entangled features into highly discriminative representations:
+1. **Nystroem RBF Kernel Mapping:** Projects features into an explicit finite-dimensional Hilbert space approximation ($d=32$).
+2. **Tabular Denoising Autoencoder (DAE):** Unsupervised reconstruction learning under swap and Gaussian corruption to extract manifold bottleneck vectors ($z \in \mathbb{R}^{16}$).
+3. **Supervised Deep Tabular Bottleneck Latent:** Trains a 3-layer neural network with SiLU and BatchNorm, extracting the 16-dimensional bottleneck representation ($z$). Triples Fisher discriminative ratio and elevates Logistic Regression PR-AUC from 0.54 to 0.64!
+4. **Supervised Contrastive Metric Learning (SupCon):** Optimizes representations on the unit hypersphere with contrastive temperature loss, pulling intra-class customers together and separating churn vs retained by maximum angular margins.
+5. **Hybrid Augmented Space ($[X, z]$):** Concatenates raw engineered features with the neural bottleneck representations.
+
+*Outputs generated in:* `results/visualizations/`
+- `latent_space_comparison.png` (Multi-panel 2D PCA comparison of all representation spaces)
+- `representation_learning_report.md` (Geometric separability metrics & downstream classifier benchmarks)
+
+```bash
+# Run representation learning benchmark suite via main CLI
+python main.py --mode representation
+
+# Or run standalone module
+python -m preprocessing.representation_learning
+```
+
+---
+
 ### Command-Line Arguments Reference
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `--mode` | string | `compare` | Operational mode: `compare`, `ablation`, `tune`, `train`, or `recall`. |
+| `--mode` | string | `compare` | Operational mode: `compare`, `ablation`, `tune`, `train`, `recall`, `separability`, or `representation`. |
 | `--model-type` | string | `xgboost` | Target classifier: `xgboost`, `lr`, or `rf`. (Ignored in `compare` mode). |
 | `--config` | string | `config/config.yaml` | Path to custom YAML configuration file. |
 | `--n-trials` | integer | `null` (uses config) | Number of Optuna optimization trials (in `tune` mode). |

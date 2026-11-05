@@ -34,6 +34,7 @@ from .balancing import ClassBalancer
 from .feature_selector import FeatureSelector
 from .sample_weighting import SampleWeightConfig, SampleWeightGenerator
 from .splitting import DataSplitter, DatasetSplit, CVFold, CVResult
+from .nonlinear import NonlinearRepresentationManager
 
 
 def load_dataset(
@@ -95,6 +96,10 @@ class PipelineResult:
     sample_weight_resampled: Optional[np.ndarray] = None
     feature_importance: Optional[pd.DataFrame] = None
     full_transformed_df: Optional[pd.DataFrame] = None
+    train_df: Optional[pd.DataFrame] = None
+    val_df: Optional[pd.DataFrame] = None
+    train_val_df: Optional[pd.DataFrame] = None
+    test_df: Optional[pd.DataFrame] = None
 
 
 class FeatureEngineeringPipeline:
@@ -224,6 +229,24 @@ class FeatureEngineeringPipeline:
         else:
             self.sample_weighter = SampleWeightGenerator(sw_cfg)
 
+        # 8. Non-linear & Neural Representation Manager
+        self.nonlinear_manager = NonlinearRepresentationManager(
+            enabled=getattr(cfg, "allow_nonlinear_representations", False) or getattr(cfg, "enable_nonlinear_representations", False),
+            method=getattr(cfg, "nonlinear_method", "supervised"),
+            mode=getattr(cfg, "nonlinear_mode", "augment"),
+            latent_dim=getattr(cfg, "nonlinear_latent_dim", 16),
+            hidden_dims=getattr(cfg, "nonlinear_hidden_dims", [64, 32]),
+            epochs=getattr(cfg, "nonlinear_epochs", 30),
+            batch_size=getattr(cfg, "nonlinear_batch_size", 256),
+            lr=getattr(cfg, "nonlinear_learning_rate", 1e-3),
+            dropout=getattr(cfg, "nonlinear_dropout", 0.20),
+            noise_level=getattr(cfg, "nonlinear_noise_level", 0.15),
+            temperature=getattr(cfg, "nonlinear_temperature", 0.10),
+            kernel_components=getattr(cfg, "nonlinear_kernel_components", 32),
+            checkpoint_dir=getattr(cfg, "nonlinear_checkpoint_dir", "models/saved/nonlinear"),
+            random_state=cfg.random_state,
+        )
+
     def fit(self, df: pd.DataFrame, target_col: Optional[str] = None) -> "FeatureEngineeringPipeline":
         """
         Fit all stateful transformers sequentially on training dataframe.
@@ -252,7 +275,12 @@ class FeatureEngineeringPipeline:
         # Step 5: Numeric Imputer (handles genuine NaNs like avg_resolution_delay_days cleanly without leakage)
         feature_cols = self.extract_model_features(current)
         self.imputer = SimpleImputer(strategy="median")
-        self.imputer.fit(current[feature_cols])
+        current[feature_cols] = self.imputer.fit_transform(current[feature_cols])
+
+        # Step 6: Non-linear Representation Manager (if enabled)
+        if (getattr(self.config, "allow_nonlinear_representations", False) or getattr(self.config, "enable_nonlinear_representations", False)) and y is not None:
+            base_cols = [c for c in self.extract_model_features(current) if not c.startswith("nl_")]
+            self.nonlinear_manager.fit(current[base_cols], y)
 
         return self
 
@@ -278,6 +306,15 @@ class FeatureEngineeringPipeline:
         if hasattr(self, "imputer"):
             feature_cols = self.extract_model_features(out)
             out[feature_cols] = self.imputer.transform(out[feature_cols])
+
+        # Step 6: Non-linear Representation Manager (if enabled)
+        if (getattr(self.config, "allow_nonlinear_representations", False) or getattr(self.config, "enable_nonlinear_representations", False)) and self.nonlinear_manager.transformer is not None:
+            base_cols = [c for c in self.extract_model_features(out) if not c.startswith("nl_")]
+            out_trans = self.nonlinear_manager.transform(out[base_cols])
+            if isinstance(out_trans, pd.DataFrame):
+                new_cols = [c for c in out_trans.columns if c not in out.columns]
+                if new_cols:
+                    out = pd.concat([out, out_trans[new_cols]], axis=1)
 
         return out
 
@@ -396,6 +433,9 @@ class FeatureEngineeringPipeline:
         # Full transformed df (fit_transform on whole dataset for exploratory export)
         full_transformed = self.transform(df)
 
+        # Full training development pool (train + val, strictly excluding held-out test partition)
+        train_val_pool = pd.concat([train_df, val_df], ignore_index=True) if split.has_val else train_df
+
         return PipelineResult(
             X_train=X_train,
             X_test=X_test,
@@ -410,6 +450,10 @@ class FeatureEngineeringPipeline:
             sample_weight_resampled=sample_weight_res,
             feature_importance=df_importance,
             full_transformed_df=full_transformed,
+            train_df=train_df,
+            val_df=val_df,
+            train_val_df=train_val_pool,
+            test_df=test_df,
         )
 
     def cross_validate(

@@ -30,14 +30,33 @@ class RiskInteractionsEngineer(BaseFeatureTransformer):
         vulnerable_age_min: int = 45,
         vulnerable_age_max: int = 60,
         high_risk_country: str = "Germany",
+        high_balance_percentile: float = 50.0,
+        max_balance_salary_ratio: float = 50.0,
     ):
         super().__init__(name="RiskInteractionsEngineer", enabled=enabled)
         self.vulnerable_age_min = vulnerable_age_min
         self.vulnerable_age_max = vulnerable_age_max
         self.high_risk_country = high_risk_country
+        self.high_balance_percentile = high_balance_percentile
+        self.max_balance_salary_ratio = max_balance_salary_ratio
+
+        # Learned baseline statistics strictly from training partition (Zero leakage)
+        self.high_balance_threshold_: float = 0.0
 
     def fit(self, X: pd.DataFrame, y: Optional[pd.Series] = None) -> "RiskInteractionsEngineer":
-        """Stateless transformer; records fitting status."""
+        """Learns high balance threshold exclusively from training split."""
+        if not self.enabled:
+            self.is_fitted = True
+            return self
+
+        if "balance" in X.columns and len(X) > 0:
+            pos_bal = X["balance"][X["balance"] > 0]
+            self.high_balance_threshold_ = (
+                float(np.percentile(pos_bal, self.high_balance_percentile)) if len(pos_bal) > 0 else 0.0
+            )
+        else:
+            self.high_balance_threshold_ = 0.0
+
         self.is_fitted = True
         return self
 
@@ -69,14 +88,16 @@ class RiskInteractionsEngineer(BaseFeatureTransformer):
             ).astype(int)
             created.append("is_middle_aged_vulnerable")
 
-        # 4. Committed Balance to Income Ratio
+        # 4. Committed Balance to Income Ratio (capped at max_balance_salary_ratio to prevent extreme leverage)
         if "balance" in out.columns and "estimated_salary" in out.columns:
-            out["balance_to_salary_ratio"] = np.maximum(0, out["balance"]) / (out["estimated_salary"] + 1.0)
+            raw_ratio = np.maximum(0, out["balance"]) / (out["estimated_salary"] + 1.0)
+            out["balance_to_salary_ratio"] = np.clip(raw_ratio, 0.0, self.max_balance_salary_ratio)
             created.append("balance_to_salary_ratio")
 
-        # 5. Inactive High Balance (Dormant Flight Risk)
+        # 5. Inactive High Balance (Dormant Flight Risk: balance sitting idle above learned threshold)
         if "active_member" in out.columns and "balance" in out.columns:
-            out["inactive_high_balance"] = ((out["active_member"] == 0) & (out["balance"] > 0)).astype(int)
+            h_thresh = getattr(self, "high_balance_threshold_", 0.0)
+            out["inactive_high_balance"] = ((out["active_member"] == 0) & (out["balance"] >= h_thresh)).astype(int)
             created.append("inactive_high_balance")
 
         # 6. Credit Maturity Ratio
@@ -93,6 +114,9 @@ class RiskInteractionsEngineer(BaseFeatureTransformer):
             "vulnerable_age_min": self.vulnerable_age_min,
             "vulnerable_age_max": self.vulnerable_age_max,
             "high_risk_country": self.high_risk_country,
+            "high_balance_percentile": self.high_balance_percentile,
+            "high_balance_threshold_": self.high_balance_threshold_,
+            "max_balance_salary_ratio": self.max_balance_salary_ratio,
         })
         return params
 

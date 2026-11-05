@@ -290,7 +290,7 @@ def run_recall_optimization(
     and report generation.
     """
     from preprocessing.pipeline import FeatureEngineeringPipeline
-    from main import _build_model
+    from utils import build_model
 
     out_dir = Path(output_dir or f"results/{model_type}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -304,10 +304,10 @@ def run_recall_optimization(
     pipe = FeatureEngineeringPipeline(cfg.features)
     res = pipe.prepare_train_test(df)
 
-    # 2. Train Model
-    model = _build_model(model_type, cfg.model, cfg.features, res.y_train_resampled)
-    X_val = res.X_val if res.X_val is not None else res.X_test
-    y_val = res.y_val if res.y_val is not None else res.y_test
+    # 2. Train Model (strictly isolate validation set; never use test set for early stopping or validation)
+    model = build_model(model_type, cfg.model, cfg.features, res.y_train_resampled)
+    X_val = res.X_val
+    y_val = res.y_val
 
     fit_kwargs = {
         "X_train": res.X_train_resampled,
@@ -322,7 +322,15 @@ def run_recall_optimization(
     model.fit(**fit_kwargs)
 
     # 3. Predict on Validation and Test
-    val_prob = model.predict_proba(X_val)
+    # Validation predictions are strictly used for threshold optimization; test is strictly held-out.
+    if X_val is not None and y_val is not None:
+        val_prob = model.predict_proba(X_val)
+        val_y_arr = y_val.values if hasattr(y_val, "values") else y_val
+    else:
+        # Fallback to train predictions for threshold tuning; never touch test set
+        val_prob = model.predict_proba(res.X_train)
+        val_y_arr = res.y_train.values if hasattr(res.y_train, "values") else res.y_train
+
     test_prob = model.predict_proba(res.X_test)
     y_test = res.y_test.values
 
@@ -332,7 +340,7 @@ def run_recall_optimization(
         test_prob=test_prob,
         output_dir=out_dir,
         model_type=model_type,
-        y_val=y_val,
+        y_val=val_y_arr,
         val_prob=val_prob,
         target_recall=target_recall,
         manual_threshold=manual_threshold,

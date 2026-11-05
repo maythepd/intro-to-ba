@@ -282,6 +282,21 @@ class PipelineConfig:
     weight_churn_multiplier: float = 1.5
     weight_normalize: bool = True
 
+    # Non-linear & Neural Representation Learning configuration
+    allow_nonlinear_representations: bool = False
+    nonlinear_method: str = "supervised"  # "supervised" | "contrastive" | "autoencoder" | "kernel"
+    nonlinear_mode: str = "augment"  # "augment" (appends [X, z]) | "replace" (only z)
+    nonlinear_latent_dim: int = 16
+    nonlinear_hidden_dims: List[int] = field(default_factory=lambda: [64, 32])
+    nonlinear_epochs: int = 30
+    nonlinear_batch_size: int = 256
+    nonlinear_learning_rate: float = 0.001
+    nonlinear_dropout: float = 0.20
+    nonlinear_noise_level: float = 0.15
+    nonlinear_temperature: float = 0.10
+    nonlinear_kernel_components: int = 32
+    nonlinear_checkpoint_dir: str = "models/saved/nonlinear"
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PipelineConfig":
         """
@@ -306,6 +321,8 @@ class PipelineConfig:
                 "balancing",
                 "feature_selection",
                 "sample_weighting",
+                "nonlinear_representations",
+                "nonlinear",
                 "dataset",
             ]
             for sec in section_keys:
@@ -342,6 +359,36 @@ class PipelineConfig:
                 flat_data["weight_churn_multiplier"] = sw_source["churn_weight_multiplier"]
             if "normalize" in sw_source:
                 flat_data["weight_normalize"] = sw_source["normalize"]
+
+        # Handle nonlinear_representations mappings
+        nl_source = data.get("nonlinear_representations") or (feature_dict.get("nonlinear_representations") if isinstance(feature_dict, dict) else None)
+        if isinstance(nl_source, dict):
+            if "enabled" in nl_source:
+                flat_data["allow_nonlinear_representations"] = nl_source["enabled"]
+            if "method" in nl_source:
+                flat_data["nonlinear_method"] = nl_source["method"]
+            if "mode" in nl_source:
+                flat_data["nonlinear_mode"] = nl_source["mode"]
+            if "latent_dim" in nl_source:
+                flat_data["nonlinear_latent_dim"] = nl_source["latent_dim"]
+            if "hidden_dims" in nl_source:
+                flat_data["nonlinear_hidden_dims"] = nl_source["hidden_dims"]
+            if "epochs" in nl_source:
+                flat_data["nonlinear_epochs"] = nl_source["epochs"]
+            if "batch_size" in nl_source:
+                flat_data["nonlinear_batch_size"] = nl_source["batch_size"]
+            if "learning_rate" in nl_source:
+                flat_data["nonlinear_learning_rate"] = nl_source["learning_rate"]
+            if "dropout" in nl_source:
+                flat_data["nonlinear_dropout"] = nl_source["dropout"]
+            if "noise_level" in nl_source:
+                flat_data["nonlinear_noise_level"] = nl_source["noise_level"]
+            if "temperature" in nl_source:
+                flat_data["nonlinear_temperature"] = nl_source["temperature"]
+            if "kernel_components" in nl_source:
+                flat_data["nonlinear_kernel_components"] = nl_source["kernel_components"]
+            if "checkpoint_dir" in nl_source:
+                flat_data["nonlinear_checkpoint_dir"] = nl_source["checkpoint_dir"]
 
         valid_keys = {f for f in cls.__dataclass_fields__}
         filtered = {k: v for k, v in flat_data.items() if k in valid_keys}

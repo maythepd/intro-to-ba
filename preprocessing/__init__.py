@@ -26,6 +26,14 @@ from .pipeline import (
     load_dataset,
 )
 
+from .nonlinear import (
+    NystroemKernelTransformer,
+    TabularDenoisingAutoencoderTransformer,
+    SupervisedTabularEmbeddingTransformer,
+    ContrastiveTabularTransformer,
+    NonlinearRepresentationManager,
+)
+
 __all__ = [
     "pipeline",
     "BaseFeatureTransformer",
@@ -53,4 +61,9 @@ __all__ = [
     "DatasetSplit",
     "CVFold",
     "CVResult",
+    "NystroemKernelTransformer",
+    "TabularDenoisingAutoencoderTransformer",
+    "SupervisedTabularEmbeddingTransformer",
+    "ContrastiveTabularTransformer",
+    "NonlinearRepresentationManager",
 ]

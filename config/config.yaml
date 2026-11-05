@@ -30,6 +30,7 @@ features:
   enable_target_encoding: true      # Smoothed Target Encoding (m-estimate)
   enable_smote: true                # Cân bằng mẫu thiểu số bằng SMOTE trên tập Train
   enable_feature_selection: false   # Lọc đặc trưng Top-K theo độ quan trọng
+  allow_nonlinear_representations: false # Biến đổi không gian đặc trưng phi tuyến / neural latent vectors
 
   # Chi tiết biến đổi phân phối lệch (Skewness sub-toggles)
   skewness_transform:
@@ -113,6 +114,24 @@ features:
     top_k_features: null
     feature_selection_metric: "MI_Score"  # Sử dụng Mutual Information Classif theo chuẩn dự án
     compute_feature_importance: false
+
+  # Chi tiết biểu diễn phi tuyến & Neural Latent Embeddings
+  nonlinear_representations:
+    enabled: false                      # allow_nonlinear_representations
+    method: "supervised"                # "supervised" | "contrastive" | "autoencoder" | "kernel"
+    mode: "augment"                     # "augment" (ghép [X, z]) | "replace" (chỉ dùng z)
+    latent_dim: 16                      # Chiều của vector ẩn bottleneck z
+    hidden_dims:
+      - 64
+      - 32
+    epochs: 30                          # Số epoch huấn luyện mạng neural
+    batch_size: 256                     # Kích thước mini-batch
+    learning_rate: 0.001                # Tốc độ học AdamW
+    dropout: 0.20                       # Tỷ lệ Dropout chống quá khớp
+    noise_level: 0.15                   # Mức nhiễu cho Denoising Autoencoder
+    temperature: 0.10                   # Tham số nhiệt độ cho Supervised Contrastive Loss
+    kernel_components: 32               # Số chiều cho Nystroem RBF kernel
+    checkpoint_dir: "models/saved/nonlinear" # Thư mục lưu / nạp checkpoint weights (.pt)
 
 # 3. CẤU HÌNH MÔ HÌNH (Model Configuration: xgboost | lr | rf)
 model:

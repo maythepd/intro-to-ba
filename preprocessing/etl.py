@@ -84,31 +84,55 @@ class BankDataETL:
         obs_start = pd.to_datetime(ctx["observation_start"], format="ISO8601")
         rel_start = pd.to_datetime(ctx["relationship_start_date"], format="ISO8601")
 
-        effective_start = np.maximum(obs_start, rel_start)
+        effective_start = rel_start.combine(obs_start, max)
         ctx["exposure_days"] = (self.snapshot_boundary - effective_start).dt.total_seconds() / 86400.0
         ctx["exposure_months"] = np.maximum(ctx["exposure_days"] / 30.4375, 0.1)
         ctx["relationship_tenure_days"] = (self.snapshot_boundary - rel_start).dt.total_seconds() / 86400.0
 
+        # Exact days observed in Q2 (2026-04-01 to 2026-07-01) and Q3 (2026-07-01 to snapshot 2026-10-01)
+        # Prevents length-of-observation bias when evaluating quarterly velocities/trends for new joiners.
+        q2_start = pd.Timestamp("2026-04-01")
+        q2_end = pd.Timestamp("2026-07-01")
+        q3_start = self.q3_start
+        q3_end = self.snapshot_boundary
+
+        ctx["days_observed_q2"] = ((q2_end - effective_start.clip(lower=q2_start, upper=q2_end)).dt.total_seconds() / 86400.0).clip(lower=0.0)
+        ctx["days_observed_q3"] = ((q3_end - effective_start.clip(lower=q3_start, upper=q3_end)).dt.total_seconds() / 86400.0).clip(lower=0.0)
+        ctx["is_joined_q3"] = (effective_start >= q3_start).astype(int)
+
         df = cust.merge(
-            ctx[["customer_id", "exposure_days", "exposure_months", "relationship_tenure_days"]],
+            ctx[[
+                "customer_id",
+                "exposure_days",
+                "exposure_months",
+                "relationship_tenure_days",
+                "days_observed_q2",
+                "days_observed_q3",
+                "is_joined_q3",
+            ]],
             on="customer_id",
             how="left",
         )
 
         # 3. Account Schema Aggregation
-        acc["is_everyday"] = (acc["account_type"] == "everyday").astype(int)
-        acc["is_savings"] = (acc["account_type"] == "savings").astype(int)
-        acc["is_closed"] = acc["closed_at"].notna().astype(int)
+        # Distinguish open vs closed accounts as of snapshot_boundary
+        closed_dt = pd.to_datetime(acc["closed_at"], format="ISO8601")
+        acc["is_closed"] = (closed_dt.notna() & (closed_dt < self.snapshot_boundary)).astype(int)
+        acc["is_open"] = (1 - acc["is_closed"]).astype(int)
+
+        acc["is_everyday_open"] = (acc["is_open"] & (acc["account_type"] == "everyday")).astype(int)
+        acc["is_savings_open"] = (acc["is_open"] & (acc["account_type"] == "savings")).astype(int)
         acc["is_auto_renewal"] = (acc["renewal_type"] == "auto").astype(int)
         acc["is_manual_renewal"] = (acc["renewal_type"] == "manual").astype(int)
 
-        acc["savings_bal"] = np.where(acc["account_type"] == "savings", acc["balance"], 0.0)
-        acc["everyday_bal"] = np.where(acc["account_type"] == "everyday", acc["balance"], 0.0)
+        acc["savings_bal"] = np.where(acc["is_open"] & (acc["account_type"] == "savings"), acc["balance"], 0.0)
+        acc["everyday_bal"] = np.where(acc["is_open"] & (acc["account_type"] == "everyday"), acc["balance"], 0.0)
 
         acc_feat = acc.groupby("customer_id").agg(
-            total_accounts=("account_id", "count"),
-            num_everyday_accounts=("is_everyday", "sum"),
-            num_savings_accounts=("is_savings", "sum"),
+            total_accounts=("is_open", "sum"),  # Active open accounts at snapshot
+            total_accounts_ever=("account_id", "count"),  # All accounts ever opened
+            num_everyday_accounts=("is_everyday_open", "sum"),
+            num_savings_accounts=("is_savings_open", "sum"),
             num_closed_accounts=("is_closed", "sum"),
             savings_balance=("savings_bal", "sum"),
             everyday_balance=("everyday_bal", "sum"),
@@ -119,6 +143,7 @@ class BankDataETL:
         df = df.merge(acc_feat, on="customer_id", how="left")
         for col in [
             "total_accounts",
+            "total_accounts_ever",
             "num_everyday_accounts",
             "num_savings_accounts",
             "num_closed_accounts",
@@ -283,11 +308,19 @@ class BankDataETL:
         posted_tx["external_transfer_out_amt"] = np.where(is_ext_out_type, posted_tx["amount"], 0.0)
         posted_tx["external_transfer_out_cnt"] = is_ext_out_type.astype(int)
 
+        # Customer-initiated transaction flag (active human action: outgoing transfers/payments, cash withdrawals, cash deposits)
+        # Strictly excludes passive inflows (external transfer in), automated system postings (interest credits, bank fees, auto-debits)
+        is_cust_action = (posted_tx["channel"] != "system") & (
+            (posted_tx["direction"] == "out") | (posted_tx["transaction_type"] == "cash_deposit")
+        )
+        posted_tx["is_cust_initiated"] = is_cust_action.astype(int)
+
         # Action-level posted transactions for count
         action_posted = posted_tx[(posted_tx["transaction_type"] != "internal_transfer") | (posted_tx["direction"] == "out")]
 
         tx_feat = action_posted.groupby("customer_id").agg(
             total_transactions=("transaction_id", "count"),
+            customer_initiated_tx_count=("is_cust_initiated", "sum"),
             total_outflow=("outflow_amount", "sum"),
             total_inflow=("inflow_amount", "sum"),
             trans_amount_3m=("q3_amount", "sum"),
@@ -306,9 +339,9 @@ class BankDataETL:
             bank_fee_count=("bank_fee_cnt", "sum"),
         ).reset_index()
 
-        # Recency: Calculated strictly on customer-initiated transactions (channel != "system"),
+        # Recency: Calculated strictly on customer-initiated transactions,
         # preventing automated system postings (fees, interest, passive receipts) from faking active engagement.
-        cust_tx = posted_tx[posted_tx["channel"] != "system"]
+        cust_tx = posted_tx[is_cust_action]
         last_tx = cust_tx.groupby("customer_id")["transaction_datetime"].max()
         rec_tx = (self.snapshot_boundary - last_tx).dt.total_seconds() / 86400.0
         tx_feat = tx_feat.merge(rec_tx.rename("recency_days"), on="customer_id", how="left")
@@ -333,6 +366,7 @@ class BankDataETL:
             "failed_transactions",
             "cancelled_transactions",
             "total_transactions",
+            "customer_initiated_tx_count",
             "trans_count_3m",
             "trans_count_prior_3m",
             "payment_count",

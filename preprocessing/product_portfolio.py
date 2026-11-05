@@ -15,6 +15,14 @@ class ProductPortfolioEngineer(BaseFeatureTransformer):
     """
     Engineers banking product bundling, utilization regimes, and relationship depth features.
 
+    Empirical EDA Justification:
+      - In the Kaggle bank churn dataset, customers holding exactly 2 products exhibit a remarkably
+        low churn rate (~7.5%), representing an optimal, sticky relationship "Sweetspot".
+      - In contrast, customers holding 3 or 4 products exhibit an extreme churn rate (82.8% for 3 products,
+        100% for 4 products), representing a known non-linear "Danger Zone" (over-bundled, inactive, or dissatisfaction).
+      - These boundaries are parameterized by sweetspot_min_products and danger_zone_min_products,
+        and combined dynamically with actual product utilization, spending trends, and service friction.
+
     Features created:
       - portfolio_utilization: Monthly transaction intensity per banking product held
       - balance_per_product: Committed deposit balance per banking product held
@@ -143,15 +151,28 @@ class ProductPortfolioEngineer(BaseFeatureTransformer):
         if "num_closed_accounts" in out.columns:
             out["has_closed_account"] = (out["num_closed_accounts"] > 0).astype(int)
             created.append("has_closed_account")
-            if "total_accounts" in out.columns:
-                out["closed_account_ratio"] = out["num_closed_accounts"] / np.maximum(out["total_accounts"], 1)
+            # Closed account ratio relative to all accounts ever opened (strictly bounded in [0.0, 1.0])
+            denom = out["total_accounts_ever"] if "total_accounts_ever" in out.columns else (
+                out["total_accounts"] + out["num_closed_accounts"] if "total_accounts" in out.columns else None
+            )
+            if denom is not None:
+                out["closed_account_ratio"] = np.where(
+                    denom > 0,
+                    np.clip(out["num_closed_accounts"] / denom, 0.0, 1.0),
+                    0.0,
+                )
                 created.append("closed_account_ratio")
 
         if "savings_balance" in out.columns and "balance" in out.columns:
-            out["savings_share"] = out["savings_balance"] / (np.maximum(0, out["balance"]) + 1.0)
+            out["savings_share"] = np.where(
+                out["balance"] > 0,
+                np.clip(out["savings_balance"] / out["balance"], 0.0, 1.0),
+                0.0,
+            )
             created.append("savings_share")
 
         if "total_accounts" in out.columns:
+            # Active open accounts at snapshot boundary
             out["multi_account_holder"] = (out["total_accounts"] > 1).astype(int)
             created.append("multi_account_holder")
 

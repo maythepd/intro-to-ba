@@ -3,6 +3,14 @@ Verification and demonstration script for the FeatureEngineeringPipeline and Con
 """
 
 import os
+os.environ["LOKY_MAX_CPU_COUNT"] = "4"
+try:
+    import joblib
+    from joblib.externals.loky.backend import context
+    context._count_physical_cores = lambda: 4
+except Exception:
+    pass
+
 from pathlib import Path
 import shutil
 import sys
@@ -12,22 +20,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 from config import PipelineConfig, load_config
 from preprocessing import pipeline, FeatureEngineeringPipeline
-
-
-def resolve_data_path(path_str: str) -> str:
-    path = Path(path_str)
-    if path.is_absolute() and path.exists():
-        return str(path)
-    if path.exists():
-        return str(path.resolve())
-    script_dir = Path(__file__).resolve().parent
-    candidate = (script_dir / path).resolve()
-    if candidate.exists():
-        return str(candidate)
-    candidate_parent = (script_dir.parent / path).resolve()
-    if candidate_parent.exists():
-        return str(candidate_parent)
-    raise FileNotFoundError(f"Data file not found: {path_str}")
+from utils import resolve_data_path
 
 
 def cleanup_test_artifacts():
@@ -171,7 +164,60 @@ def run_checks():
         assert Path("data/processed/feature_metadata.json").exists(), "data/processed/feature_metadata.json should exist"
         print("[OK] Main pipeline processed dataset exported cleanly to data/processed!")
 
-        print("\n[SUCCESS] All pipeline, splitting, MI ranking, visualization, and Optuna tests passed!")
+        # 10. Test Non-linear & Neural Representation Sub-package (preprocessing.nonlinear)
+        print("\n--- Testing Non-linear & Neural Representation Sub-package ---")
+        from preprocessing.nonlinear import (
+            NonlinearRepresentationManager,
+            NystroemKernelTransformer,
+            TabularDenoisingAutoencoderTransformer,
+            SupervisedTabularEmbeddingTransformer,
+            ContrastiveTabularTransformer,
+        )
+        sample_X = res.X_train.head(100)
+        sample_y = df.loc[sample_X.index, "churn"].values
+
+        # Test Kernel Nystroem
+        kernel_mgr = NonlinearRepresentationManager(
+            enabled=True,
+            method="kernel",
+            mode="augment",
+            kernel_components=10,
+        )
+        kernel_mgr.fit(sample_X, sample_y)
+        trans_kernel = kernel_mgr.transform(sample_X)
+        assert trans_kernel.shape[1] == sample_X.shape[1] + 10, f"Expected {sample_X.shape[1] + 10} features, got {trans_kernel.shape[1]}"
+        print(f"[OK] Kernel Nystroem transformation verified: {trans_kernel.shape}")
+
+        # Test Supervised Latent with Checkpoint logic
+        test_ckpt_dir = Path("results/test_tune/checkpoints")
+        supervised_mgr = NonlinearRepresentationManager(
+            enabled=True,
+            method="supervised",
+            mode="augment",
+            latent_dim=8,
+            epochs=2,
+            checkpoint_dir=test_ckpt_dir,
+        )
+        supervised_mgr.fit(sample_X, sample_y)
+        trans_sup = supervised_mgr.transform(sample_X)
+        assert trans_sup.shape[1] == sample_X.shape[1] + 8, f"Expected {sample_X.shape[1] + 8} features, got {trans_sup.shape[1]}"
+        assert (test_ckpt_dir / "supervised_encoder.pt").exists(), "Checkpoint should be saved"
+
+        # Verify reloading existing checkpoint
+        supervised_mgr_reload = NonlinearRepresentationManager(
+            enabled=True,
+            method="supervised",
+            mode="augment",
+            latent_dim=8,
+            epochs=2,
+            checkpoint_dir=test_ckpt_dir,
+        )
+        supervised_mgr_reload.fit(sample_X, sample_y)
+        trans_sup_reload = supervised_mgr_reload.transform(sample_X)
+        assert trans_sup_reload.shape == trans_sup.shape
+        print(f"[OK] Supervised neural representation & checkpoint reuse verified!")
+
+        print("\n[SUCCESS] All pipeline, splitting, MI ranking, visualization, Optuna, and Non-linear tests passed!")
 
     finally:
         cleanup_test_artifacts()

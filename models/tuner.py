@@ -168,6 +168,7 @@ class OptunaTuner:
         n_trials: Optional[int] = None,
         timeout: Optional[int] = None,
         output_dir: Optional[str] = None,
+        manual_threshold: Optional[float] = None,
         verbose: bool = True,
     ) -> TuningResult:
         """
@@ -180,14 +181,17 @@ class OptunaTuner:
         trials_count = n_trials or self.n_trials
         time_limit = timeout if timeout is not None else self.timeout
         target = self.config.features.target_col
+        eval_th = float(manual_threshold) if manual_threshold is not None else 0.5
 
-        out_dir = Path(output_dir or f"results/{self.model_type}")
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = Path(output_dir or f"results/{self.model_type}").resolve()
+        os.makedirs(out_dir, exist_ok=True)
 
         if verbose:
             print("\n=======================================================")
             print(f"STARTING OPTUNA TUNING: {self.model_type.upper()}")
             print(f"Target Metric: {self.target_metric} | Trials: {trials_count} | Folds: {self.cv_folds}")
+            if manual_threshold is not None:
+                print(f"Decision Threshold: {eval_th:.2f}")
             print("=======================================================")
 
         # 1. Partition dataset via DataSplitter: keep Test partition strictly untouched
@@ -252,13 +256,15 @@ class OptunaTuner:
                 else:
                     model.fit(X_tr_res, y_tr_res, **fit_kwargs)
 
-                metrics = model.evaluate(X_va, y_va)
+                metrics = model.evaluate(X_va, y_va, threshold=eval_th)
                 if self.target_metric.lower() in ("recall", "rec"):
                     score = float(metrics.get("Recall", 0.0))
                 elif self.target_metric.lower() in ("f2_score", "f2"):
                     p = metrics.get("Precision", 0.0)
                     r = metrics.get("Recall", 0.0)
                     score = float((5.0 * p * r) / (4.0 * p + r + 1e-5))
+                elif self.target_metric.lower() in ("precision", "prec"):
+                    score = float(metrics.get("Precision", 0.0))
                 else:
                     score = float(metrics.get(self.target_metric, 0.0))
                 fold_scores.append(score)
@@ -326,32 +332,55 @@ class OptunaTuner:
             else:
                 sw_final = sw_raw
 
+        # Transform validation partition if available (strictly isolated for threshold calibration & validation)
+        X_val_final = None
+        y_val_final = None
+        if split.has_val and val_df is not None:
+            te_val = final_pipe.transform(val_df)
+            X_val_final = te_val[feat_cols].copy()
+            y_val_final = te_val[target].copy()
+            if final_pipe.config.enable_feature_selection and final_pipe.config.top_k_features:
+                X_val_final = final_pipe.feature_selector.transform(X_val_final)
+
         # Merge base params with best tuned params
         merged_best = self._sample_params(optuna.trial.FixedTrial(best_params))
         best_model = self._build_model(merged_best)
 
         fit_kwargs = {"sample_weight": sw_final} if sw_final is not None else {}
         if self.model_type == "xgboost":
-            best_model.fit(X_train_res, y_train_res, X_val=X_test_final, y_val=y_test_final, verbose=False, **fit_kwargs)
+            if X_val_final is not None and y_val_final is not None:
+                best_model.fit(X_train_res, y_train_res, X_val=X_val_final, y_val=y_val_final, verbose=False, **fit_kwargs)
+            else:
+                # No validation split: fit on cv_train_pool with tuned n_estimators without early stopping.
+                # Strictly prevents data leakage by keeping test set completely unseen during fitting.
+                best_model.fit(X_train_res, y_train_res, X_val=None, y_val=None, verbose=False, **fit_kwargs)
         else:
             best_model.fit(X_train_res, y_train_res, **fit_kwargs)
 
-        test_metrics = best_model.evaluate(X_test_final, y_test_final)
+        test_metrics = best_model.evaluate(X_test_final, y_test_final, threshold=eval_th)
+        ref_05 = best_model.evaluate(X_test_final, y_test_final, threshold=0.5) if manual_threshold is not None else None
 
         # Extract feature importances
         imp_type = "gain" if self.model_type == "xgboost" else "gini" if self.model_type == "rf" else "coefficient"
         df_imp = best_model.get_feature_importances(importance_type=imp_type)
 
         if verbose:
-            print("\nIndependent Test Set Performance (Tuned Model):")
+            print(f"\nIndependent Test Set Performance (Tuned Model @ Threshold {eval_th:.2f}):")
             print(
                 f"  ROC-AUC: {test_metrics['ROC_AUC']:.4f} | "
                 f"PR-AUC: {test_metrics['PR_AUC']:.4f} | "
-                f"F1: {test_metrics['F1_Score']:.4f} | "
-                f"Recall: {test_metrics['Recall']:.4f}"
+                f"Precision: {test_metrics['Precision']:.4f} | "
+                f"Recall: {test_metrics['Recall']:.4f} | "
+                f"F1: {test_metrics['F1_Score']:.4f}"
             )
+            if ref_05 is not None:
+                print(
+                    f"  [Reference @ Threshold 0.50] Precision: {ref_05['Precision']:.4f} | "
+                    f"Recall: {ref_05['Recall']:.4f} | F1: {ref_05['F1_Score']:.4f}"
+                )
 
-        # 5. Export Artifacts
+        # 5. Export Artifacts (ensuring directory exists on all platforms)
+        os.makedirs(out_dir, exist_ok=True)
         trials_df = study.trials_dataframe()
         trials_csv = out_dir / f"{self.model_type}_tuning_trials.csv"
         trials_df.to_csv(str(trials_csv), index=False)
@@ -371,11 +400,25 @@ class OptunaTuner:
         # Export Lift & Gains artifacts universally across flags
         p_final = best_model.predict_proba(X_test_final)
         test_prob_final = p_final[:, 1] if getattr(p_final, "ndim", 1) > 1 else p_final
+
+        # Learn operating thresholds strictly on validation predictions (or train if no val); never on test set
+        if X_val_final is not None and y_val_final is not None:
+            p_val = best_model.predict_proba(X_val_final)
+            val_prob_final = p_val[:, 1] if getattr(p_val, "ndim", 1) > 1 else p_val
+            y_val_for_lift = y_val_final
+        else:
+            p_train = best_model.predict_proba(X_train_full)
+            val_prob_final = p_train[:, 1] if getattr(p_train, "ndim", 1) > 1 else p_train
+            y_val_for_lift = y_train_full
+
         lift_res = export_lift_artifacts(
             y_test=y_test_final,
             test_prob=test_prob_final,
             output_dir=out_dir,
             model_type=self.model_type,
+            y_val=y_val_for_lift,
+            val_prob=val_prob_final,
+            manual_threshold=manual_threshold,
             quiet=not verbose,
         )
 
