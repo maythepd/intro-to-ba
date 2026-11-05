@@ -55,6 +55,12 @@ intro-to-ba/
 │   ├── cleaned_bank_data.csv        # Legacy simplified dataset (backward compatibility)
 │   └── full_dataset/                # 7 raw relational tables (accounts, transactions, logins, etc.)
 │
+├── utils/                          # Common Utilities, Experiment Runners & Reporting
+│   ├── __init__.py                  # Exports all utilities, experiment runners & report generators
+│   ├── common.py                    # Path resolution and environment setup
+│   ├── experiments.py               # Model factory (build_model), experiment runners & ablation
+│   └── reporting.py                 # Executive Markdown report generation & dispatching
+│
 ├── preprocessing/                   # Feature Engineering Pipeline
 │   ├── __init__.py                  # Exposes FeatureEngineeringPipeline & load_dataset
 │   ├── pipeline.py                  # Master pipeline orchestrator & load_dataset wrapper
@@ -65,7 +71,16 @@ intro-to-ba/
 │   ├── scaling.py                   # RobustScaler (outliers) & StandardScaler
 │   ├── categorical_encoding.py      # One-Hot Encoding & Smoothed Target Encoding
 │   ├── balancing.py                 # SMOTE class balancing (train set only)
-│   └── feature_selection.py         # Mutual Information (`MI_Score`) & ranking
+│   ├── feature_selection.py         # Mutual Information (`MI_Score`) & ranking
+│   └── nonlinear/                   # Non-linear & Neural Representation Sub-package
+│       ├── __init__.py              # Clean exports
+│       ├── base.py                  # PyTorch device detection & checkpoint save/load
+│       ├── kernel.py                # Nystroem RBF kernel Hilbert space mapping
+│       ├── autoencoder.py           # Tabular Denoising Autoencoder (DAE)
+│       ├── supervised_latent.py     # Supervised TabNet MLP (Fisher-discriminant bottleneck)
+│       ├── contrastive.py           # Supervised Contrastive metric learning (SupCon)
+│       ├── manager.py               # NonlinearRepresentationManager orchestrator
+│       └── benchmark.py             # Representation benchmark comparison suite
 │
 ├── models/                          # Classifier Architectures & Tuner
 │   ├── __init__.py                  # Exports LR, RF, XGBoost, and OptunaTuner
@@ -76,6 +91,7 @@ intro-to-ba/
 │   ├── tuner.py                     # Optuna hyperparameter optimization engine
 │   ├── recall_eval.py               # Recall optimization, baseline benchmarking & Decile Lift
 │   └── saved/                       # Serialized model artifacts (.json, .pkl)
+│       └── nonlinear/               # PyTorch neural checkpoints (*_encoder.pt)
 │
 ├── visualization/                   # Plotting Engine (300 DPI Figures)
 │   ├── __init__.py                  # Exports plotting utilities
@@ -133,7 +149,7 @@ Sub-modules (such as `etl.py`, `splitting.py`, `tuner.py`) contain no standalone
 ### Execution Synopsis
 
 ```
-python main.py [--mode {compare,ablation,tune,train,recall,separability,representation}]
+python main.py [--mode {compare,ablation,tune,train,recall,separability,eda,representation}]
                [--model-type {xgboost,lr,rf}]
                [--config CONFIG_PATH]
                [--n-trials N_TRIALS]
@@ -145,6 +161,12 @@ python main.py [--mode {compare,ablation,tune,train,recall,separability,represen
                [--focal-loss]
                [--focal-gamma FOCAL_GAMMA]
                [--focal-alpha FOCAL_ALPHA]
+               [--allow-nonlinear-representations]
+               [--nonlinear-method {supervised,contrastive,autoencoder,kernel}]
+               [--nonlinear-mode {augment,replace}]
+               [--nonlinear-latent-dim NONLINEAR_LATENT_DIM]
+               [--nonlinear-epochs NONLINEAR_EPOCHS]
+               [--nonlinear-checkpoint-dir NONLINEAR_CHECKPOINT_DIR]
                [--rebuild-dataset]
                [--output-dir OUTPUT_DIR]
                [--report-name REPORT_FILENAME]
@@ -309,23 +331,28 @@ python -m visualization.separability --output-dir results/visualizations --sampl
 ---
 
 #### 7. Representation Learning & Feature Space Transformation (`--mode representation`)
-Evaluates 4 distinct feature space transformation paradigms to transform non-linearly entangled features into highly discriminative representations:
-1. **Nystroem RBF Kernel Mapping:** Projects features into an explicit finite-dimensional Hilbert space approximation ($d=32$).
-2. **Tabular Denoising Autoencoder (DAE):** Unsupervised reconstruction learning under swap and Gaussian corruption to extract manifold bottleneck vectors ($z \in \mathbb{R}^{16}$).
-3. **Supervised Deep Tabular Bottleneck Latent:** Trains a 3-layer neural network with SiLU and BatchNorm, extracting the 16-dimensional bottleneck representation ($z$). Triples Fisher discriminative ratio and elevates Logistic Regression PR-AUC from 0.54 to 0.64!
-4. **Supervised Contrastive Metric Learning (SupCon):** Optimizes representations on the unit hypersphere with contrastive temperature loss, pulling intra-class customers together and separating churn vs retained by maximum angular margins.
-5. **Hybrid Augmented Space ($[X, z]$):** Concatenates raw engineered features with the neural bottleneck representations.
+Evaluates 4 distinct feature space transformation paradigms modularized under [`preprocessing/nonlinear/`](file:///d:/Introduction%20to%20BA/intro-to-ba/preprocessing/nonlinear/) to transform non-linearly entangled features into highly discriminative representations:
+1. **Nystroem RBF Kernel Mapping (`kernel.py`):** Projects features into an explicit finite-dimensional Hilbert space approximation ($d=100$).
+2. **Tabular Denoising Autoencoder (`autoencoder.py`):** Unsupervised reconstruction learning under swap and Gaussian corruption to extract manifold bottleneck vectors ($z \in \mathbb{R}^{16}$).
+3. **Supervised Deep Tabular Bottleneck Latent (`supervised_latent.py`):** Trains a multi-layer neural network with SiLU, BatchNorm, and class-weighted BCE loss, extracting the 16-dimensional bottleneck representation ($z$). Triples Fisher discriminative ratio and elevates Logistic Regression PR-AUC from 0.54 to 0.64!
+4. **Supervised Contrastive Metric Learning (`contrastive.py`):** Optimizes representations on the unit hypersphere with contrastive temperature loss, pulling intra-class customers together and separating churn vs retained by maximum angular margins.
+5. **Hybrid Augmented Space ($[X, z]$):** Concatenates raw engineered features with the neural bottleneck representations (`--nonlinear-mode augment`).
+
+**Automatic Checkpoint Caching (`models/saved/nonlinear/`):**
+Neural representation modules automatically check for existing checkpoints (`models/saved/nonlinear/{method}_encoder.pt`). If missing, the network trains on the training partition and serializes weights. If found, weights are loaded directly, bypassing re-training in sub-second inference.
 
 *Outputs generated in:* `results/visualizations/`
-- `latent_space_comparison.png` (Multi-panel 2D PCA comparison of all representation spaces)
-- `representation_learning_report.md` (Geometric separability metrics & downstream classifier benchmarks)
+- `representation_benchmark_results.csv` (Performance table across all representation spaces)
 
 ```bash
 # Run representation learning benchmark suite via main CLI
 python main.py --mode representation
 
-# Or run standalone module
-python -m preprocessing.representation_learning
+# Train single model augmented with supervised neural representations
+python main.py --mode train --model-type lr --allow-nonlinear-representations
+
+# Train with contrastive embeddings and custom bottleneck dimension
+python main.py --mode train --model-type xgboost --allow-nonlinear-representations --nonlinear-method contrastive --nonlinear-latent-dim 32
 ```
 
 ---
@@ -334,18 +361,24 @@ python -m preprocessing.representation_learning
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `--mode` | string | `compare` | Operational mode: `compare`, `ablation`, `tune`, `train`, `recall`, `separability`, or `representation`. |
+| `--mode` | string | `compare` | Operational mode: `compare`, `ablation`, `tune`, `train`, `recall`, `separability`, `eda`, or `representation`. |
 | `--model-type` | string | `xgboost` | Target classifier: `xgboost`, `lr`, or `rf`. (Ignored in `compare` mode). |
 | `--config` | string | `config/config.yaml` | Path to custom YAML configuration file. |
 | `--n-trials` | integer | `null` (uses config) | Number of Optuna optimization trials (in `tune` mode). |
-| `--tuning-metric` | string | `null` (uses config) | Target metric for Optuna: `PR_AUC`, `ROC_AUC`, `F1_Score`, `Recall`, or `F2_Score`. |
+| `--tuning-metric` | string | `null` (uses config) | Target metric for Optuna: `PR_AUC`, `ROC_AUC`, `F1_Score`, `Recall`, `F2_Score`, or `Precision`. |
 | `--target-recall` | float | `0.75` | Target minimum recall constraint for threshold optimization in `recall` mode. |
-| `--threshold` | float | `null` | Optional manual decision threshold override in `recall` mode (e.g. `0.35`). |
+| `--threshold` | float | `null` | Optional manual decision threshold override in `recall` or `train` mode (e.g. `0.35`). |
 | `--sample-weights` | flag | `False` | Enables composite sample weighting: exponential recency decay + financial balance value weighting + churn multiplier. Supported across all models (`xgboost`, `lr`, `rf`). |
 | `--focal-loss` | flag | `False` | Enables Focal Loss objective to dampen gradient of easy negative samples and focus learning on hard decision boundaries. Supported on `xgboost` and `lr`. |
 | `--focal-gamma` | float | `2.0` | Focusing parameter $\gamma$ for Focal Loss (reduces easy sample gradients when $\gamma > 0$). |
 | `--focal-alpha` | float | `0.25` | Positive class balancing factor $\alpha$ for Focal Loss (churn label weight). |
 | `--decay-half-life`| float | `60.0` | Half-life $t_{1/2}$ in days for exponential recency decay weighting. |
+| `--allow-nonlinear-representations` | flag | `False` | Enables non-linear kernel / neural representation learning in the pipeline. |
+| `--nonlinear-method` | string | `null` (uses config) | Non-linear representation method: `supervised`, `contrastive`, `autoencoder`, or `kernel`. |
+| `--nonlinear-mode` | string | `null` (uses config) | Mode: `augment` (concatenates latent vectors with raw features) or `replace`. |
+| `--nonlinear-latent-dim` | integer | `null` (uses config) | Bottleneck latent dimension for neural embeddings (default: 16). |
+| `--nonlinear-epochs` | integer | `null` (uses config) | Number of epochs for neural network representation training. |
+| `--nonlinear-checkpoint-dir` | string | `null` (uses config) | Directory to save/load neural checkpoints (default: `models/saved/nonlinear`). |
 | `--rebuild-dataset`| flag | `False` | Forces multi-table ETL rebuild from `data/full_dataset/`. |
 | `--output-dir` | string | `null` (auto-routed) | Custom directory for outputs; defaults to `results/{comparison\|lr\|rf\|xgboost}`. |
 | `--report-name` | string | `null` (auto-templated)| Custom report filename; defaults to `{mode}_{model}_report.md`. |
@@ -499,6 +532,22 @@ features:
     top_k_features: null             # Set an integer (e.g., 40) or null to keep all
     feature_selection_metric: "MI_Score"  # Mutual Information Classif (mutual_info_classif)
     compute_feature_importance: false
+
+  # Non-Linear & Neural Representation Learning
+  allow_nonlinear_representations: false
+  nonlinear_representations:
+    method: "supervised"            # "supervised" | "contrastive" | "autoencoder" | "kernel"
+    mode: "augment"                 # "augment" (concatenates with raw features) | "replace"
+    latent_dim: 16                  # Bottleneck representation dimension
+    hidden_dims: [64, 32]           # MLP hidden layer widths
+    epochs: 25                      # Training epochs
+    batch_size: 256
+    learning_rate: 0.001
+    dropout: 0.20
+    noise_level: 0.10
+    temperature: 0.07
+    kernel_components: 100
+    checkpoint_dir: "models/saved/nonlinear"
 ```
 
 ---
