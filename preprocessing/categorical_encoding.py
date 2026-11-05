@@ -28,12 +28,20 @@ class CategoricalEncoder(BaseFeatureTransformer):
         "primary_device",
     ]
 
+    DEFAULT_KNOWN_CATEGORIES: Dict[str, List[Any]] = {
+        "country": ["France", "Germany", "Spain"],
+        "gender": ["Female", "Male"],
+        "preferred_channel": ["Branch", "In-Person", "Mobile", "Online", "Phone"],
+        "primary_device": ["Android", "Desktop", "iOS", "No_Device"],
+    }
+
     def __init__(
         self,
         enabled: bool = True,
         apply_ohe: bool = True,
         apply_target_enc: bool = True,
         categorical_cols: Optional[List[str]] = None,
+        known_categories: Optional[Dict[str, List[Any]]] = None,
         m_weight: float = 10.0,
         ohe_drop_first: bool = False,
     ):
@@ -41,6 +49,7 @@ class CategoricalEncoder(BaseFeatureTransformer):
         self.apply_ohe = apply_ohe
         self.apply_target_enc = apply_target_enc
         self.categorical_cols = categorical_cols or list(self.DEFAULT_CATEGORICAL_COLS)
+        self.known_categories = known_categories or dict(self.DEFAULT_KNOWN_CATEGORIES)
         self.m_weight = m_weight
         self.ohe_drop_first = ohe_drop_first
 
@@ -61,8 +70,9 @@ class CategoricalEncoder(BaseFeatureTransformer):
             expected_cols: List[str] = []
             for col in self.categorical_cols:
                 if col in X.columns:
-                    # Sort unique categories for deterministic column ordering
-                    cats = sorted(X[col].dropna().unique().tolist())
+                    # Union of predefined known categories and unique values in X for cross-split stability
+                    known = self.known_categories.get(col, [])
+                    cats = sorted(list(set(known).union(set(X[col].dropna().unique().tolist()))))
                     if self.ohe_drop_first and len(cats) > 1:
                         cats = cats[1:]
                     self._ohe_categories[col] = cats

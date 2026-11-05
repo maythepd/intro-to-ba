@@ -15,7 +15,13 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
-from .base import checkpoint_exists, get_device, load_checkpoint, save_checkpoint
+from .base import (
+    checkpoint_exists,
+    get_device,
+    is_checkpoint_compatible,
+    load_checkpoint,
+    save_checkpoint,
+)
 
 
 class SupConLoss(nn.Module):
@@ -133,11 +139,14 @@ class ContrastiveTabularTransformer(BaseEstimator, TransformerMixin):
             dropout=self.dropout,
         ).to(self.device)
 
-        # Check if checkpoint exists
+        # Check if checkpoint exists and is compatible with current input feature dimension
         if self.checkpoint_path and checkpoint_exists(self.checkpoint_path):
-            self.model, meta = load_checkpoint(self.model, self.checkpoint_path, device=self.device)
-            print(f"[INFO] Loaded pretrained ContrastiveTabNet from checkpoint: {self.checkpoint_path}")
-            return self
+            if is_checkpoint_compatible(self.checkpoint_path, in_features=n_features):
+                self.model, meta = load_checkpoint(self.model, self.checkpoint_path, device=self.device)
+                print(f"[INFO] Loaded pretrained ContrastiveTabNet from checkpoint: {self.checkpoint_path}")
+                return self
+            else:
+                print(f"[WARN] Checkpoint '{self.checkpoint_path}' feature dimension does not match current input ({n_features} features). Training fresh model...")
 
         print(f"[INFO] Training ContrastiveTabNet from scratch (epochs={self.epochs}, latent_dim={self.latent_dim})...")
         y_t = torch.tensor(y, dtype=torch.long)

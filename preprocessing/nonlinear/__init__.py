@@ -9,7 +9,7 @@ Provides modular architectures to transform tabular banking data into discrimina
   - NonlinearRepresentationManager: Unified orchestrator with checkpoint caching and feature augmentation.
 """
 
-from .base import get_device, save_checkpoint, load_checkpoint, checkpoint_exists
+from .base import get_device, save_checkpoint, load_checkpoint, checkpoint_exists, is_checkpoint_compatible
 from .kernel import NystroemKernelTransformer
 from .autoencoder import TabularDAE, TabularDenoisingAutoencoderTransformer
 from .supervised_latent import SupervisedTabNet, SupervisedTabularEmbeddingTransformer
@@ -22,6 +22,7 @@ __all__ = [
     "save_checkpoint",
     "load_checkpoint",
     "checkpoint_exists",
+    "is_checkpoint_compatible",
     "NystroemKernelTransformer",
     "TabularDAE",
     "TabularDenoisingAutoencoderTransformer",

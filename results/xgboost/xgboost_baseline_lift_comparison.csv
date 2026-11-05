@@ -1,0 +1,7 @@
+Configuration,Threshold,Accuracy,Precision,Recall,F1_Score,ROC_AUC,PR_AUC,Precision_Lift,Recall_Lift,PR_AUC_Lift
+1. Random Guess Baseline,-,67.52%,20.40%,20.40%,0.2040,0.5000,0.2040,1.00x,1.00x,1.00x
+2. Majority Class Baseline (All Non-Churn),1.00,79.60%,0.00%,0.00%,0.0000,0.5000,0.2040,0.00x,0.00x,1.00x
+Model @ Default (0.50),0.50,83.60%,62.20%,50.00%,0.5543,0.8400,0.6435,3.05x,2.45x,3.15x
+Model @ Optimal F1,0.42,84.20%,62.78%,55.39%,0.5885,0.8400,0.6435,3.08x,2.72x,3.15x
+Model @ Optimal F2 (High Recall),0.42,84.20%,62.78%,55.39%,0.5885,0.8400,0.6435,3.08x,2.72x,3.15x
+Model @ Target Recall (>=75%),0.73,84.60%,71.93%,40.20%,0.5157,0.8400,0.6435,3.53x,1.97x,3.15x

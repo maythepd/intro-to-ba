@@ -117,7 +117,7 @@ features:
 
   # Chi tiết biểu diễn phi tuyến & Neural Latent Embeddings
   nonlinear_representations:
-    enabled: false                      # allow_nonlinear_representations
+    enabled: true                      # allow_nonlinear_representations
     method: "supervised"                # "supervised" | "contrastive" | "autoencoder" | "kernel"
     mode: "augment"                     # "augment" (ghép [X, z]) | "replace" (chỉ dùng z)
     latent_dim: 16                      # Chiều của vector ẩn bottleneck z

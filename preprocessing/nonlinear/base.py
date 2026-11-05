@@ -77,3 +77,30 @@ def checkpoint_exists(checkpoint_path: Union[str, Path]) -> bool:
     p = Path(checkpoint_path)
     return p.is_file() and p.stat().st_size > 0
 
+
+def is_checkpoint_compatible(
+    checkpoint_path: Union[str, Path],
+    in_features: Optional[int] = None,
+) -> bool:
+    """
+    Checks whether the checkpoint file exists and matches the required input feature dimension.
+    Prevents PyTorch shape mismatch RuntimeErrors when feature sets differ across runs.
+    """
+    if not checkpoint_exists(checkpoint_path):
+        return False
+    if in_features is None:
+        return True
+    try:
+        checkpoint = torch.load(str(checkpoint_path), map_location="cpu")
+        if isinstance(checkpoint, dict) and "metadata" in checkpoint:
+            saved_in = checkpoint["metadata"].get("in_features")
+            if saved_in is not None and saved_in != in_features:
+                return False
+        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            first_weight = checkpoint["state_dict"].get("encoder.0.weight")
+            if first_weight is not None and first_weight.shape[1] != in_features:
+                return False
+        return True
+    except Exception:
+        return False
+
