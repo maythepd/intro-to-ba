@@ -43,7 +43,8 @@ class ModelConfig:
             "C": 0.05,
             "solver": "saga",
             "penalty": "l1",
-            "max_iter": 2000,
+            "max_iter": 3000,
+            "tol": 1e-3,
             "class_weight": "balanced",
             "random_state": 42,
         }

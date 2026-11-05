@@ -45,7 +45,8 @@ class LogisticRegressionChurnModel:
 
     DEFAULT_PARAMS: Dict[str, Any] = {
         "C": 0.1,
-        "max_iter": 2000,
+        "max_iter": 3000,
+        "tol": 1e-3,
         "solver": "lbfgs",
         "class_weight": "balanced",
         "random_state": 42,

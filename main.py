@@ -8,6 +8,10 @@ import argparse
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
+import warnings
+from sklearn.exceptions import ConvergenceWarning
+
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 # Environment defaults for multiprocessing and plotting
 os.environ.setdefault("LOKY_MAX_CPU_COUNT", "4")

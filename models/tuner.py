@@ -136,7 +136,8 @@ class OptunaTuner:
                 "C": trial.suggest_float("C", 0.005, 5.0, log=True),
                 "penalty": trial.suggest_categorical("penalty", ["l1", "l2"]),
                 "solver": "saga",
-                "max_iter": 1500,
+                "max_iter": 3000,
+                "tol": 1e-3,
                 "class_weight": "balanced",
                 "random_state": self.random_state,
             }

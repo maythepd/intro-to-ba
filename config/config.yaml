@@ -117,7 +117,7 @@ features:
 
   # Chi tiết biểu diễn phi tuyến & Neural Latent Embeddings
   nonlinear_representations:
-    enabled: true                      # allow_nonlinear_representations
+    enabled: false                      # allow_nonlinear_representations
     method: "supervised"                # "supervised" | "contrastive" | "autoencoder" | "kernel"
     mode: "augment"                     # "augment" (ghép [X, z]) | "replace" (chỉ dùng z)
     latent_dim: 16                      # Chiều của vector ẩn bottleneck z
@@ -163,7 +163,8 @@ model:
     C: 0.05                         # Tăng regularization (C nhỏ hơn) để giảm variance
     solver: "saga"                  # saga hỗ trợ L1/ElasticNet, phù hợp khi cần sparsity
     penalty: "l1"                   # L1: tự động zero-out các feature ít quan trọng
-    max_iter: 2000                  # Cần nhiều iteration hơn cho saga + L1
+    max_iter: 3000                  # Tăng max_iter để đảm bảo hội tụ đầy đủ
+    tol: 0.001                      # Ngưỡng hội tụ tối ưu cho SAGA (giảm warning, tăng tốc độ)
     class_weight: "balanced"
     random_state: 42
 

@@ -74,7 +74,7 @@ def run_representation_benchmark(
             cur_X_te = mgr.transform(X_te).values
 
         # Evaluate with Logistic Regression
-        clf = LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42)
+        clf = LogisticRegression(max_iter=2000, tol=1e-3, class_weight="balanced", random_state=42)
         clf.fit(cur_X_tr, y_tr)
         probs = clf.predict_proba(cur_X_te)[:, 1]
         preds = (probs >= 0.5).astype(int)
