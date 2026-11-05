@@ -1,0 +1,78 @@
+Business problem:
+A digital bank needs to identify customers who may leave so that it can focus its retention efforts on the right people. Customer profiles alone may not show changes in how customers use banking services. This project aims to predict customer churn in the next quarter and group customers by their behavior. The results will help the bank decide which customers to prioritize and suggest suitable retention actions.
+Key KPIs:
+Churn rate: Percentage of customers who leave the bank in the next quarter
+Customer lifetime value (CLV): Expected lifetime profit from a customer. Full CLV cannot be calculated from the current dataset because revenue, margins, and servicing costs are unavailable.
+Retention cost: Contact cost + offer cost + other campaign costs. These costs require additional data or explicitly documented scenario assumptions.
+Data sources:
+Original customer profiles and churn labels come from the Kaggle Bank Customer Churn Dataset and are stored in ‘kaggle_bank_churn.csv’. Behavioral histories and relationship start dates are synthetic.
+Assumptions for synthetic data and Kaggle dataset:
+Snapshot: 00:00 1/10/2026: Snapshot attributes represent the state immediately before this boundary.
+Only customers who still have a relationship with the bank at the snapshot datetime are in the datasets
+Synthetic behavioral data covers 6 months before the snapshot (1/4/2026-30/9/2026). New customers only have events from their relationship start date
+‘churn’: represents customer churn (means ending the entire relationship with the bank) during 3 months after the snapshot (1/10/2026-31/12/2026)
+‘active_member’: represents active customers having at least one successful customer-initiated financial transaction during the 3 months before the snapshot (1/7/2026-30/9/2026). Customer-initiated own-account transfers count once. Logins, passive incoming transfers, automatic payments, interest credits and bank fees do not count. Inactive customers may still hold accounts and products. 
+‘tenure’: represents the number of completed years between the relationship start date and the snapshot 
+‘products_number’: number of banking products the customer held at the snapshot. Exact product types will not be specified.
+‘balance’: total balance in everyday and savings accounts at the snapshot. It excludes unposted interest and does not deduct loan or credit-card debt.
+Synthetic dataset:
+6 behavioral tables (1/4/2026-30/9/2026): 5 account/event tables and 1 customer-context table. Events cover 1/4/2026-30/9/2026; relevant accounts and savings cycles may start earlier. Details in dictionary ‘synth_data_dict.md’
+Table
+Fields
+Purpose
+Accounts (‘accounts’)
+account_id, customer_id, account_type, created_at, closed_at, balance, renewal_type, payout_account_id
+Stores everyday and savings accounts, snapshot balances, and savings payout instructions.
+Login events (‘login’)
+login_id, customer_id, sign_in_datetime, login_status, device_type
+Records login attempts to measure engagement and preferred device
+Transactions (‘transactions’)
+transaction_id, account_id, transaction_datetime, amount, direction, transaction_type, transaction_status, channel, transfer_id
+Records money movements and automatic postings
+Saving accounts details (‘savings_cycles’)
+account_id, started_at, term_months, init_balance, interest_rate, early_withdrawal_rate
+Preserves the principal, dates and rates of each savings term
+Complaints (‘complaints’)
+complaint_id, customer_id, complaint_datetime, resolved_datetime
+Records complaints and their resolved times
+Context (‘customer_context’)
+customer_id, relationship_start_date, observation_start, snapshot_boundary
+Provides observation dates for exposure-adjusted features and handling newly joined customers
+Business rules:
+General:
+Preserve original customer attributes and churn labels.
+Generate login, transaction and complaint events only within the observation window and after the relationship starts. Transactions must fall within the account’s lifetime.
+Accounts and savings cycles may start before the observation window if they remain relevant during it.
+Use CU as the common simulation currency, stored in configuration.
+Use a fixed random seed and document all generation parameters.
+Accounts and transactions:
+Customers may have multiple everyday and savings accounts.
+Total account balances at the snapshot must equal the Kaggle’s dataset customer balance.
+Successful inflows and outflows must reconcile with balances. Deposit accounts cannot have negative balances.
+Two successful records sharing a transfer_id represent one transfer between modeled accounts: equal amounts, opposite directions, the same timestamp and different account IDs
+Same-customer transfers use internal_transfer; different-customer transfers use external_transfer. External transfers without transfer_id represent transfers to/from accounts outside the modeled bank
+Count a customer-initiated transfer once for the sender’s activity. Receiving money alone does not count as customer-initiated activity. Exclude own-account transfers from customer-external transaction totals
+Automatic postings use channel = system. Customer-initiated transactions use mobile_app, atm or branch.
+Accounts opened within the observation window start with 0 balance; initial funding is recorded as a transaction. Older accounts use an inferred opening balance at the start of the window. 
+Savings:
+If renewal_type = auto: keeps the same account_id and original created_at. It creates a new savings cycle whose init_balance includes the previous principal and posted interest.
+If renewal_type = manual: pay principal and interest to payout_account_id at maturity and close the savings account.
+The payout account must be an everyday account belonging to the same customer and remain open until settlement. It cannot close while an open savings account still depends on it.
+Interest is paid at maturity or actual early withdrawal. Use the applicable annual rate multiplied by actual calendar days divided by 365.
+For early withdrawal, count days from the current cycle’s started_at, not the original account opening date.
+Open savings balance equals the current cycle’s principal, excluding unposted interest. Closed accounts have zero balance.
+Partial withdrawals are outside the simulation scope.
+Complaints:
+Resolution cannot occur before complaint creation.
+A complaint unresolved at the snapshot has resolved_datetime = NULL in the snapshot extract.
+Synthesizing process:
+Business hypothesis to investigate:
+Decline in usage may be a sign of future churn
+Customer service affects customer experience, so it affects churn probability
+Customers who frequently use products may be more likely to be retained
+Generation approach:
+Generate diverse usage patterns, transaction amounts, logins and complaints using documented probability distributions.
+Allow unresolved complaints to reduce later activity probabilistically.
+Preserve original customer attributes, active-member flags and snapshot balances.
+Churn labels are not used to generate events. Churn associations are examined afterwards and may be weak or absent.
+Use a fixed seed and document generation parameters for reproducibility.
