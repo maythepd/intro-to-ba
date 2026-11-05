@@ -88,6 +88,9 @@ def _build_model(
     if isinstance(model_cfg, ModelConfig):
         params = copy.deepcopy(model_cfg.get_params_for_model(model_type))
         early_stopping = model_cfg.early_stopping_rounds
+        use_focal = model_cfg.use_focal_loss
+        focal_gamma = model_cfg.focal_gamma
+        focal_alpha = model_cfg.focal_alpha
     else:
         # Dictionary fallback
         if model_type == "xgboost":
@@ -103,6 +106,14 @@ def _build_model(
                 or (model_cfg.get("params") if model_cfg.get("name") in ("rf", "random_forest") else {})
             )
         early_stopping = model_cfg.get("early_stopping_rounds", 30)
+        use_focal = bool(model_cfg.get("use_focal_loss", False) or model_cfg.get("focal_loss", {}).get("enabled", False))
+        focal_gamma = float(model_cfg.get("focal_gamma") or model_cfg.get("focal_loss", {}).get("gamma", 2.0))
+        focal_alpha = float(model_cfg.get("focal_alpha") or model_cfg.get("focal_loss", {}).get("alpha", 0.25))
+
+    if use_focal and model_type in ("xgboost", "lr", "logistic_regression"):
+        params["use_focal_loss"] = True
+        params["focal_gamma"] = focal_gamma
+        params["focal_alpha"] = focal_alpha
 
     if model_type == "xgboost":
         if not features_cfg.enable_smote and "scale_pos_weight" in params:
@@ -116,7 +127,6 @@ def _build_model(
 
     else:  # rf
         return RandomForestChurnModel(params=params if params else None)
-
 
 
 def run_single_experiment(
@@ -144,13 +154,17 @@ def run_single_experiment(
     X_val = res.X_val if res.X_val is not None else res.X_test
     y_val = res.y_val if res.y_val is not None else res.y_test
 
-    model.fit(
-        X_train=res.X_train_resampled,
-        y_train=res.y_train_resampled,
-        X_val=X_val,
-        y_val=y_val,
-        verbose=False,
-    )
+    fit_kwargs: Dict[str, Any] = {
+        "X_train": res.X_train_resampled,
+        "y_train": res.y_train_resampled,
+        "X_val": X_val,
+        "y_val": y_val,
+        "verbose": False,
+    }
+    if getattr(features_cfg, "enable_sample_weighting", False) and res.sample_weight_resampled is not None:
+        fit_kwargs["sample_weight"] = res.sample_weight_resampled
+
+    model.fit(**fit_kwargs)
 
     metrics = model.evaluate(res.X_test, res.y_test)
     metrics["Experiment"] = experiment_name
@@ -319,7 +333,17 @@ def run_ablation_suite(
                 "feature_selection_metric": "MI_Score",
             },
         ),
+        (
+            "8. With Sample Weighting (Recency Decay + Financial Value)",
+            {"enable_sample_weighting": True},
+        ),
     ]
+
+    if model_type in ("xgboost", "lr"):
+        experiments.append((
+            "9. With Focal Loss Objective (Focus on Hard Samples)",
+            {"model_override": {"use_focal_loss": True, "focal_gamma": 2.0, "focal_alpha": 0.25}},
+        ))
 
     results: List[Dict[str, Any]] = []
     models_dict: Dict[str, AnyChurnModel] = {}
@@ -328,10 +352,14 @@ def run_ablation_suite(
     for name, overrides in experiments:
         # Create a deep copy of base features config and apply overrides
         feat_dict = copy.deepcopy(base_config.features.__dict__)
-        feat_dict.update(overrides)
-        features_cfg = PipelineConfig(**feat_dict)
-
         model_dict = copy.deepcopy(base_config.model.__dict__)
+
+        m_overrides = overrides.get("model_override", {})
+        f_overrides = {k: v for k, v in overrides.items() if k != "model_override"}
+
+        feat_dict.update(f_overrides)
+        model_dict.update(m_overrides)
+        features_cfg = PipelineConfig(**feat_dict)
 
         metrics, trained_model, df_imp = run_single_experiment(
             df=df,
@@ -851,12 +879,56 @@ def main() -> None:
         action="store_true",
         help="Force rebuild of full dataset from raw multi-table relational files in data/full_dataset/",
     )
+    parser.add_argument(
+        "--sample-weights",
+        action="store_true",
+        help="Enable sample weighting with exponential recency decay and financial value weighting (Phương án 1)",
+    )
+    parser.add_argument(
+        "--focal-loss",
+        action="store_true",
+        help="Enable Focal Loss objective for gradient models (XGBoost, Logistic Regression) (Phương án 2)",
+    )
+    parser.add_argument(
+        "--focal-gamma",
+        type=float,
+        default=None,
+        help="Focusing parameter gamma for Focal Loss (default: 2.0)",
+    )
+    parser.add_argument(
+        "--focal-alpha",
+        type=float,
+        default=None,
+        help="Positive class balance weight alpha for Focal Loss (default: 0.25)",
+    )
+    parser.add_argument(
+        "--decay-half-life",
+        type=float,
+        default=None,
+        help="Half-life days for exponential recency decay in sample weighting (default: 60.0)",
+    )
 
     args = parser.parse_args()
 
     # 1. Load Unified Config
     cfg = load_unified_config(args.config)
     print(f"[OK] Loaded unified configuration from: {args.config}")
+
+    # Apply Sample Weighting overrides if passed via CLI
+    if args.sample_weights:
+        cfg.features.enable_sample_weighting = True
+        print("[INFO] Sample Weighting enabled (Exponential Recency Decay + Financial Value Weighting)")
+    if args.decay_half_life is not None:
+        cfg.features.weight_decay_half_life_days = args.decay_half_life
+
+    # Apply Focal Loss overrides if passed via CLI
+    if args.focal_loss:
+        cfg.model.use_focal_loss = True
+        print("[INFO] Focal Loss objective enabled for gradient models")
+    if args.focal_gamma is not None:
+        cfg.model.focal_gamma = args.focal_gamma
+    if args.focal_alpha is not None:
+        cfg.model.focal_alpha = args.focal_alpha
 
     # 2. Ingest / load dataset via pipeline (auto-orchestrates ETL if needed)
     force_rebuild = args.rebuild_dataset or getattr(cfg.features, "rebuild_full_dataset", False)

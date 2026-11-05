@@ -1,12 +1,12 @@
 """
 XGBoost Classifier module for Digital Bank Customer Churn Prediction.
 Encapsulates training, early stopping, probabilistic prediction, evaluation,
-and feature importance extraction.
+feature importance extraction, sample weighting, and Focal Loss objective.
 """
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -22,6 +22,8 @@ from sklearn.metrics import (
 )
 import xgboost as xgb
 
+from .focal_loss import make_xgboost_focal_loss
+
 
 class XGBoostChurnModel:
     """
@@ -30,6 +32,8 @@ class XGBoostChurnModel:
     Supports:
       - Flexible initialization via ModelConfig or keyword arguments
       - Native handling of class imbalance (scale_pos_weight)
+      - Sample weighting (exponential recency decay + financial value weighting)
+      - Custom Focal Loss objective to alleviate FN/FP trade-off
       - Early stopping with validation sets
       - Comprehensive business evaluation metrics (ROC-AUC, PR-AUC, F1, Recall, LogLoss)
       - Feature importance extraction (Gain, Weight, Cover)
@@ -54,6 +58,9 @@ class XGBoostChurnModel:
         self,
         params: Optional[Dict[str, Any]] = None,
         early_stopping_rounds: Optional[int] = 30,
+        use_focal_loss: bool = False,
+        focal_gamma: float = 2.0,
+        focal_alpha: float = 0.25,
         **kwargs: Any,
     ):
         self.params = dict(self.DEFAULT_PARAMS)
@@ -61,6 +68,11 @@ class XGBoostChurnModel:
             self.params.update(params)
         if kwargs:
             self.params.update(kwargs)
+
+        # Extract focal loss arguments
+        self.use_focal_loss = bool(self.params.pop("use_focal_loss", use_focal_loss))
+        self.focal_gamma = float(self.params.pop("focal_gamma", focal_gamma))
+        self.focal_alpha = float(self.params.pop("focal_alpha", focal_alpha))
 
         self.early_stopping_rounds = early_stopping_rounds
         self.feature_names_: List[str] = []
@@ -71,6 +83,10 @@ class XGBoostChurnModel:
         if self.early_stopping_rounds is not None:
             model_params["early_stopping_rounds"] = self.early_stopping_rounds
 
+        if self.use_focal_loss:
+            focal_obj, _ = make_xgboost_focal_loss(gamma=self.focal_gamma, alpha=self.focal_alpha)
+            model_params["objective"] = focal_obj
+
         self.model = xgb.XGBClassifier(**model_params)
 
     def fit(
@@ -79,23 +95,36 @@ class XGBoostChurnModel:
         y_train: pd.Series,
         X_val: Optional[pd.DataFrame] = None,
         y_val: Optional[pd.Series] = None,
+        sample_weight: Optional[np.ndarray] = None,
+        sample_weight_val: Optional[np.ndarray] = None,
         verbose: Union[bool, int] = False,
     ) -> "XGBoostChurnModel":
         """
-        Train the XGBoost classifier.
-        If validation set is provided, monitors validation metric for early stopping.
+        Train the XGBoost classifier with optional sample weighting and validation set.
         """
         self.feature_names_ = list(X_train.columns)
 
         eval_set = None
+        sample_weight_eval_set = None
         if X_val is not None and y_val is not None:
             eval_set = [(X_train, y_train), (X_val, y_val)]
+            if sample_weight is not None:
+                val_weight = sample_weight_val if sample_weight_val is not None else np.ones(len(y_val))
+                sample_weight_eval_set = [sample_weight, val_weight]
+
+        fit_kwargs: Dict[str, Any] = {
+            "eval_set": eval_set,
+            "verbose": verbose,
+        }
+        if sample_weight is not None:
+            fit_kwargs["sample_weight"] = sample_weight
+        if sample_weight_eval_set is not None:
+            fit_kwargs["sample_weight_eval_set"] = sample_weight_eval_set
 
         self.model.fit(
             X_train,
             y_train,
-            eval_set=eval_set,
-            verbose=verbose,
+            **fit_kwargs,
         )
 
         self.is_fitted = True

@@ -95,7 +95,6 @@ class DataSplitter:
 
         # 2. If val_size is requested, split train_val into train and validation
         if self.val_size > 0.0:
-            # Scale val_size relative to remaining train_val portion
             adjusted_val_ratio = self.val_size / (1.0 - self.test_size)
             adjusted_val_ratio = min(max(adjusted_val_ratio, 0.01), 0.50)
 
@@ -161,7 +160,8 @@ class DataSplitter:
           1. Fits pipeline strictly on fold train_df.
           2. Transforms fold train_df and val_df.
           3. Resamples fold train features (e.g. SMOTE).
-          4. Fits model on train fold and evaluates on val fold.
+          4. Computes fold sample weights if enabled (strictly on fold train_df).
+          5. Fits model on train fold and evaluates on val fold.
         """
         k = n_splits or self.n_splits
         fold_metrics: List[Dict[str, float]] = []
@@ -185,6 +185,16 @@ class DataSplitter:
             # 4. Resample train partition (SMOTE)
             X_tr_res, y_tr_res = pipe.balancer.fit_resample(X_tr, y_tr)
 
+            # 4a. Sample weighting if enabled
+            sw_fold = None
+            if hasattr(pipe, "sample_weighter") and getattr(pipe.sample_weighter.config, "enabled", False):
+                pipe.sample_weighter.fit(fold.train_df, y_tr)
+                sw_orig = pipe.sample_weighter.compute_weights(fold.train_df, y_tr)
+                if pipe.config.enable_smote and len(y_tr_res) > len(y_tr):
+                    sw_fold = pipe.sample_weighter.expand_for_smote(sw_orig, y_tr, y_tr_res)
+                else:
+                    sw_fold = sw_orig
+
             # 4b. Feature selection on fold train (strictly leak-free)
             if pipe.config.enable_feature_selection and pipe.config.top_k_features:
                 pipe.feature_selector.fit(X_tr, y_tr, compute_ranking=True)
@@ -193,7 +203,10 @@ class DataSplitter:
 
             # 5. Build and fit model
             model = model_builder(pipe.config, y_tr_res)
-            model.fit(X_tr_res, y_tr_res, X_val=X_v, y_val=y_v, verbose=False)
+            fit_kwargs = {"X_val": X_v, "y_val": y_v, "verbose": False}
+            if sw_fold is not None:
+                fit_kwargs["sample_weight"] = sw_fold
+            model.fit(X_tr_res, y_tr_res, **fit_kwargs)
 
             # 6. Evaluate
             metrics = model.evaluate(X_v, y_v)

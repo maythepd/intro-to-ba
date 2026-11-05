@@ -294,9 +294,61 @@ python main.py --mode recall --model-type xgboost --threshold 0.35
 | `--tuning-metric` | string | `null` (uses config) | Target metric for Optuna: `PR_AUC`, `ROC_AUC`, `F1_Score`, `Recall`, or `F2_Score`. |
 | `--target-recall` | float | `0.75` | Target minimum recall constraint for threshold optimization in `recall` mode. |
 | `--threshold` | float | `null` | Optional manual decision threshold override in `recall` mode (e.g. `0.35`). |
+| `--sample-weights` | flag | `False` | Enables composite sample weighting: exponential recency decay + financial balance value weighting + churn multiplier. Supported across all models (`xgboost`, `lr`, `rf`). |
+| `--focal-loss` | flag | `False` | Enables Focal Loss objective to dampen gradient of easy negative samples and focus learning on hard decision boundaries. Supported on `xgboost` and `lr`. |
+| `--focal-gamma` | float | `2.0` | Focusing parameter $\gamma$ for Focal Loss (reduces easy sample gradients when $\gamma > 0$). |
+| `--focal-alpha` | float | `0.25` | Positive class balancing factor $\alpha$ for Focal Loss (churn label weight). |
+| `--decay-half-life`| float | `60.0` | Half-life $t_{1/2}$ in days for exponential recency decay weighting. |
 | `--rebuild-dataset`| flag | `False` | Forces multi-table ETL rebuild from `data/full_dataset/`. |
 | `--output-dir` | string | `null` (auto-routed) | Custom directory for outputs; defaults to `results/{comparison\|lr\|rf\|xgboost}`. |
 | `--report-name` | string | `null` (auto-templated)| Custom report filename; defaults to `{mode}_{model}_report.md`. |
+
+---
+
+### 6. Asymmetric Loss Interventions & Sample Weighting (Shifting the Pareto Frontier)
+
+Adjusting decision thresholds $\tau$ or changing Optuna objective metrics traverses the existing ROC/PR curve, trading False Positives (FP) for False Negatives (FN). To shift the trade-off frontier outward, the system introduces two mathematical loss-level interventions:
+
+#### Phương án 1: Trọng số mẫu kết hợp (Composite Sample Weighting)
+*Supported across all 3 models: XGBoost, Random Forest, Logistic Regression.*
+
+Computes individualized observation weights $w_i$:
+$$w_i = w_{\text{recency}}(i) \cdot w_{\text{value}}(i) \cdot w_{\text{churn}}(i)$$
+1. **Exponential Recency Decay:** Prioritizes customers with recent activity signals while older observations decay:
+   $$w_{\text{recency}}(i) = \exp\left(-\frac{\ln(2)}{t_{1/2}} \cdot \text{recency\_days}_i\right)$$
+2. **Financial Value Weighting:** Heavily penalizes churning high-balance customers who inflict significant CLV loss:
+   $$w_{\text{value}}(i) = 1.0 + \alpha \cdot \ln\left(1 + \frac{\max(\text{balance}_i, 0)}{\text{median}(\text{balance}^+)}\right)$$
+3. **Churn Multiplier:** Scales minority positive class penalization during tree splits or loss calculation.
+4. **SMOTE Weight Expansion:** Extrapolates synthetic minority instances with the mean weight of real positive instances, then normalizes so $\text{mean}(w) = 1.0$ (preserving gradient scale).
+
+```bash
+# Train XGBoost with sample weights
+python main.py --mode train --model-type xgboost --sample-weights
+
+# Train Random Forest with sample weights
+python main.py --mode train --model-type rf --sample-weights
+
+# Compare all 3 models side-by-side with sample weights
+python main.py --mode compare --sample-weights
+```
+
+#### Phương án 2: Hàm mất mát Focal Loss (Custom Gradient Objective)
+*Supported on XGBoost (custom objective) and Logistic Regression (`FocalLossLogisticRegression` via L-BFGS-B).*
+
+Standard Cross-Entropy Loss treats all samples symmetrically. Under extreme imbalance (~80% non-churn vs ~20% churn), gradient descent is dominated by easy, well-classified active customers. **Focal Loss** dynamically modulates gradient magnitude:
+$$\text{FL}(p_t) = -\alpha_t (1 - p_t)^\gamma \ln(p_t)$$
+Where $p_t$ is model confidence on the true class. When $\gamma = 2.0$, an easy sample classified with $p_t = 0.9$ receives a modulating factor $(1 - 0.9)^2 = 0.01$ (a **100x reduction in gradient influence**), forcing the booster or linear solver to focus strictly on borderline cases and hard churners.
+
+```bash
+# Train XGBoost with Focal Loss
+python main.py --mode train --model-type xgboost --focal-loss --focal-gamma 2.0 --focal-alpha 0.25
+
+# Train Logistic Regression with Focal Loss
+python main.py --mode train --model-type lr --focal-loss
+
+# Run feature ablation suite including both Sample Weighting and Focal Loss
+python main.py --mode ablation --model-type xgboost
+```
 
 ---
 

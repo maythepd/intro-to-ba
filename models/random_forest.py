@@ -2,6 +2,7 @@
 Random Forest Classifier module for Digital Bank Customer Churn Prediction.
 Follows the same interface contract as XGBoostChurnModel:
   fit(), predict(), predict_proba(), evaluate(), get_feature_importances(), save(), load().
+Supports sample weighting (exponential recency decay + financial value weighting).
 """
 
 import pickle
@@ -30,30 +31,20 @@ class RandomForestChurnModel:
 
     Supports:
       - Flexible initialization via keyword arguments or params dict
-      - Native class-imbalance handling via class_weight='balanced'
+      - Native class-imbalance handling via class_weight='balanced_subsample'
+      - Sample weighting (exponential recency decay + financial value weighting)
       - Comprehensive business evaluation metrics (ROC-AUC, PR-AUC, F1, Recall, LogLoss)
       - Gini/MDI feature importance extraction
       - Serialization via pickle
     """
 
     DEFAULT_PARAMS: Dict[str, Any] = {
-        # 300 trees: cân bằng giữa phương sai thấp và runtime.
         "n_estimators": 300,
-        # Cài max_depth=15 thay vì None: giới hạn chiều sâu cây để kiểm soát
-        # overfitting trên tabular churn data (55 features, 10K rows).
         "max_depth": 15,
-        # min_samples_split=10: tạo node mới chỉ khi đủ mẫu, giảm chi phí
-        # chia trên các node nhỏ có ít thông tin.
         "min_samples_split": 10,
-        # min_samples_leaf=4: lá cây phải có ít nhất 4 mẫu — regularization
-        # quan trọng hơn khi thiếu balanced label.
         "min_samples_leaf": 4,
-        # sqrt(n_features) là chuẩn cho classification: giảm tương quan giữa cây.
         "max_features": "sqrt",
-        # balanced_subsample: kết hợp với bootstrap, cân bằng class weight
-        # trên từng subsample thay vì toàn bộ dataset.
         "class_weight": "balanced_subsample",
-        # oob_score=True: tận dụng out-of-bag samples như tập validation miễn phí.
         "oob_score": True,
         "random_state": 42,
         "n_jobs": -1,
@@ -80,14 +71,15 @@ class RandomForestChurnModel:
         y_train: pd.Series,
         X_val: Optional[pd.DataFrame] = None,
         y_val: Optional[pd.Series] = None,
+        sample_weight: Optional[np.ndarray] = None,
         verbose: Union[bool, int] = False,
     ) -> "RandomForestChurnModel":
         """
-        Train the Random Forest classifier.
+        Train the Random Forest classifier with optional sample weighting.
         X_val / y_val are accepted for API compatibility but not used.
         """
         self.feature_names_ = list(X_train.columns)
-        self.model.fit(X_train, y_train)
+        self.model.fit(X_train, y_train, sample_weight=sample_weight)
         self.is_fitted = True
         return self
 
@@ -140,7 +132,6 @@ class RandomForestChurnModel:
         """
         Extract feature importances from trained Random Forest.
         Uses mean decrease in impurity (Gini importance) by default.
-        importance_type is accepted for interface compatibility but 'gini' (MDI) is always used.
         """
         if not self.is_fitted:
             raise RuntimeError("Model is not fitted yet.")

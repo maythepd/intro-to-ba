@@ -309,13 +309,17 @@ def run_recall_optimization(
     X_val = res.X_val if res.X_val is not None else res.X_test
     y_val = res.y_val if res.y_val is not None else res.y_test
 
-    model.fit(
-        X_train=res.X_train_resampled,
-        y_train=res.y_train_resampled,
-        X_val=X_val,
-        y_val=y_val,
-        verbose=False,
-    )
+    fit_kwargs = {
+        "X_train": res.X_train_resampled,
+        "y_train": res.y_train_resampled,
+        "X_val": X_val,
+        "y_val": y_val,
+        "verbose": False,
+    }
+    if getattr(cfg.features, "enable_sample_weighting", False) and res.sample_weight_resampled is not None:
+        fit_kwargs["sample_weight"] = res.sample_weight_resampled
+
+    model.fit(**fit_kwargs)
 
     # 3. Predict on Validation and Test
     val_prob = model.predict_proba(X_val)

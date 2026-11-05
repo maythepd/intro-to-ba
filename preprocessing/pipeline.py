@@ -1,7 +1,7 @@
 """
 Master Feature Engineering Pipeline for Digital Bank Churn Prediction.
 Orchestrates skewness transformation, scaling, domain feature engineering,
-categorical encoding, SMOTE class balancing, and feature selection.
+categorical encoding, SMOTE class balancing, feature selection, and sample weighting.
 
 Configuration is decoupled into the config/ module with YAML support.
 """
@@ -32,6 +32,7 @@ from .domain_features import DomainFeatureEngineer
 from .categorical_encoding import CategoricalEncoder
 from .balancing import ClassBalancer
 from .feature_selector import FeatureSelector
+from .sample_weighting import SampleWeightConfig, SampleWeightGenerator
 from .splitting import DataSplitter, DatasetSplit, CVFold, CVResult
 
 
@@ -90,6 +91,8 @@ class PipelineResult:
     model_features: List[str]
     X_val: Optional[pd.DataFrame] = None
     y_val: Optional[pd.Series] = None
+    sample_weight: Optional[np.ndarray] = None
+    sample_weight_resampled: Optional[np.ndarray] = None
     feature_importance: Optional[pd.DataFrame] = None
     full_transformed_df: Optional[pd.DataFrame] = None
 
@@ -105,6 +108,7 @@ class FeatureEngineeringPipeline:
       4. CategoricalEncoder: One-Hot and smoothed Target Encoding
       5. ClassBalancer: SMOTE minority oversampling (train only)
       6. FeatureSelector: MI + RF importance ranking and Top-K selection
+      7. SampleWeightGenerator: Exponential recency decay + financial value weighting
     """
 
     def __init__(
@@ -203,6 +207,23 @@ class FeatureEngineeringPipeline:
             random_state=cfg.random_state,
         )
 
+        # 7. Sample Weighting
+        sw_cfg = getattr(cfg, "sample_weighting", None)
+        if sw_cfg is None:
+            self.sample_weighter = SampleWeightGenerator(
+                enabled=getattr(cfg, "enable_sample_weighting", False),
+                decay_mode=getattr(cfg, "weight_decay_mode", "exponential"),
+                recency_col=getattr(cfg, "weight_recency_col", "recency_days"),
+                decay_half_life_days=getattr(cfg, "weight_decay_half_life_days", 60.0),
+                enable_value_weighting=getattr(cfg, "weight_enable_value_weighting", True),
+                balance_col=getattr(cfg, "weight_balance_col", "balance"),
+                value_weight_alpha=getattr(cfg, "weight_value_weight_alpha", 0.5),
+                churn_weight_multiplier=getattr(cfg, "weight_churn_multiplier", 1.5),
+                normalize=getattr(cfg, "weight_normalize", True),
+            )
+        else:
+            self.sample_weighter = SampleWeightGenerator(sw_cfg)
+
     def fit(self, df: pd.DataFrame, target_col: Optional[str] = None) -> "FeatureEngineeringPipeline":
         """
         Fit all stateful transformers sequentially on training dataframe.
@@ -287,7 +308,8 @@ class FeatureEngineeringPipeline:
           3. Transform train and test partitions.
           4. Extract numerical model features.
           5. Apply SMOTE balancing on train partition.
-          6. Compute feature importances & optionally select top-K features.
+          6. Compute sample weights on train partition (exponential recency decay + value weighting).
+          7. Compute feature importances & optionally select top-K features.
         """
         target = target_col or self.config.target_col
         if target not in df.columns:
@@ -340,10 +362,20 @@ class FeatureEngineeringPipeline:
             X_val = None
             y_val = None
 
-
-
         # 5. Class Imbalance Remediation (SMOTE) strictly on training set
         X_train_res, y_train_res = self.balancer.fit_resample(X_train, y_train)
+
+        # 5a. Sample Weighting strictly computed on training partition (zero leakage)
+        self.sample_weighter.fit(train_df, y_train)
+        sample_weight_train = self.sample_weighter.compute_weights(train_df, y_train)
+        if self.config.enable_smote and len(y_train_res) > len(y_train):
+            sample_weight_res = SampleWeightGenerator.expand_for_smote(
+                weights=sample_weight_train,
+                y_train_original=y_train,
+                y_train_resampled=y_train_res,
+            )
+        else:
+            sample_weight_res = sample_weight_train
 
         # 6. Feature Selection / Importance
         should_rank = (
@@ -374,6 +406,8 @@ class FeatureEngineeringPipeline:
             model_features=feature_cols,
             X_val=X_val,
             y_val=y_val,
+            sample_weight=sample_weight_train,
+            sample_weight_resampled=sample_weight_res,
             feature_importance=df_importance,
             full_transformed_df=full_transformed,
         )

@@ -144,15 +144,22 @@ class OptunaTuner:
 
     def _build_model(self, params: Dict[str, Any]) -> Any:
         """Instantiates model given parameters."""
+        p = dict(params)
+        use_focal = getattr(self.config.model, "use_focal_loss", False)
+        if use_focal and self.model_type in ("xgboost", "lr"):
+            p["use_focal_loss"] = True
+            p["focal_gamma"] = getattr(self.config.model, "focal_gamma", 2.0)
+            p["focal_alpha"] = getattr(self.config.model, "focal_alpha", 0.25)
+
         if self.model_type == "xgboost":
             from models.xgboost import XGBoostChurnModel
-            return XGBoostChurnModel(params=params, early_stopping_rounds=20)
+            return XGBoostChurnModel(params=p, early_stopping_rounds=20)
         elif self.model_type == "rf":
             from models.random_forest import RandomForestChurnModel
-            return RandomForestChurnModel(params=params)
+            return RandomForestChurnModel(params=p)
         elif self.model_type == "lr":
             from models.logistic_regression import LogisticRegressionChurnModel
-            return LogisticRegressionChurnModel(params=params)
+            return LogisticRegressionChurnModel(params=p)
         raise ValueError(f"Unknown model_type: {self.model_type}")
 
     def tune(
@@ -227,12 +234,23 @@ class OptunaTuner:
                     X_tr_res = fold_pipe.feature_selector.transform(X_tr_res)
                     X_va = fold_pipe.feature_selector.transform(X_va)
 
+                # Sample weighting strictly computed on fold training data
+                sw_fold = None
+                if hasattr(fold_pipe, "sample_weighter") and getattr(fold_pipe.sample_weighter.config, "enabled", False):
+                    fold_pipe.sample_weighter.fit(fold.train_df, y_tr)
+                    sw_raw = fold_pipe.sample_weighter.compute_weights(fold.train_df, y_tr)
+                    if fold_pipe.config.enable_smote and len(y_tr_res) > len(y_tr):
+                        sw_fold = fold_pipe.sample_weighter.expand_for_smote(sw_raw, y_tr, y_tr_res)
+                    else:
+                        sw_fold = sw_raw
+
                 # Fit model
                 model = self._build_model(sampled_params)
+                fit_kwargs = {"sample_weight": sw_fold} if sw_fold is not None else {}
                 if self.model_type == "xgboost":
-                    model.fit(X_tr_res, y_tr_res, X_val=X_va, y_val=y_va, verbose=False)
+                    model.fit(X_tr_res, y_tr_res, X_val=X_va, y_val=y_va, verbose=False, **fit_kwargs)
                 else:
-                    model.fit(X_tr_res, y_tr_res)
+                    model.fit(X_tr_res, y_tr_res, **fit_kwargs)
 
                 metrics = model.evaluate(X_va, y_va)
                 if self.target_metric.lower() in ("recall", "rec"):
@@ -298,14 +316,25 @@ class OptunaTuner:
             X_train_res = final_pipe.feature_selector.transform(X_train_res)
             X_test_final = final_pipe.feature_selector.transform(X_test_final)
 
+        # Final refit sample weights
+        sw_final = None
+        if hasattr(final_pipe, "sample_weighter") and getattr(final_pipe.sample_weighter.config, "enabled", False):
+            final_pipe.sample_weighter.fit(cv_train_pool, y_train_full)
+            sw_raw = final_pipe.sample_weighter.compute_weights(cv_train_pool, y_train_full)
+            if final_pipe.config.enable_smote and len(y_train_res) > len(y_train_full):
+                sw_final = final_pipe.sample_weighter.expand_for_smote(sw_raw, y_train_full, y_train_res)
+            else:
+                sw_final = sw_raw
+
         # Merge base params with best tuned params
         merged_best = self._sample_params(optuna.trial.FixedTrial(best_params))
         best_model = self._build_model(merged_best)
 
+        fit_kwargs = {"sample_weight": sw_final} if sw_final is not None else {}
         if self.model_type == "xgboost":
-            best_model.fit(X_train_res, y_train_res, X_val=X_test_final, y_val=y_test_final, verbose=False)
+            best_model.fit(X_train_res, y_train_res, X_val=X_test_final, y_val=y_test_final, verbose=False, **fit_kwargs)
         else:
-            best_model.fit(X_train_res, y_train_res)
+            best_model.fit(X_train_res, y_train_res, **fit_kwargs)
 
         test_metrics = best_model.evaluate(X_test_final, y_test_final)
 

@@ -1,6 +1,6 @@
 """
 Unified configuration system for Digital Bank Churn Prediction.
-Encapsulates Feature Engineering, Dataset, Model (XGBoost), and Experiment settings.
+Encapsulates Feature Engineering, Dataset, Model (XGBoost, LR, RF), and Experiment settings.
 All configurations are defined in config/config.yaml.
 """
 
@@ -64,6 +64,11 @@ class ModelConfig:
     # Generic params dict for backward compatibility or direct overrides
     params: Dict[str, Any] = field(default_factory=dict)
 
+    # Focal Loss configuration
+    use_focal_loss: bool = False
+    focal_gamma: float = 2.0
+    focal_alpha: float = 0.25
+
     def get_params_for_model(self, model_type: str) -> Dict[str, Any]:
         """
         Returns the resolved hyperparameters for the requested model type:
@@ -75,23 +80,34 @@ class ModelConfig:
             p = dict(self.xgboost_params) if self.xgboost_params else dict(self.params)
             if self.name.lower() == "xgboost" and self.params:
                 p.update(self.params)
-            return p
         elif mtype in ("lr", "logistic_regression"):
             p = dict(self.lr_params) if self.lr_params else dict(self.params)
             if self.name.lower() in ("lr", "logistic_regression") and self.params:
                 p.update(self.params)
-            return p
         elif mtype in ("rf", "random_forest"):
             p = dict(self.rf_params) if self.rf_params else dict(self.params)
             if self.name.lower() in ("rf", "random_forest") and self.params:
                 p.update(self.params)
-            return p
-        return dict(self.params)
+        else:
+            p = dict(self.params)
+
+        # Attach focal loss settings
+        if self.use_focal_loss:
+            p["use_focal_loss"] = True
+            p["focal_gamma"] = self.focal_gamma
+            p["focal_alpha"] = self.focal_alpha
+
+        return p
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModelConfig":
         valid_keys = {f for f in cls.__dataclass_fields__}
         filtered = {k: v for k, v in data.items() if k in valid_keys}
+        if "focal_loss" in data and isinstance(data["focal_loss"], dict):
+            fl_data = data["focal_loss"]
+            filtered["use_focal_loss"] = fl_data.get("enabled", False)
+            filtered["focal_gamma"] = fl_data.get("gamma", 2.0)
+            filtered["focal_alpha"] = fl_data.get("alpha", 0.25)
         return cls(**filtered)
 
 
@@ -139,7 +155,6 @@ class ExperimentConfig:
 
         p = Path(raw)
         stem = p.stem
-        # If path is fixed (e.g. models/saved/xgboost_churn.json), adapt stem and extension
         if "xgboost" in stem:
             stem = stem.replace("xgboost", m)
         elif not stem.startswith(m):
@@ -256,6 +271,17 @@ class PipelineConfig:
     feature_selection_metric: str = "MI_Score"  # Default: Mutual Information Classif
     compute_feature_importance: bool = False
 
+    # Sample Weighting configuration (Exponential recency decay + financial value weighting)
+    enable_sample_weighting: bool = False
+    weight_decay_mode: str = "exponential"
+    weight_recency_col: str = "recency_days"
+    weight_decay_half_life_days: float = 60.0
+    weight_enable_value_weighting: bool = True
+    weight_balance_col: str = "balance"
+    weight_value_weight_alpha: float = 0.5
+    weight_churn_multiplier: float = 1.5
+    weight_normalize: bool = True
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PipelineConfig":
         """
@@ -270,7 +296,6 @@ class PipelineConfig:
 
         feature_dict = data.get("features", data)
         if isinstance(feature_dict, dict):
-            # Known sub-sections
             section_keys = [
                 "modules",
                 "skewness_transform",
@@ -280,6 +305,7 @@ class PipelineConfig:
                 "categorical_encoding",
                 "balancing",
                 "feature_selection",
+                "sample_weighting",
                 "dataset",
             ]
             for sec in section_keys:
@@ -294,6 +320,28 @@ class PipelineConfig:
         for k, v in data.items():
             if k not in ["dataset", "features", "model", "experiment"]:
                 flat_data[k] = v
+
+        # Handle sample_weighting mappings
+        sw_source = data.get("sample_weighting") or (feature_dict.get("sample_weighting") if isinstance(feature_dict, dict) else None)
+        if isinstance(sw_source, dict):
+            if "enabled" in sw_source:
+                flat_data["enable_sample_weighting"] = sw_source["enabled"]
+            if "decay_mode" in sw_source:
+                flat_data["weight_decay_mode"] = sw_source["decay_mode"]
+            if "recency_col" in sw_source:
+                flat_data["weight_recency_col"] = sw_source["recency_col"]
+            if "decay_half_life_days" in sw_source:
+                flat_data["weight_decay_half_life_days"] = sw_source["decay_half_life_days"]
+            if "enable_value_weighting" in sw_source:
+                flat_data["weight_enable_value_weighting"] = sw_source["enable_value_weighting"]
+            if "balance_col" in sw_source:
+                flat_data["weight_balance_col"] = sw_source["balance_col"]
+            if "value_weight_alpha" in sw_source:
+                flat_data["weight_value_weight_alpha"] = sw_source["value_weight_alpha"]
+            if "churn_weight_multiplier" in sw_source:
+                flat_data["weight_churn_multiplier"] = sw_source["churn_weight_multiplier"]
+            if "normalize" in sw_source:
+                flat_data["weight_normalize"] = sw_source["normalize"]
 
         valid_keys = {f for f in cls.__dataclass_fields__}
         filtered = {k: v for k, v in flat_data.items() if k in valid_keys}
@@ -329,7 +377,7 @@ class TuningConfig:
     enabled: bool = False
     n_trials: int = 30
     timeout: Optional[int] = None
-    metric: str = "PR_AUC"  # "PR_AUC" | "ROC_AUC" | "F1_Score"
+    metric: str = "PR_AUC"  # "PR_AUC" | "ROC_AUC" | "F1_Score" | "Recall" | "F2_Score"
     cv_folds: int = 5
     study_name: str = "churn_optuna_tuning"
     direction: str = "maximize"

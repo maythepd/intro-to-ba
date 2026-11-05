@@ -8,7 +8,7 @@ dataset:
   raw_full_dataset_dir: "data/full_dataset"
   rebuild_full_dataset: false
   target_col: "churn"
-  test_size: 0.10                   # 20% tập Test độc lập
+  test_size: 0.10                   # 10% tập Test độc lập
   val_size: 0.10                    # 10% tập Validation
   enable_cv: true                   # Kích hoạt K-Fold Cross-Validation
   cv_folds: 5                       # Số fold cho Stratified K-Fold CV
@@ -19,9 +19,6 @@ dataset:
     - churn
     - country
     - gender
-    - preferred_channel
-    - primary_device
-    - yj_trans_amount_3m
 
 # 2. CẤU HÌNH KỸ NGHỆ ĐẶC TRƯNG (Feature Engineering Settings)
 features:
@@ -99,6 +96,18 @@ features:
     smote_sampling_strategy: "auto"
     smote_k_neighbors: 5
 
+  # Chi tiết trọng số mẫu (Sample Weighting / Recency Decay / Value Weighting - Phương án 1)
+  sample_weighting:
+    enabled: false                  # Bật/tắt phương án 1
+    decay_mode: "exponential"       # "exponential" | "linear" | "none"
+    recency_col: "recency_days"     # Cột tính độ mới
+    decay_half_life_days: 60.0      # Chu kỳ bán rã (ngày)
+    enable_value_weighting: true    # Ưu tiên tài khoản số dư cao
+    balance_col: "balance"          # Cột số dư
+    value_weight_alpha: 0.5         # Hệ số logarithmic alpha cho số dư
+    churn_weight_multiplier: 1.5    # Phạt nặng hơn khi bỏ sót khách hàng churn (FN)
+    normalize: true                 # Chuẩn hóa để giữ nguyên thang đo gradient
+
   # Chi tiết lựa chọn đặc trưng (Feature selection)
   feature_selection:
     top_k_features: null
@@ -108,6 +117,12 @@ features:
 # 3. CẤU HÌNH MÔ HÌNH (Model Configuration: xgboost | lr | rf)
 model:
   name: "xgboost"                   # Mô hình mặc định khi train đơn lẻ: "xgboost" | "lr" | "rf"
+
+  # Cấu hình Focal Loss (Phương án 2: Tập trung gradient vào các ca khó)
+  focal_loss:
+    enabled: false                  # Kích hoạt Focal Loss cho XGBoost và Logistic Regression
+    gamma: 2.0                      # Tham số focusing
+    alpha: 0.25                     # Trọng số cho nhãn churn (class 1)
 
   # Cấu hình XGBoost (Gradient Boosting)
   xgboost_params:
@@ -164,5 +179,3 @@ tuning:
   study_name: "bank_churn_tuning"
   direction: "maximize"
   random_state: 42
-
-

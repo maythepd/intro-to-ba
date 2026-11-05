@@ -2,6 +2,9 @@
 Logistic Regression Classifier module for Digital Bank Customer Churn Prediction.
 Follows the same interface contract as XGBoostChurnModel:
   fit(), predict(), predict_proba(), evaluate(), get_feature_importances(), save(), load().
+Supports:
+  - Native sample weighting (exponential recency decay + financial value weighting)
+  - Custom Focal Loss objective via L-BFGS-B (FocalLossLogisticRegression)
 """
 
 import pickle
@@ -23,6 +26,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from .focal_loss import FocalLossLogisticRegression
+
 
 class LogisticRegressionChurnModel:
     """
@@ -31,20 +36,17 @@ class LogisticRegressionChurnModel:
     Supports:
       - Flexible initialization via keyword arguments or params dict
       - Native class-imbalance handling via class_weight='balanced'
+      - Sample weighting (exponential recency decay + financial value weighting)
+      - Custom Focal Loss objective via L-BFGS-B (FocalLossLogisticRegression)
       - Comprehensive business evaluation metrics (ROC-AUC, PR-AUC, F1, Recall, LogLoss)
       - Coefficient-based feature importance extraction
       - Serialization via pickle
     """
 
     DEFAULT_PARAMS: Dict[str, Any] = {
-        # Regularization: C=0.1 gives moderate L2 penalty — tốt hơn C=1.0 trên
-        # dữ liệu churn vì tránh overfit với các encoded features có nhiều chiều.
         "C": 0.1,
-        # Tăng max_iter để đảm bảo hội tụ sau RobustScaler + nhiều encoded cols.
         "max_iter": 2000,
         "solver": "lbfgs",
-        # balanced: tự động điều chỉnh class weight ~ 1:4 (non-churn:churn)
-        # mà không cần SMOTE, giúp recall không bị kéo xuống thấp.
         "class_weight": "balanced",
         "random_state": 42,
         "n_jobs": -1,
@@ -53,6 +55,9 @@ class LogisticRegressionChurnModel:
     def __init__(
         self,
         params: Optional[Dict[str, Any]] = None,
+        use_focal_loss: bool = False,
+        focal_gamma: float = 2.0,
+        focal_alpha: float = 0.25,
         **kwargs: Any,
     ):
         self.params = dict(self.DEFAULT_PARAMS)
@@ -61,9 +66,26 @@ class LogisticRegressionChurnModel:
         if kwargs:
             self.params.update(kwargs)
 
+        self.use_focal_loss = bool(self.params.pop("use_focal_loss", use_focal_loss))
+        self.focal_gamma = float(self.params.pop("focal_gamma", focal_gamma))
+        self.focal_alpha = float(self.params.pop("focal_alpha", focal_alpha))
+
         self.feature_names_: List[str] = []
         self.is_fitted: bool = False
-        self.model = LogisticRegression(**self.params)
+
+        if self.use_focal_loss:
+            c_val = float(self.params.get("C", 1.0))
+            max_iter = int(self.params.get("max_iter", 500))
+            rnd = int(self.params.get("random_state", 42))
+            self.model = FocalLossLogisticRegression(
+                C=c_val,
+                gamma=self.focal_gamma,
+                alpha=self.focal_alpha,
+                max_iter=max_iter,
+                random_state=rnd,
+            )
+        else:
+            self.model = LogisticRegression(**self.params)
 
     def fit(
         self,
@@ -71,14 +93,18 @@ class LogisticRegressionChurnModel:
         y_train: pd.Series,
         X_val: Optional[pd.DataFrame] = None,
         y_val: Optional[pd.Series] = None,
+        sample_weight: Optional[np.ndarray] = None,
         verbose: Union[bool, int] = False,
     ) -> "LogisticRegressionChurnModel":
         """
-        Train the Logistic Regression classifier.
+        Train the Logistic Regression classifier with optional sample weighting.
         X_val / y_val are accepted for API compatibility but not used (LR has no early stopping).
         """
         self.feature_names_ = list(X_train.columns)
-        self.model.fit(X_train, y_train)
+        if sample_weight is not None:
+            self.model.fit(X_train, y_train, sample_weight=sample_weight)
+        else:
+            self.model.fit(X_train, y_train)
         self.is_fitted = True
         return self
 
@@ -93,7 +119,10 @@ class LogisticRegressionChurnModel:
         """Predict probability of churn (class 1)."""
         if not self.is_fitted:
             raise RuntimeError("Model is not fitted yet. Call fit() before predict_proba().")
-        return self.model.predict_proba(X)[:, 1]
+        probs = self.model.predict_proba(X)
+        if probs.ndim > 1 and probs.shape[1] > 1:
+            return probs[:, 1]
+        return probs
 
     def evaluate(
         self,
@@ -131,7 +160,6 @@ class LogisticRegressionChurnModel:
         """
         Extract feature importances from trained Logistic Regression.
         Uses absolute coefficient values as importance proxy.
-        importance_type is ignored but kept for interface compatibility.
         """
         if not self.is_fitted:
             raise RuntimeError("Model is not fitted yet.")
