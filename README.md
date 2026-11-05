@@ -1,10 +1,17 @@
+<<<<<<< HEAD
+# Churn Prediction and Segmentation - Module 1&2&3
+- Completed:
+  - define business problem, key KPIs, assumptions + rules for Kaggle and synthetic datasets, outline of the synthetic data
+  - Python code to synthesize data
+  - Upload dataset to Kaggle: https://www.kaggle.com/datasets/maythepd/full-dataset-intro2ba
+  - EDA, cleaning
+    
+- Module 1 document (tạm thời đọc trên docs): https://docs.google.com/document/d/1t4vT18zHOeCOTXPCxd7UgwmqREK4O0zQJOycYO0oZ-M/edit?usp=sharing
+- Data dictionary: 'synth_data_dict.md'
+=======
 # Digital Bank Customer Churn Prediction
 
 > **Business Analytics Group Project — Module 5: Model Development**
-
-* **Synthetic Data Dictionary:** [synth_data_dict.md](synth_data_dict.md)
-* **Kaggle Full Dataset:** [kaggle.com/datasets/maythepd/full-dataset-intro2ba](https://www.kaggle.com/datasets/maythepd/full-dataset-intro2ba)
-* **Module 1 Documentation:** [Google Docs Reference](https://docs.google.com/document/d/1t4vT18zHOeCOTXPCxd7UgwmqREK4O0zQJOycYO0oZ-M/edit?usp=sharing)
 
 
 ---
@@ -674,3 +681,4 @@ We prioritize metrics based on business impact:
 ---
 
 *Module 5: Model Development & Evaluation — Business Analytics Capstone Project.*
+>>>>>>> model/xgboost
