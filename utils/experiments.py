@@ -192,6 +192,16 @@ def run_single_experiment(
         model.last_val_y = res.y_train.values
         model.last_val_prob = p_tr[:, 1] if getattr(p_tr, "ndim", 1) > 1 else p_tr
 
+    # Attach auxiliary representation learning metrics if present
+    model.auxiliary_nonlinear_metrics = res.auxiliary_nonlinear_metrics
+    if res.auxiliary_nonlinear_metrics:
+        aux = res.auxiliary_nonlinear_metrics
+        if "ROC_AUC" in aux:
+            metrics["Aux_ROC_AUC"] = aux["ROC_AUC"]
+            metrics["Aux_PR_AUC"] = aux["PR_AUC"]
+            metrics["Aux_F1"] = aux["F1_Score"]
+            metrics["Aux_Recall"] = aux["Recall"]
+
     print(
         f"    Test Set Scores   | "
         f"Features: {metrics['Num_Features']} | "

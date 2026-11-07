@@ -8,7 +8,14 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
+from sklearn.model_selection import (
+    GroupKFold,
+    GroupShuffleSplit,
+    KFold,
+    StratifiedGroupKFold,
+    StratifiedKFold,
+    train_test_split,
+)
 
 
 @dataclass
@@ -59,6 +66,7 @@ class DataSplitter:
         stratify: bool = True,
         shuffle: bool = True,
         random_state: int = 42,
+        group_col: Optional[str] = "customer_id",
     ):
         self.test_size = test_size
         self.val_size = val_size
@@ -66,21 +74,48 @@ class DataSplitter:
         self.stratify = stratify
         self.shuffle = shuffle
         self.random_state = random_state
+        self.group_col = group_col
 
     def train_val_test_split(
         self,
         df: pd.DataFrame,
         target_col: str = "churn",
+        group_col: Optional[str] = None,
     ) -> DatasetSplit:
         """
         Splits dataset into stratified Train, Validation, and Test sets.
         If val_size == 0.0, val_df will be None.
         
-        Example:
-          test_size=0.20, val_size=0.10 -> 70% Train, 10% Validation, 20% Test.
+        Guarantees Customer-level Isolation (Group Isolation):
+        If group_col (e.g. 'customer_id') is provided and has repeated records across
+        time/months (panel data), GroupShuffleSplit is used so that ALL records of
+        any customer strictly belong to only ONE split (100% in train, val, or test).
+        If each customer has exactly 1 row (as in snapshot-aggregated tables),
+        Stratified split preserves group isolation while guaranteeing exact class balance.
         """
         if target_col not in df.columns:
             raise KeyError(f"Target column '{target_col}' not found in dataframe.")
+
+        grp = group_col or self.group_col
+
+        # Check if panel / multi-row records exist per customer
+        if grp and grp in df.columns and df[grp].nunique() < len(df):
+            # Panel/multi-row data: use GroupShuffleSplit to strictly prevent multi-month customer leakage
+            gss = GroupShuffleSplit(n_splits=1, test_size=self.test_size, random_state=self.random_state)
+            train_val_idx, test_idx = next(gss.split(df, groups=df[grp]))
+            train_val_df = df.iloc[train_val_idx].copy()
+            test_df = df.iloc[test_idx].copy()
+
+            if self.val_size > 0.0:
+                adjusted_val_ratio = self.val_size / (1.0 - self.test_size)
+                adjusted_val_ratio = min(max(adjusted_val_ratio, 0.01), 0.50)
+                gss_val = GroupShuffleSplit(n_splits=1, test_size=adjusted_val_ratio, random_state=self.random_state)
+                tr_idx, val_idx = next(gss_val.split(train_val_df, groups=train_val_df[grp]))
+                train_df = train_val_df.iloc[tr_idx].copy()
+                val_df = train_val_df.iloc[val_idx].copy()
+                return DatasetSplit(train_df=train_df, val_df=val_df, test_df=test_df)
+
+            return DatasetSplit(train_df=train_val_df, test_df=test_df, val_df=None)
 
         stratify_series = df[target_col] if self.stratify else None
 
@@ -122,14 +157,25 @@ class DataSplitter:
         self,
         df: pd.DataFrame,
         target_col: str = "churn",
+        group_col: Optional[str] = None,
         n_splits: Optional[int] = None,
     ) -> Generator[CVFold, None, None]:
         """
         Generates leak-free cross-validation folds.
         Yields CVFold containers with train_df and val_df slices.
+        If panel data (repeated customer records) is detected, uses StratifiedGroupKFold.
         """
         k = n_splits or self.n_splits
-        if self.stratify and target_col in df.columns:
+        grp = group_col or self.group_col
+
+        if grp and grp in df.columns and df[grp].nunique() < len(df):
+            if self.stratify and target_col in df.columns:
+                cv = StratifiedGroupKFold(n_splits=k, shuffle=self.shuffle, random_state=self.random_state)
+                splits = cv.split(df, df[target_col], groups=df[grp])
+            else:
+                cv = GroupKFold(n_splits=k)
+                splits = cv.split(df, groups=df[grp])
+        elif self.stratify and target_col in df.columns:
             cv = StratifiedKFold(n_splits=k, shuffle=self.shuffle, random_state=self.random_state)
             splits = cv.split(df, df[target_col])
         else:
@@ -151,6 +197,7 @@ class DataSplitter:
         pipeline_builder: Callable[[], Any],
         model_builder: Callable[[Any, pd.Series], Any],
         target_col: str = "churn",
+        group_col: Optional[str] = None,
         n_splits: Optional[int] = None,
         verbose: bool = False,
     ) -> CVResult:
@@ -166,7 +213,7 @@ class DataSplitter:
         k = n_splits or self.n_splits
         fold_metrics: List[Dict[str, float]] = []
 
-        for fold in self.get_cv_folds(df, target_col=target_col, n_splits=k):
+        for fold in self.get_cv_folds(df, target_col=target_col, group_col=group_col, n_splits=k):
             # 1. Fresh pipeline for this fold to avoid any leakage
             pipe = pipeline_builder()
             pipe.fit(fold.train_df, target_col=target_col)

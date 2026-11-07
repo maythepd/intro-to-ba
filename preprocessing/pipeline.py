@@ -34,7 +34,7 @@ from .balancing import ClassBalancer
 from .feature_selector import FeatureSelector
 from .sample_weighting import SampleWeightConfig, SampleWeightGenerator
 from .splitting import DataSplitter, DatasetSplit, CVFold, CVResult
-from .nonlinear import NonlinearRepresentationManager
+from .temporal import TemporalEmbeddingManager
 
 
 def load_dataset(
@@ -100,6 +100,8 @@ class PipelineResult:
     val_df: Optional[pd.DataFrame] = None
     train_val_df: Optional[pd.DataFrame] = None
     test_df: Optional[pd.DataFrame] = None
+    auxiliary_temporal_metrics: Optional[Dict[str, Any]] = None
+    auxiliary_nonlinear_metrics: Optional[Dict[str, Any]] = None
 
 
 class FeatureEngineeringPipeline:
@@ -119,6 +121,7 @@ class FeatureEngineeringPipeline:
     def __init__(
         self,
         config: Optional[Union[PipelineConfig, Dict[str, Any], str, Path]] = None,
+        fold_id: Optional[Union[int, str]] = None,
     ):
         if config is None:
             self.config = PipelineConfig.from_yaml()
@@ -131,6 +134,7 @@ class FeatureEngineeringPipeline:
         else:
             raise TypeError(f"Invalid config type: {type(config)}. Expected PipelineConfig, dict, str, or Path.")
 
+        self.fold_id = fold_id or getattr(self.config, "fold_id", None)
         self._init_modules()
 
     @classmethod
@@ -204,11 +208,12 @@ class FeatureEngineeringPipeline:
             k_neighbors=cfg.smote_k_neighbors,
         )
 
-        # 6. Feature Selection
+        # 6. Feature Selection (MI, Pearson, MI_Pearson_Hybrid, RF)
         self.feature_selector = FeatureSelector(
             enabled=cfg.enable_feature_selection,
             top_k=cfg.top_k_features,
-            ranking_metric=cfg.feature_selection_metric,
+            ranking_metric=getattr(cfg, "feature_selection_metric", "MI_Score"),
+            hybrid_pearson_weight=getattr(cfg, "hybrid_pearson_weight", 0.50),
             random_state=cfg.random_state,
         )
 
@@ -229,22 +234,22 @@ class FeatureEngineeringPipeline:
         else:
             self.sample_weighter = SampleWeightGenerator(sw_cfg)
 
-        # 8. Non-linear & Neural Representation Manager
-        self.nonlinear_manager = NonlinearRepresentationManager(
-            enabled=getattr(cfg, "allow_nonlinear_representations", False) or getattr(cfg, "enable_nonlinear_representations", False),
-            method=getattr(cfg, "nonlinear_method", "supervised"),
-            mode=getattr(cfg, "nonlinear_mode", "augment"),
-            latent_dim=getattr(cfg, "nonlinear_latent_dim", 16),
-            hidden_dims=getattr(cfg, "nonlinear_hidden_dims", [64, 32]),
-            epochs=getattr(cfg, "nonlinear_epochs", 30),
-            batch_size=getattr(cfg, "nonlinear_batch_size", 256),
-            lr=getattr(cfg, "nonlinear_learning_rate", 1e-3),
-            dropout=getattr(cfg, "nonlinear_dropout", 0.20),
-            noise_level=getattr(cfg, "nonlinear_noise_level", 0.15),
-            temperature=getattr(cfg, "nonlinear_temperature", 0.10),
-            kernel_components=getattr(cfg, "nonlinear_kernel_components", 32),
-            checkpoint_dir=getattr(cfg, "nonlinear_checkpoint_dir", "models/saved/nonlinear"),
+        # 8. Temporal Multi-Snapshot Sequence Embedding Manager
+        self.temporal_manager = TemporalEmbeddingManager(
+            enabled=getattr(cfg, "enable_temporal_embeddings", False),
+            raw_data_dir=getattr(cfg, "raw_full_dataset_dir", "data/full_dataset"),
+            latent_dim=getattr(cfg, "temporal_latent_dim", 16),
+            hidden_dim=getattr(cfg, "temporal_hidden_dim", 64),
+            num_layers=getattr(cfg, "temporal_num_layers", 2),
+            epochs=getattr(cfg, "temporal_epochs", 25),
+            batch_size=getattr(cfg, "temporal_batch_size", 256),
+            lr=getattr(cfg, "temporal_learning_rate", 1e-3),
+            dropout=getattr(cfg, "temporal_dropout", 0.20),
+            checkpoint_dir=getattr(cfg, "temporal_checkpoint_dir", "models/saved/temporal"),
+            cache_path=getattr(cfg, "temporal_cache_path", "data/processed/temporal_embeddings.csv"),
             random_state=cfg.random_state,
+            fold_id=self.fold_id,
+            force_retrain=getattr(cfg, "temporal_force_retrain", False),
         )
 
     def fit(self, df: pd.DataFrame, target_col: Optional[str] = None) -> "FeatureEngineeringPipeline":
@@ -277,10 +282,9 @@ class FeatureEngineeringPipeline:
         self.imputer = SimpleImputer(strategy="median")
         current[feature_cols] = self.imputer.fit_transform(current[feature_cols])
 
-        # Step 6: Non-linear Representation Manager (if enabled)
-        if (getattr(self.config, "allow_nonlinear_representations", False) or getattr(self.config, "enable_nonlinear_representations", False)) and y is not None:
-            base_cols = [c for c in self.extract_model_features(current) if not c.startswith("nl_")]
-            self.nonlinear_manager.fit(current[base_cols], y)
+        # Step 6: Temporal Behavioral Sequence Embeddings (Self-Supervised Bi-GRU)
+        if getattr(self.config, "enable_temporal_embeddings", False):
+            self.temporal_manager.fit(df)
 
         return self
 
@@ -307,14 +311,9 @@ class FeatureEngineeringPipeline:
             feature_cols = self.extract_model_features(out)
             out[feature_cols] = self.imputer.transform(out[feature_cols])
 
-        # Step 6: Non-linear Representation Manager (if enabled)
-        if (getattr(self.config, "allow_nonlinear_representations", False) or getattr(self.config, "enable_nonlinear_representations", False)) and self.nonlinear_manager.transformer is not None:
-            base_cols = [c for c in self.extract_model_features(out) if not c.startswith("nl_")]
-            out_trans = self.nonlinear_manager.transform(out[base_cols])
-            if isinstance(out_trans, pd.DataFrame):
-                new_cols = [c for c in out_trans.columns if c not in out.columns]
-                if new_cols:
-                    out = pd.concat([out, out_trans[new_cols]], axis=1)
+        # Step 6: Temporal Behavioral Sequence Embeddings (Augment with dense z embeddings)
+        if getattr(self.config, "enable_temporal_embeddings", False):
+            out = self.temporal_manager.transform(out)
 
         return out
 
@@ -370,6 +369,7 @@ class FeatureEngineeringPipeline:
             val_size=getattr(self.config, "val_size", 0.0),
             stratify=self.config.stratify,
             random_state=self.config.random_state,
+            group_col=getattr(self.config, "group_col", "customer_id"),
         )
         split = splitter.train_val_test_split(df, target_col=target)
 
@@ -454,6 +454,8 @@ class FeatureEngineeringPipeline:
             val_df=val_df,
             train_val_df=train_val_pool,
             test_df=test_df,
+            auxiliary_temporal_metrics=self.temporal_manager.get_auxiliary_metrics(),
+            auxiliary_nonlinear_metrics=self.temporal_manager.get_auxiliary_metrics(),
         )
 
     def cross_validate(
@@ -483,6 +485,7 @@ class FeatureEngineeringPipeline:
             n_splits=k,
             stratify=self.config.stratify,
             random_state=self.config.random_state,
+            group_col=getattr(self.config, "group_col", "customer_id"),
         )
         return splitter.evaluate_cv(
             df=df,

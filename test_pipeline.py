@@ -118,11 +118,13 @@ def run_checks():
         assert len(base_res.model_features) == 21, f"Expected 21 baseline features, got {len(base_res.model_features)}"
         print(f"[OK] Raw Kaggle baseline verified: {len(base_res.model_features)} features!")
 
-        # 5. Test Feature Selection with MI_Score
-        print("\n--- Testing Feature Selection with MI_Score ---")
-        assert cfg.feature_selection_metric == "MI_Score", f"Expected MI_Score, got {cfg.feature_selection_metric}"
+        # 5. Test Feature Selection with MI_Score, Pearson, and MI_Pearson_Hybrid
+        print("\n--- Testing Feature Selection with Pearson, MI, and Hybrid ---")
         assert "MI_Score" in res.feature_importance.columns, "MI_Score column should be in feature_importance"
-        print(f"[OK] FeatureSelector MI_Score verified: top feature is {res.feature_importance.iloc[0]['Feature']} (MI={res.feature_importance.iloc[0]['MI_Score']:.4f})")
+        assert "Pearson" in res.feature_importance.columns, "Pearson column should be in feature_importance"
+        assert "MI_Pearson_Hybrid" in res.feature_importance.columns, "MI_Pearson_Hybrid column should be in feature_importance"
+        top_feat = res.feature_importance.iloc[0]
+        print(f"[OK] FeatureSelector verified: top feature is {top_feat['Feature']} (MI={top_feat['MI_Score']:.4f}, Pearson={top_feat['Pearson']:.4f}, Hybrid={top_feat['MI_Pearson_Hybrid']:.4f})")
 
         # 6. Test Visualization Plotting
         print("\n--- Testing Visualization Plotting ---")
@@ -164,60 +166,67 @@ def run_checks():
         assert Path("data/processed/feature_metadata.json").exists(), "data/processed/feature_metadata.json should exist"
         print("[OK] Main pipeline processed dataset exported cleanly to data/processed!")
 
-        # 10. Test Non-linear & Neural Representation Sub-package (preprocessing.nonlinear)
-        print("\n--- Testing Non-linear & Neural Representation Sub-package ---")
-        from preprocessing.nonlinear import (
-            NonlinearRepresentationManager,
-            NystroemKernelTransformer,
-            TabularDenoisingAutoencoderTransformer,
-            SupervisedTabularEmbeddingTransformer,
-            ContrastiveTabularTransformer,
+        # 10. Test Temporal Sequence Event Representation Sub-package (preprocessing.temporal)
+        print("\n--- Testing Temporal Behavioral Sequence Representation Package ---")
+        from preprocessing.temporal import (
+            TemporalSnapshotExtractor,
+            BiGRUTemporalAutoencoder,
+            TemporalAutoencoderTrainer,
+            TemporalEmbeddingManager,
         )
-        sample_X = res.X_train.head(100)
-        sample_y = df.loc[sample_X.index, "churn"].values
 
-        # Test Kernel Nystroem
-        kernel_mgr = NonlinearRepresentationManager(
-            enabled=True,
-            method="kernel",
-            mode="augment",
-            kernel_components=10,
-        )
-        kernel_mgr.fit(sample_X, sample_y)
-        trans_kernel = kernel_mgr.transform(sample_X)
-        assert trans_kernel.shape[1] == sample_X.shape[1] + 10, f"Expected {sample_X.shape[1] + 10} features, got {trans_kernel.shape[1]}"
-        print(f"[OK] Kernel Nystroem transformation verified: {trans_kernel.shape}")
+        test_cust_ids = df["customer_id"].head(200).values
+        extractor = TemporalSnapshotExtractor(raw_data_dir="data/full_dataset")
+        tensor, extracted_ids = extractor.extract(test_cust_ids, verbose=False)
+        assert tensor.shape == (200, 6, 10), f"Expected tensor shape (200, 6, 10), got {tensor.shape}"
+        assert len(extracted_ids) == 200, f"Expected 200 customer IDs, got {len(extracted_ids)}"
+        print(f"[OK] TemporalSnapshotExtractor verified: extracted 6-month sequence tensor {tensor.shape}")
 
-        # Test Supervised Latent with Checkpoint logic
-        test_ckpt_dir = Path("results/test_tune/checkpoints")
-        supervised_mgr = NonlinearRepresentationManager(
-            enabled=True,
-            method="supervised",
-            mode="augment",
+        # Test BiGRUTemporalAutoencoder
+        test_ckpt = Path("results/test_tune/checkpoints/test_temporal_encoder.pt")
+        trainer = TemporalAutoencoderTrainer(
+            in_features=10,
+            seq_len=6,
+            hidden_dim=32,
             latent_dim=8,
             epochs=2,
-            checkpoint_dir=test_ckpt_dir,
+            batch_size=64,
+            checkpoint_path=test_ckpt,
+            verbose=False,
         )
-        supervised_mgr.fit(sample_X, sample_y)
-        trans_sup = supervised_mgr.transform(sample_X)
-        assert trans_sup.shape[1] == sample_X.shape[1] + 8, f"Expected {sample_X.shape[1] + 8} features, got {trans_sup.shape[1]}"
-        assert (test_ckpt_dir / "supervised_encoder.pt").exists(), "Checkpoint should be saved"
+        trainer.fit(tensor)
+        latents = trainer.transform(tensor)
+        assert latents.shape == (200, 8), f"Expected latents shape (200, 8), got {latents.shape}"
+        assert test_ckpt.exists(), "Temporal checkpoint should be saved to disk"
+        print(f"[OK] BiGRUTemporalAutoencoder verified: encoded sequence tensor into latent embeddings {latents.shape}")
 
-        # Verify reloading existing checkpoint
-        supervised_mgr_reload = NonlinearRepresentationManager(
+        # Test TemporalEmbeddingManager
+        temp_mgr = TemporalEmbeddingManager(
             enabled=True,
-            method="supervised",
-            mode="augment",
+            raw_data_dir="data/full_dataset",
             latent_dim=8,
             epochs=2,
-            checkpoint_dir=test_ckpt_dir,
+            batch_size=64,
+            checkpoint_dir="results/test_tune/checkpoints",
+            cache_path="results/test_tune/test_temporal_embeddings.csv",
+            verbose=False,
         )
-        supervised_mgr_reload.fit(sample_X, sample_y)
-        trans_sup_reload = supervised_mgr_reload.transform(sample_X)
-        assert trans_sup_reload.shape == trans_sup.shape
-        print(f"[OK] Supervised neural representation & checkpoint reuse verified!")
+        sample_df = df.head(100)[["customer_id", "credit_score", "age"]]
+        temp_mgr.fit(sample_df)
+        trans_df = temp_mgr.transform(sample_df)
+        assert "temporal_z0" in trans_df.columns, "temporal_z0 should be in augmented dataframe"
+        assert "temporal_z7" in trans_df.columns, "temporal_z7 should be in augmented dataframe"
+        assert trans_df.shape[1] == sample_df.shape[1] + 8, f"Expected {sample_df.shape[1] + 8} columns, got {trans_df.shape[1]}"
+        print(f"[OK] TemporalEmbeddingManager verified: augmented customer table to {trans_df.shape}")
 
-        print("\n[SUCCESS] All pipeline, splitting, MI ranking, visualization, Optuna, and Non-linear tests passed!")
+        # Test true forward-pass inference on unseen validation customers
+        unseen_df = df.iloc[100:150][["customer_id", "credit_score", "age"]]
+        trans_unseen = temp_mgr.transform(unseen_df)
+        assert trans_unseen.shape[1] == unseen_df.shape[1] + 8
+        assert not (trans_unseen["temporal_z0"] == 0.0).all(), "Unseen validation customers should receive inferred embeddings, not zeros!"
+        print(f"[OK] TemporalEmbeddingManager verified: inferred latent embeddings on unseen validation customers {trans_unseen.shape}")
+
+        print("\n[SUCCESS] All pipeline, splitting, Pearson/MI hybrid selection, Optuna, and Temporal Representation tests passed!")
 
     finally:
         cleanup_test_artifacts()

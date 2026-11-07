@@ -198,6 +198,7 @@ class PipelineConfig:
     raw_full_dataset_dir: str = "data/full_dataset"
     rebuild_full_dataset: bool = False
     target_col: str = "churn"
+    group_col: Optional[str] = "customer_id"
     test_size: float = 0.20
     val_size: float = 0.10
     enable_cv: bool = True
@@ -269,7 +270,8 @@ class PipelineConfig:
 
     # Feature selection configuration
     top_k_features: Optional[int] = None
-    feature_selection_metric: str = "MI_Score"  # Default: Mutual Information Classif
+    feature_selection_metric: str = "MI_Score"  # "MI_Score" | "Pearson" | "MI_Pearson_Hybrid" | "RF_Importance"
+    hybrid_pearson_weight: float = 0.50
     compute_feature_importance: bool = False
 
     # Sample Weighting configuration (Exponential recency decay + financial value weighting)
@@ -283,10 +285,23 @@ class PipelineConfig:
     weight_churn_multiplier: float = 1.5
     weight_normalize: bool = True
 
-    # Non-linear & Neural Representation Learning configuration
+    # Temporal Behavioral Sequence Representation configuration (Bi-GRU Event Autoencoder)
+    enable_temporal_embeddings: bool = False
+    temporal_latent_dim: int = 16
+    temporal_hidden_dim: int = 64
+    temporal_num_layers: int = 2
+    temporal_epochs: int = 25
+    temporal_batch_size: int = 256
+    temporal_learning_rate: float = 0.001
+    temporal_dropout: float = 0.20
+    temporal_checkpoint_dir: str = "models/saved/temporal"
+    temporal_cache_path: str = "data/processed/temporal_embeddings.csv"
+    temporal_force_retrain: bool = False
+
+    # Legacy compatibility aliases (deprecated)
     allow_nonlinear_representations: bool = False
-    nonlinear_method: str = "supervised"  # "supervised" | "contrastive" | "autoencoder" | "kernel"
-    nonlinear_mode: str = "augment"  # "augment" (appends [X, z]) | "replace" (only z)
+    nonlinear_method: str = "supervised"
+    nonlinear_mode: str = "augment"
     nonlinear_latent_dim: int = 16
     nonlinear_hidden_dims: List[int] = field(default_factory=lambda: [64, 32])
     nonlinear_epochs: int = 30
@@ -297,6 +312,7 @@ class PipelineConfig:
     nonlinear_temperature: float = 0.10
     nonlinear_kernel_components: int = 32
     nonlinear_checkpoint_dir: str = "models/saved/nonlinear"
+    nonlinear_fold_idx: Optional[int] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PipelineConfig":
@@ -361,7 +377,45 @@ class PipelineConfig:
             if "normalize" in sw_source:
                 flat_data["weight_normalize"] = sw_source["normalize"]
 
-        # Handle nonlinear_representations mappings
+        # Handle feature_selection mappings
+        fs_source = data.get("feature_selection") or (feature_dict.get("feature_selection") if isinstance(feature_dict, dict) else None)
+        if isinstance(fs_source, dict):
+            if "top_k_features" in fs_source:
+                flat_data["top_k_features"] = fs_source["top_k_features"]
+            if "feature_selection_metric" in fs_source:
+                flat_data["feature_selection_metric"] = fs_source["feature_selection_metric"]
+            if "hybrid_pearson_weight" in fs_source:
+                flat_data["hybrid_pearson_weight"] = fs_source["hybrid_pearson_weight"]
+            if "compute_feature_importance" in fs_source:
+                flat_data["compute_feature_importance"] = fs_source["compute_feature_importance"]
+
+        # Handle temporal_embeddings mappings
+        temp_source = data.get("temporal_embeddings") or (feature_dict.get("temporal_embeddings") if isinstance(feature_dict, dict) else None)
+        if isinstance(temp_source, dict):
+            if "enabled" in temp_source:
+                flat_data["enable_temporal_embeddings"] = temp_source["enabled"]
+            if "latent_dim" in temp_source:
+                flat_data["temporal_latent_dim"] = temp_source["latent_dim"]
+            if "hidden_dim" in temp_source:
+                flat_data["temporal_hidden_dim"] = temp_source["hidden_dim"]
+            if "num_layers" in temp_source:
+                flat_data["temporal_num_layers"] = temp_source["num_layers"]
+            if "epochs" in temp_source:
+                flat_data["temporal_epochs"] = temp_source["epochs"]
+            if "batch_size" in temp_source:
+                flat_data["temporal_batch_size"] = temp_source["batch_size"]
+            if "learning_rate" in temp_source:
+                flat_data["temporal_learning_rate"] = temp_source["learning_rate"]
+            if "dropout" in temp_source:
+                flat_data["temporal_dropout"] = temp_source["dropout"]
+            if "checkpoint_dir" in temp_source:
+                flat_data["temporal_checkpoint_dir"] = temp_source["checkpoint_dir"]
+            if "cache_path" in temp_source:
+                flat_data["temporal_cache_path"] = temp_source["cache_path"]
+            if "force_retrain" in temp_source:
+                flat_data["temporal_force_retrain"] = temp_source["force_retrain"]
+
+        # Handle legacy nonlinear_representations mappings (backward compatibility)
         nl_source = data.get("nonlinear_representations") or (feature_dict.get("nonlinear_representations") if isinstance(feature_dict, dict) else None)
         if isinstance(nl_source, dict):
             if "enabled" in nl_source:

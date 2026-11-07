@@ -1,10 +1,11 @@
 """
 Phase 6: Feature selection & predictive importance ranking.
-Calculates Mutual Information (non-linear dependency) and Random Forest Gini Importance,
-with support for Top-K feature filtering for ablation experiments.
+Calculates Mutual Information (non-linear dependency), Pearson Correlation (linear predictive power),
+Hybrid MI-Pearson score, and Random Forest Gini Importance, with support for Top-K filtering.
 """
 
 from typing import Any, Dict, List, Optional
+import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import mutual_info_classif
@@ -14,19 +15,24 @@ from .base import BaseFeatureTransformer
 
 class FeatureSelector(BaseFeatureTransformer):
     """
-    Ranks and selects features using Mutual Information and Random Forest importance.
+    Ranks and selects features using Mutual Information, Pearson Correlation,
+    Hybrid MI-Pearson score, and Random Forest importance.
     
     Ablation options:
       - enabled: Toggle feature selection on/off.
       - top_k: Select top K features (if None, all features are retained).
-      - ranking_metric: 'RF_Importance' or 'MI_Score'.
+      - ranking_metric: 'MI_Score', 'Pearson', 'MI_Pearson_Hybrid', or 'RF_Importance'.
+      - hybrid_pearson_weight: Weight given to Pearson vs MI in 'MI_Pearson_Hybrid' (default: 0.50).
     """
+
+    SUPPORTED_METRICS = ["MI_Score", "Pearson", "MI_Pearson_Hybrid", "RF_Importance"]
 
     def __init__(
         self,
         enabled: bool = False,
         top_k: Optional[int] = None,
         ranking_metric: str = "MI_Score",
+        hybrid_pearson_weight: float = 0.50,
         rf_n_estimators: int = 100,
         rf_max_depth: int = 8,
         random_state: int = 42,
@@ -34,6 +40,7 @@ class FeatureSelector(BaseFeatureTransformer):
         super().__init__(name="FeatureSelector", enabled=enabled)
         self.top_k = top_k
         self.ranking_metric = ranking_metric
+        self.hybrid_pearson_weight = float(np.clip(hybrid_pearson_weight, 0.0, 1.0))
         self.rf_n_estimators = rf_n_estimators
         self.rf_max_depth = rf_max_depth
         self.random_state = random_state
@@ -53,11 +60,41 @@ class FeatureSelector(BaseFeatureTransformer):
             self.is_fitted = True
             return self
 
-        # 1. Mutual Information Score
+        # 1. Mutual Information Score (Non-linear relationship)
         mi_scores = mutual_info_classif(X, y, random_state=self.random_state)
         df_mi = pd.DataFrame({"Feature": X.columns, "MI_Score": mi_scores})
 
-        # 2. Random Forest Importance
+        # 2. Pearson Correlation Score (Linear relationship with binary target / Point-Biserial)
+        y_vals = np.asarray(y, dtype=np.float64)
+        pearson_scores = []
+        for col in X.columns:
+            x_col = np.asarray(X[col], dtype=np.float64)
+            std_x = np.std(x_col)
+            std_y = np.std(y_vals)
+            if std_x > 1e-8 and std_y > 1e-8:
+                corr = np.corrcoef(x_col, y_vals)[0, 1]
+                pearson_scores.append(abs(corr) if not np.isnan(corr) else 0.0)
+            else:
+                pearson_scores.append(0.0)
+
+        df_pearson = pd.DataFrame({"Feature": X.columns, "Pearson": pearson_scores})
+
+        # 3. Hybrid MI-Pearson Score: normalized convex combination
+        mi_arr = np.array(mi_scores)
+        p_arr = np.array(pearson_scores)
+
+        mi_min, mi_max = mi_arr.min(), mi_arr.max()
+        p_min, p_max = p_arr.min(), p_arr.max()
+
+        mi_norm = (mi_arr - mi_min) / (mi_max - mi_min + 1e-8)
+        p_norm = (p_arr - p_min) / (p_max - p_min + 1e-8)
+
+        w_p = self.hybrid_pearson_weight
+        w_mi = 1.0 - w_p
+        hybrid_scores = w_mi * mi_norm + w_p * p_norm
+        df_hybrid = pd.DataFrame({"Feature": X.columns, "MI_Pearson_Hybrid": hybrid_scores})
+
+        # 4. Random Forest Importance
         rf = RandomForestClassifier(
             n_estimators=self.rf_n_estimators,
             max_depth=self.rf_max_depth,
@@ -67,10 +104,14 @@ class FeatureSelector(BaseFeatureTransformer):
         rf.fit(X, y)
         df_rf = pd.DataFrame({"Feature": X.columns, "RF_Importance": rf.feature_importances_})
 
-        # Merge importance metrics
-        self.importance_df = pd.merge(df_mi, df_rf, on="Feature").sort_values(
-            by=self.ranking_metric, ascending=False
-        ).reset_index(drop=True)
+        # Merge all importance metrics
+        merged = pd.merge(df_mi, df_pearson, on="Feature")
+        merged = pd.merge(merged, df_hybrid, on="Feature")
+        merged = pd.merge(merged, df_rf, on="Feature")
+
+        # Determine active sorting metric
+        sort_col = self.ranking_metric if self.ranking_metric in merged.columns else "MI_Score"
+        self.importance_df = merged.sort_values(by=sort_col, ascending=False).reset_index(drop=True)
 
         # Determine selected features
         if self.enabled and self.top_k is not None and self.top_k < len(X.columns):
@@ -98,6 +139,7 @@ class FeatureSelector(BaseFeatureTransformer):
         params.update({
             "top_k": self.top_k,
             "ranking_metric": self.ranking_metric,
+            "hybrid_pearson_weight": self.hybrid_pearson_weight,
             "rf_n_estimators": self.rf_n_estimators,
             "rf_max_depth": self.rf_max_depth,
             "random_state": self.random_state,

@@ -26,12 +26,11 @@ from .pipeline import (
     load_dataset,
 )
 
-from .nonlinear import (
-    NystroemKernelTransformer,
-    TabularDenoisingAutoencoderTransformer,
-    SupervisedTabularEmbeddingTransformer,
-    ContrastiveTabularTransformer,
-    NonlinearRepresentationManager,
+from .temporal import (
+    TemporalSnapshotExtractor,
+    BiGRUTemporalAutoencoder,
+    TemporalAutoencoderTrainer,
+    TemporalEmbeddingManager,
 )
 
 __all__ = [
@@ -61,9 +60,8 @@ __all__ = [
     "DatasetSplit",
     "CVFold",
     "CVResult",
-    "NystroemKernelTransformer",
-    "TabularDenoisingAutoencoderTransformer",
-    "SupervisedTabularEmbeddingTransformer",
-    "ContrastiveTabularTransformer",
-    "NonlinearRepresentationManager",
+    "TemporalSnapshotExtractor",
+    "BiGRUTemporalAutoencoder",
+    "TemporalAutoencoderTrainer",
+    "TemporalEmbeddingManager",
 ]

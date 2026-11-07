@@ -7,6 +7,7 @@ from datetime import datetime
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+import numpy as np
 import pandas as pd
 
 from config import UnifiedConfig
@@ -15,6 +16,34 @@ from visualization import (
     plot_model_comparison,
 )
 from .experiments import AnyChurnModel
+
+
+def _format_float_cols(df: pd.DataFrame, decimal_places: int = 4) -> pd.DataFrame:
+    """Formats all float columns in a dataframe to fixed decimal places for clean Markdown tables."""
+    df_out = df.copy()
+    for col in df_out.columns:
+        if pd.api.types.is_float_dtype(df_out[col]):
+            df_out[col] = df_out[col].apply(
+                lambda x: f"{x:.{decimal_places}f}" if pd.notnull(x) and isinstance(x, (int, float, np.floating)) else str(x)
+            )
+    return df_out
+
+
+def _format_importance_table(df_imp: Optional[pd.DataFrame], top_k: int = 15) -> str:
+    """Formats top-K feature importances into a neat, standardized Markdown table."""
+    if df_imp is None or df_imp.empty:
+        return "*Không có dữ liệu đặc trưng quan trọng.*"
+
+    df_top = df_imp.head(top_k).copy()
+    if "Importance" in df_top.columns:
+        df_top["Importance"] = df_top["Importance"].apply(
+            lambda x: f"{x:.4f}" if isinstance(x, (int, float, np.floating)) else str(x)
+        )
+    if "Relative_Pct" in df_top.columns:
+        df_top["Relative_Pct"] = df_top["Relative_Pct"].apply(
+            lambda x: f"{x:.2f}%" if isinstance(x, (int, float, np.floating)) and not str(x).endswith("%") else str(x)
+        )
+    return df_top.to_markdown(index=False)
 
 
 def generate_ablation_report(
@@ -42,8 +71,9 @@ def generate_ablation_report(
         "Accuracy",
         "Log_Loss",
     ]
-    df_table = df_results[display_cols].copy()
-    top15_imp = best_imp.head(15).copy()
+    avail_cols = [c for c in display_cols if c in df_results.columns]
+    df_table = _format_float_cols(df_results[avail_cols].copy(), decimal_places=4)
+
     best_metrics = df_results[df_results["Experiment"] == best_exp_name].iloc[0]
 
     model_names = {"xgboost": "XGBoost", "lr": "Logistic Regression", "rf": "Random Forest"}
@@ -64,29 +94,40 @@ def generate_ablation_report(
         top_k=15,
     )
 
+    top15_markdown = _format_importance_table(best_imp, top_k=15)
+
+    sec_idx = 4
     lift_section = ""
     if lift_res:
         df_dec = lift_res.get("df_deciles")
         df_comp = lift_res.get("df_comparison")
         top10_lift = df_dec.iloc[0]["Decile_Lift"] if df_dec is not None and len(df_dec) > 0 else "N/A"
         top20_lift = df_dec.iloc[1]["Cum_Lift"] if df_dec is not None and len(df_dec) > 1 else "N/A"
+
+        dec_md = _format_float_cols(df_dec, decimal_places=4).to_markdown(index=False) if df_dec is not None else ""
+        comp_md = _format_float_cols(df_comp, decimal_places=4).to_markdown(index=False) if df_comp is not None else ""
+
         lift_section = f"""
 
 ---
 
-## 4. ĐÁNH GIÁ HỆ SỐ LIFT CỦA CẤU HÌNH TỐI ƯU NHẤT ({best_exp_name})
+## {sec_idx}. ĐÁNH GIÁ HỆ SỐ LIFT CỦA CẤU HÌNH TỐI ƯU NHẤT ({best_exp_name})
 
 ![Lift and Cumulative Gains Curve](lift_and_gains_curve.png)
 
-### 4.1. Bảng 10 phân vị rủi ro (Decile Lift Analysis):
+### {sec_idx}.1. Bảng 10 phân vị rủi ro (Decile Lift Analysis):
 * **Top 10% rủi ro cao nhất (Decile D1):** Đạt hệ số **Lift {top10_lift}** so với chọn ngẫu nhiên.
 * **Top 20% rủi ro cao nhất (Decile D1 + D2):** Đạt hệ số **Cumulative Lift {top20_lift}**.
 
-{df_dec.to_markdown(index=False) if df_dec is not None else ""}
+{dec_md}
 
-### 4.2. So sánh với các Baselines & Điểm vận hành tối ưu:
-{df_comp.to_markdown(index=False) if df_comp is not None else ""}
+### {sec_idx}.2. So sánh với các Baselines & Điểm vận hành tối ưu:
+
+{comp_md}
 """
+        sec_idx += 1
+
+    usage_sec_idx = sec_idx
 
     md_content = f"""# BÁO CÁO THỰC NGHIỆM MÔ HÌNH {model_display.upper()} & ABLATION STUDY
 ## DỰ BÁO RỦI RO RỜI BỎ KHÁCH HÀNG (CUSTOMER CHURN PREDICTION)
@@ -112,10 +153,10 @@ Bảng dưới đây so sánh toàn diện hiệu năng của mô hình **{model
 - **PR-AUC (Average Precision):** `{best_metrics['PR_AUC']:.4f}` — Đo lường chuẩn xác trên tập dữ liệu mất cân bằng (tỷ lệ churn ~20.37%).
 - **F1-Score:** `{best_metrics['F1_Score']:.4f}` (Precision: `{best_metrics['Precision']:.4f}`, Recall: `{best_metrics['Recall']:.4f}`).
 - **Ma trận nhầm lẫn (Confusion Matrix trên tập dữ liệu kiểm thử):**
-  - **True Positives (TP - Bắt đúng khách hàng rời bỏ):** `{best_metrics['TP']}`
-  - **False Negatives (FN - Bỏ sót khách hàng rời bỏ):** `{best_metrics['FN']}`
-  - **True Negatives (TN - Nhận diện đúng khách hàng ở lại):** `{best_metrics['TN']}`
-  - **False Positives (FP - Cảnh báo nhầm khách hàng ở lại):** `{best_metrics['FP']}`
+  - **True Positives (TP - Bắt đúng khách hàng rời bỏ):** `{best_metrics.get('TP', 'N/A')}`
+  - **False Negatives (FN - Bỏ sót khách hàng rời bỏ):** `{best_metrics.get('FN', 'N/A')}`
+  - **True Negatives (TN - Nhận diện đúng khách hàng ở lại):** `{best_metrics.get('TN', 'N/A')}`
+  - **False Positives (FP - Cảnh báo nhầm khách hàng ở lại):** `{best_metrics.get('FP', 'N/A')}`
 
 ### 2.2. Ý nghĩa từ các thí nghiệm Ablation:
 1. **Vai trò của Domain Features:**
@@ -135,23 +176,23 @@ Bảng dưới đây so sánh toàn diện hiệu năng của mô hình **{model
 
 ![Biểu đồ đặc trưng quan trọng nhất]({chart_filename})
 
-{top15_imp.to_markdown(index=False)}{lift_section}
-
+{top15_markdown}
+{lift_section}
 ---
 
-## 5. HƯỚNG DẪN TÁI HIỆN VÀ SỬ DỤNG MÔ HÌNH
+## {usage_sec_idx}. HƯỚNG DẪN TÁI HIỆN VÀ SỬ DỤNG MÔ HÌNH
 
-### 4.1. So sánh cả 3 model (LR / RF / XGBoost)
+### {usage_sec_idx}.1. So sánh cả 3 model (LR / RF / XGBoost)
 ```bash
 python main.py --mode compare
 ```
 
-### 4.2. Ablation cho một model cụ thể
+### {usage_sec_idx}.2. Ablation cho một model cụ thể
 ```bash
 python main.py --mode ablation --model-type {model_type}  # lr | rf | xgboost
 ```
 
-### 4.3. Train đơn lẻ với custom params
+### {usage_sec_idx}.3. Train đơn lẻ với custom params
 ```bash
 python main.py --mode train --model-type {model_type}
 ```
@@ -182,6 +223,8 @@ def generate_comparison_report(
 
     display_cols = [
         "Model",
+        "CV_ROC_AUC",
+        "CV_PR_AUC",
         "ROC_AUC",
         "PR_AUC",
         "F1_Score",
@@ -191,10 +234,8 @@ def generate_comparison_report(
         "Balanced_Accuracy",
         "Log_Loss",
     ]
-    if "CV_ROC_AUC" in df_results.columns:
-        display_cols.insert(1, "CV_ROC_AUC")
-        display_cols.insert(2, "CV_PR_AUC")
-    df_table = df_results[[c for c in display_cols if c in df_results.columns]].copy()
+    avail_cols = [c for c in display_cols if c in df_results.columns]
+    df_table = _format_float_cols(df_results[avail_cols].copy(), decimal_places=4)
 
     # Determine best model based on PR_AUC and ROC_AUC
     best_row = df_results.sort_values(by=["PR_AUC", "ROC_AUC"], ascending=False).iloc[0]
@@ -218,9 +259,10 @@ def generate_comparison_report(
     top_features_md = ""
     for name, df_imp in importances_dict.items():
         safe_name = name.lower().replace(" ", "_")
-        top5 = df_imp.head(5)[["Feature", "Relative_Pct"]].to_markdown(index=False)
-        top_features_md += f"#### Top 5 Đặc trưng — {name}\n\n![{name} Top Features](feature_importance_{safe_name}.png)\n\n{top5}\n\n"
+        top5_str = _format_importance_table(df_imp, top_k=5)
+        top_features_md += f"#### Top 5 Đặc trưng — {name}\n\n![{name} Top Features](feature_importance_{safe_name}.png)\n\n{top5_str}\n\n"
 
+    sec_idx = 4
     lift_section = ""
     if lift_res_dict:
         lift_summary_rows = []
@@ -240,19 +282,53 @@ def generate_comparison_report(
 
 ---
 
-## 5. SO SÁNH HỆ SỐ LIFT VÀ PHÂN VỊ RỦI RO (DECILE LIFT COMPARISON)
+## {sec_idx}. SO SÁNH HỆ SỐ LIFT VÀ PHÂN VỊ RỦI RO (DECILE LIFT COMPARISON)
 
 ![Champion Model Lift and Cumulative Gains Curve](lift_and_gains_curve.png)
 
 {df_lift_summary.to_markdown(index=False)}
 """
+            sec_idx += 1
+
+    aux_comp_section = ""
+    aux_entry = next(
+        (
+            getattr(m, "auxiliary_temporal_metrics", None) or getattr(m, "auxiliary_nonlinear_metrics", None)
+            for m in models_dict.values()
+            if getattr(m, "auxiliary_temporal_metrics", None) or getattr(m, "auxiliary_nonlinear_metrics", None)
+        ),
+        None,
+    )
+    if aux_entry and isinstance(aux_entry, dict):
+        aux_rows = []
+        for k in ["Final_Val_Recon_MSE", "Final_Train_Recon_MSE", "ROC_AUC", "PR_AUC", "F1_Score", "Recall", "Precision", "Accuracy", "latent_dim", "hidden_dim", "seq_len", "epochs"]:
+            if k in aux_entry:
+                val = f"{aux_entry[k]:.4f}" if isinstance(aux_entry[k], (int, float, np.floating)) else str(aux_entry[k])
+                aux_rows.append({"Chỉ số Biểu diễn": k, "Giá trị": val})
+        if aux_rows:
+            df_aux = pd.DataFrame(aux_rows)
+            aux_comp_section = f"""
+
+---
+
+## {sec_idx}. HIỆU NĂNG MÔ HÌNH HỌC BIỂU DIỄN CHUỖI HÀNH VI ({aux_entry.get('Model', 'BiGRUTemporalAutoencoder')})
+
+Biểu diễn không gian ẩn được trích xuất từ chuỗi sự kiện thô nhiều tháng (giao dịch, đăng nhập, khiếu nại) để bổ trợ cho mô hình chính:
+
+{df_aux.to_markdown(index=False)}
+"""
+            sec_idx += 1
+
+    strategy_sec_idx = sec_idx
+
+    data_path_str = getattr(config.features, "data_path", "data/full_bank_data.csv")
 
     md_content = f"""# BÁO CÁO ĐỐI ĐẦU VÀ SO SÁNH TOÀN DIỆN CÁC MÔ HÌNH (MODEL COMPARISON)
 ## LOGISTIC REGRESSION vs. RANDOM FOREST vs. XGBOOST
 ### DỰ BÁO RỦI RO RỜI BỎ KHÁCH HÀNG (DIGITAL BANK CHURN PREDICTION)
 
 **Thời gian thực thi:** `{timestamp}`  
-**Tập dữ liệu:** `{config.features.data_path}`  
+**Tập dữ liệu:** `{data_path_str}`  
 **Cấu hình hợp nhất:** [`config/config.yaml`](../config/config.yaml)  
 
 ---
@@ -273,7 +349,7 @@ Bảng đối đầu trực tiếp giữa 3 họ thuật toán đại diện: Tu
 - **ROC-AUC:** `{best_row['ROC_AUC']:.4f}` — Xếp hạng xác suất khách hàng rời bỏ chính xác nhất trên toàn bộ miền phân bố.
 - **PR-AUC:** `{best_row['PR_AUC']:.4f}` — Tiêu chuẩn vàng cho tập dữ liệu mất cân bằng (tỷ lệ churn ~20.37%).
 - **F1-Score:** `{best_row['F1_Score']:.4f}` (Precision: `{best_row['Precision']:.4f}`, Recall: `{best_row['Recall']:.4f}`).
-- **Khả năng bắt khách hàng rời bỏ:** TP = `{best_row['TP']}` / `{best_row['TP'] + best_row['FN']}` khách hàng thực tế rời bỏ.
+- **Khả năng bắt khách hàng rời bỏ:** TP = `{best_row.get('TP', 'N/A')}` / `{best_row.get('TP', 0) + best_row.get('FN', 0)}` khách hàng thực tế rời bỏ.
 
 ### 2.2. So sánh đặc tính của 3 họ thuật toán:
 1. **Logistic Regression (Linear Baseline & Interpretability):**
@@ -291,16 +367,17 @@ Bảng đối đầu trực tiếp giữa 3 họ thuật toán đại diện: Tu
 ## 3. TOP ĐẶC TRƯNG HÀNG ĐẦU CỦA TỪNG MÔ HÌNH
 
 {top_features_md}
-
+{lift_section}
+{aux_comp_section}
 ---
 
-## 4. KHUYẾN NGHỊ VẬN HÀNH THỰC TẾ (PRODUCTION STRATEGY)
+## {strategy_sec_idx}. KHUYẾN NGHỊ VẬN HÀNH THỰC TẾ (PRODUCTION STRATEGY)
 
 1. **Triển khai Mô hình chính (Primary Scoring Engine):**
    - Sử dụng **XGBoost** làm engine tính điểm rủi ro rời bỏ định kỳ hàng ngày (Batch Scoring) cho toàn bộ khách hàng hoạt động, cung cấp danh sách ưu tiên cao cho đội ngũ chăm sóc khách hàng (Retention RM).
 2. **Mô hình giải trình & Baseline (Challenger / Fallback):**
    - Sử dụng **Logistic Regression** để kiểm tra tính nhất quán và giải trình các nguyên nhân rời bỏ vĩ mô cho cấp quản lý.
-{lift_section}
+
 ---
 *Báo cáo được sinh tự động bởi hệ thống Digital Bank Churn Prediction Pipeline — Module 5: Model Development.*
 """
@@ -331,35 +408,108 @@ def generate_train_report(
     chart_path = Path(output_filepath).parent / chart_name
     plot_feature_importance(df_imp, chart_path, model_name=model_display, top_k=15)
 
-    top15 = df_imp.head(15).to_markdown(index=False)
-    metrics_table = pd.DataFrame([{
-        "Metric": k,
-        "Value": f"{v:.4f}" if isinstance(v, float) else str(v)
-    } for k, v in metrics.items() if k not in ("X_train_Shape", "X_test_Shape")]).to_markdown(index=False)
+    top15_markdown = _format_importance_table(df_imp, top_k=15)
 
+    # 1. Performance Metrics Table
+    perf_keys = [
+        ("ROC_AUC", "Khả năng phân biệt tổng thể giữa khách hàng rời bỏ và ở lại"),
+        ("PR_AUC", "Độ chính xác trung bình trên dữ liệu mất cân bằng (Baseline: ~20.4%)"),
+        ("F1_Score", "Trung bình điều hòa giữa Precision và Recall"),
+        ("Precision", "Tỷ lệ khách hàng cảnh báo rời bỏ thực sự rời bỏ"),
+        ("Recall", "Tỷ lệ nhận diện thành công khách hàng rời bỏ thực tế"),
+        ("Accuracy", "Tỷ lệ dự báo đúng trên toàn bộ tập kiểm thử"),
+        ("Balanced_Accuracy", "Trung bình cộng độ nhạy của 2 lớp (giảm thiên lệch đa số)"),
+        ("Log_Loss", "Độ mất mát entropy chéo và chất lượng xác suất hiệu chuẩn"),
+    ]
+    perf_rows = []
+    for k, desc in perf_keys:
+        if k in metrics:
+            val = metrics[k]
+            val_str = f"{val:.4f}" if isinstance(val, (int, float, np.floating)) else str(val)
+            perf_rows.append({"Chỉ số (Metric)": k, "Giá trị": val_str, "Ý nghĩa Nghiệp vụ": desc})
+    df_perf = pd.DataFrame(perf_rows)
+
+    # 2. Training Metadata Table
+    meta_keys = [
+        ("Model", "Mô hình thuật toán"),
+        ("Threshold", "Ngưỡng quyết định phân lớp (Decision Threshold)"),
+        ("Num_Features", "Số lượng đặc trưng đầu vào"),
+        ("SMOTE_Applied", "Áp dụng kỹ thuật cân bằng mẫu SMOTE"),
+        ("X_train_Shape", "Kích thước tập huấn luyện ban đầu"),
+        ("X_val_Shape", "Kích thước tập validation"),
+        ("X_test_Shape", "Kích thước tập kiểm thử độc lập"),
+    ]
+    meta_rows = []
+    for k, label in meta_keys:
+        if k in metrics:
+            meta_rows.append({"Tham số": label, "Giá trị": str(metrics[k])})
+    df_meta = pd.DataFrame(meta_rows)
+
+    # Confusion matrix calculations
+    tp = metrics.get("TP", 0)
+    fn = metrics.get("FN", 0)
+    tn = metrics.get("TN", 0)
+    fp = metrics.get("FP", 0)
+    total_churn = tp + fn if (tp + fn) > 0 else 1
+    total_non_churn = tn + fp if (tn + fp) > 0 else 1
+
+    sec_idx = 4
     lift_section = ""
     if lift_res:
         df_dec = lift_res.get("df_deciles")
         df_comp = lift_res.get("df_comparison")
         top10_lift = df_dec.iloc[0]["Decile_Lift"] if df_dec is not None and len(df_dec) > 0 else "N/A"
         top20_lift = df_dec.iloc[1]["Cum_Lift"] if df_dec is not None and len(df_dec) > 1 else "N/A"
+
+        dec_md = _format_float_cols(df_dec, decimal_places=4).to_markdown(index=False) if df_dec is not None else ""
+        comp_md = _format_float_cols(df_comp, decimal_places=4).to_markdown(index=False) if df_comp is not None else ""
+
         lift_section = f"""
 
 ---
 
-## 4. ĐÁNH GIÁ HỆ SỐ LIFT & 10 PHÂN VỊ RỦI RO (DECILE LIFT & GAINS)
+## {sec_idx}. ĐÁNH GIÁ HỆ SỐ LIFT & 10 PHÂN VỊ RỦI RO (DECILE LIFT & GAINS)
 
 ![Lift and Cumulative Gains Curve](lift_and_gains_curve.png)
 
-### 4.1. Bảng 10 phân vị rủi ro (Decile Lift Analysis):
+### {sec_idx}.1. Bảng 10 phân vị rủi ro (Decile Lift Analysis):
 * **Top 10% rủi ro cao nhất (Decile D1):** Đạt hệ số **Lift {top10_lift}** so với chọn ngẫu nhiên.
 * **Top 20% rủi ro cao nhất (Decile D1 + D2):** Đạt hệ số **Cumulative Lift {top20_lift}**.
 
-{df_dec.to_markdown(index=False) if df_dec is not None else ""}
+{dec_md}
 
-### 4.2. So sánh với các Baselines & Điểm vận hành tối ưu:
-{df_comp.to_markdown(index=False) if df_comp is not None else ""}
+### {sec_idx}.2. So sánh với các Baselines & Điểm vận hành tối ưu:
+
+{comp_md}
 """
+        sec_idx += 1
+
+    aux_section = ""
+    aux = getattr(model, "auxiliary_temporal_metrics", None) or getattr(model, "auxiliary_nonlinear_metrics", None)
+    if aux and isinstance(aux, dict):
+        aux_csv = Path(output_filepath).parent / "temporal_embedding_metrics.csv"
+        try:
+            pd.DataFrame([aux]).to_csv(aux_csv, index=False)
+        except Exception:
+            pass
+        aux_rows = []
+        for k in ["Final_Val_Recon_MSE", "Final_Train_Recon_MSE", "ROC_AUC", "PR_AUC", "F1_Score", "Recall", "Precision", "Accuracy", "latent_dim", "hidden_dim", "seq_len", "epochs"]:
+            if k in aux:
+                val = f"{aux[k]:.4f}" if isinstance(aux[k], (int, float, np.floating)) else str(aux[k])
+                aux_rows.append({"Chỉ số Biểu diễn": k, "Giá trị": val})
+        if aux_rows:
+            df_aux = pd.DataFrame(aux_rows)
+            aux_section = f"""
+
+---
+
+## {sec_idx}. HIỆU NĂNG MÔ HÌNH HỌC BIỂU DIỄN CHUỖI HÀNH VI ({aux.get('Model', 'BiGRUTemporalAutoencoder')})
+
+Biểu diễn không gian ẩn được trích xuất từ chuỗi sự kiện thô nhiều tháng (giao dịch, đăng nhập, khiếu nại) để bổ trợ cho mô hình chính:
+
+{df_aux.to_markdown(index=False)}
+"""
+            sec_idx += 1
 
     md_content = f"""# BÁO CÁO HUẤN LUYỆN MÔ HÌNH {model_display.upper()} (TRAINING REPORT)
 ## DỰ BÁO RỦI RO RỜI BỎ KHÁCH HÀNG (CUSTOMER CHURN PREDICTION)
@@ -373,16 +523,22 @@ def generate_train_report(
 
 ## 1. KẾT QUẢ ĐÁNH GIÁ TRÊN TẬP TEST
 
-{metrics_table}
+### 1.1. Chỉ số hiệu năng phân loại (Performance Metrics)
+
+{df_perf.to_markdown(index=False)}
+
+### 1.2. Thông tin mẫu và cấu hình huấn luyện
+
+{df_meta.to_markdown(index=False)}
 
 ---
 
 ## 2. MA TRẬN NHẦM LẪN (CONFUSION MATRIX)
 
-- **True Positives (TP - Bắt đúng khách hàng rời bỏ):** `{metrics.get('TP', 'N/A')}`
-- **False Negatives (FN - Bỏ sót khách hàng rời bỏ):** `{metrics.get('FN', 'N/A')}`
-- **True Negatives (TN - Nhận diện đúng khách hàng ở lại):** `{metrics.get('TN', 'N/A')}`
-- **False Positives (FP - Cảnh báo nhầm khách hàng ở lại):** `{metrics.get('FP', 'N/A')}`
+- **True Positives (TP - Bắt đúng khách hàng rời bỏ):** `{tp}` ({tp / total_churn * 100:.2f}% tổng khách hàng rời bỏ)
+- **False Negatives (FN - Bỏ sót khách hàng rời bỏ):** `{fn}` ({fn / total_churn * 100:.2f}% khách hàng rời bỏ bị bỏ sót)
+- **True Negatives (TN - Nhận diện đúng khách hàng ở lại):** `{tn}` ({tn / total_non_churn * 100:.2f}% khách hàng ở lại nhận diện đúng)
+- **False Positives (FP - Cảnh báo nhầm khách hàng ở lại):** `{fp}` ({fp / total_non_churn * 100:.2f}% khách hàng ở lại bị cảnh báo nhầm)
 
 ---
 
@@ -390,8 +546,9 @@ def generate_train_report(
 
 ![Biểu đồ đặc trưng quan trọng]({chart_name})
 
-{top15}{lift_section}
-
+{top15_markdown}
+{lift_section}
+{aux_section}
 ---
 *Báo cáo được sinh tự động bởi hệ thống Digital Bank Churn Prediction Pipeline — Module 5: Model Development.*
 """
@@ -446,4 +603,3 @@ def generate_report(
         )
     else:
         raise ValueError(f"Unknown report mode '{mode}'. Expected: compare | ablation | train")
-

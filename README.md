@@ -72,14 +72,11 @@ intro-to-ba/
 │   ├── categorical_encoding.py      # One-Hot Encoding & Smoothed Target Encoding
 │   ├── balancing.py                 # SMOTE class balancing (train set only)
 │   ├── feature_selection.py         # Mutual Information (`MI_Score`) & ranking
-│   └── nonlinear/                   # Non-linear & Neural Representation Sub-package
+│   └── temporal/                    # Temporal Behavioral Sequence Representation Package
 │       ├── __init__.py              # Clean exports
-│       ├── base.py                  # PyTorch device detection & checkpoint save/load
-│       ├── kernel.py                # Nystroem RBF kernel Hilbert space mapping
-│       ├── autoencoder.py           # Tabular Denoising Autoencoder (DAE)
-│       ├── supervised_latent.py     # Supervised TabNet MLP (Fisher-discriminant bottleneck)
-│       ├── contrastive.py           # Supervised Contrastive metric learning (SupCon)
-│       ├── manager.py               # NonlinearRepresentationManager orchestrator
+│       ├── extractor.py             # Multi-period monthly event snapshot extractor (T=6, D=10)
+│       ├── model.py                 # Bi-GRU Sequence Autoencoder (Self-supervised MSE loss)
+│       ├── manager.py               # TemporalEmbeddingManager (extraction, caching, merging)
 │       └── benchmark.py             # Representation benchmark comparison suite
 │
 ├── models/                          # Classifier Architectures & Tuner
@@ -91,7 +88,7 @@ intro-to-ba/
 │   ├── tuner.py                     # Optuna hyperparameter optimization engine
 │   ├── recall_eval.py               # Recall optimization, baseline benchmarking & Decile Lift
 │   └── saved/                       # Serialized model artifacts (.json, .pkl)
-│       └── nonlinear/               # PyTorch neural checkpoints (*_encoder.pt)
+│       └── temporal/                # PyTorch recurrent checkpoints (temporal_encoder.pt)
 │
 ├── visualization/                   # Plotting Engine (300 DPI Figures)
 │   ├── __init__.py                  # Exports plotting utilities
@@ -161,12 +158,12 @@ python main.py [--mode {compare,ablation,tune,train,recall,separability,eda,repr
                [--focal-loss]
                [--focal-gamma FOCAL_GAMMA]
                [--focal-alpha FOCAL_ALPHA]
-               [--allow-nonlinear-representations]
-               [--nonlinear-method {supervised,contrastive,autoencoder,kernel}]
-               [--nonlinear-mode {augment,replace}]
-               [--nonlinear-latent-dim NONLINEAR_LATENT_DIM]
-               [--nonlinear-epochs NONLINEAR_EPOCHS]
-               [--nonlinear-checkpoint-dir NONLINEAR_CHECKPOINT_DIR]
+               [--enable-temporal-embeddings]
+               [--temporal-dim TEMPORAL_DIM]
+               [--temporal-epochs TEMPORAL_EPOCHS]
+               [--feature-selection-metric {MI_Score,Pearson,MI_Pearson_Hybrid,RF_Importance}]
+               [--hybrid-pearson-weight HYBRID_PEARSON_WEIGHT]
+               [--top-k-features TOP_K_FEATURES]
                [--rebuild-dataset]
                [--output-dir OUTPUT_DIR]
                [--report-name REPORT_FILENAME]
@@ -330,29 +327,32 @@ python -m visualization.separability --output-dir results/visualizations --sampl
 
 ---
 
-#### 7. Representation Learning & Feature Space Transformation (`--mode representation`)
-Evaluates 4 distinct feature space transformation paradigms modularized under [`preprocessing/nonlinear/`](file:///d:/Introduction%20to%20BA/intro-to-ba/preprocessing/nonlinear/) to transform non-linearly entangled features into highly discriminative representations:
-1. **Nystroem RBF Kernel Mapping (`kernel.py`):** Projects features into an explicit finite-dimensional Hilbert space approximation ($d=100$).
-2. **Tabular Denoising Autoencoder (`autoencoder.py`):** Unsupervised reconstruction learning under swap and Gaussian corruption to extract manifold bottleneck vectors ($z \in \mathbb{R}^{16}$).
-3. **Supervised Deep Tabular Bottleneck Latent (`supervised_latent.py`):** Trains a multi-layer neural network with SiLU, BatchNorm, and class-weighted BCE loss, extracting the 16-dimensional bottleneck representation ($z$). Triples Fisher discriminative ratio and elevates Logistic Regression PR-AUC from 0.54 to 0.64!
-4. **Supervised Contrastive Metric Learning (`contrastive.py`):** Optimizes representations on the unit hypersphere with contrastive temperature loss, pulling intra-class customers together and separating churn vs retained by maximum angular margins.
-5. **Hybrid Augmented Space ($[X, z]$):** Concatenates raw engineered features with the neural bottleneck representations (`--nonlinear-mode augment`).
+#### 7. Temporal Behavioral Sequence Representation & Embeddings (`--mode representation`)
+Extracts rich longitudinal customer behavioral dynamics directly from raw event streams (`data/full_dataset/` with ~500k transactions, 1.3M logins, and 13k complaints) modularized under [`preprocessing/temporal/`](file:///d:/Introduction%20to%20BA/intro-to-ba/preprocessing/temporal/):
 
-**Automatic Checkpoint Caching (`models/saved/nonlinear/`):**
-Neural representation modules automatically check for existing checkpoints (`models/saved/nonlinear/{method}_encoder.pt`). If missing, the network trains on the training partition and serializes weights. If found, weights are loaded directly, bypassing re-training in sub-second inference.
+1. **Multi-Period Monthly Snapshot Extractor (`extractor.py`):**
+   Aggregates raw event streams across 6 monthly snapshots ($T=6$, April–September 2026) along 10 longitudinal behavioral channels (inward/outward transaction volumes, net flow, transaction count, cancellation rate, average ticket size, login frequency, login failure rate, mobile device share, complaint count), constructing a normalized 3D tensor $(N, T=6, D=10)$.
+2. **Self-Supervised Bi-GRU Sequence Autoencoder (`model.py`):**
+   Encodes the 6-month temporal sequence into a dense latent behavioral embedding $z \in \mathbb{R}^{16}$ using a Bidirectional GRU encoder, reconstructed by a GRU decoder trained with Mean Squared Error (MSE) loss. **Completely unsupervised and self-supervised ($y$ is never used) $\to$ guarantees Zero Target Leakage!**
+3. **Feature Space Augmentation & High-Performance Caching (`manager.py`):**
+   Concatenates latent vectors $[z_0, \dots, z_{15}]$ to tabular customer analytical records (`temporal_z0`...`temporal_z15`). Automatically caches embeddings to `data/processed/temporal_embeddings.csv` and serializes model weights to `models/saved/temporal/temporal_encoder.pt` for sub-second downstream inference.
+4. **Hybrid Multi-Metric Feature Selection (`feature_selection.py`):**
+   Offers Pearson correlation (`Pearson`), Mutual Information (`MI_Score`), and a weighted hybrid score (`MI_Pearson_Hybrid`):
+   $$\text{Score}_{\text{hybrid}} = w_p \cdot \text{Pearson}_{\text{norm}} + (1 - w_p) \cdot \text{MI}_{\text{norm}}$$
+   preserving both non-linear dependencies (e.g. U-shaped `products_number`) and monotonic trends (e.g. `age`, `recency_days`).
 
-*Outputs generated in:* `results/visualizations/`
-- `representation_benchmark_results.csv` (Performance table across all representation spaces)
+*Outputs generated in:* `results/temporal/`
+- `temporal_embedding_comparison.csv` (Downstream performance table comparing baseline tabular vs. temporal augmented models)
 
 ```bash
-# Run representation learning benchmark suite via main CLI
-python main.py --mode representation
+# Run temporal representation learning benchmark suite via main CLI
+python main.py --mode representation --temporal-epochs 25
 
-# Train single model augmented with supervised neural representations
-python main.py --mode train --model-type lr --allow-nonlinear-representations
+# Train single model augmented with 16D Bi-GRU temporal embeddings
+python main.py --mode train --model-type xgboost --enable-temporal-embeddings
 
-# Train with contrastive embeddings and custom bottleneck dimension
-python main.py --mode train --model-type xgboost --allow-nonlinear-representations --nonlinear-method contrastive --nonlinear-latent-dim 32
+# Run Optuna tuning with hybrid Pearson/MI feature selection and temporal embeddings
+python main.py --mode tune --model-type xgboost --enable-temporal-embeddings --feature-selection-metric MI_Pearson_Hybrid --hybrid-pearson-weight 0.50 --top-k-features 50
 ```
 
 ---
@@ -373,14 +373,14 @@ python main.py --mode train --model-type xgboost --allow-nonlinear-representatio
 | `--focal-gamma` | float | `2.0` | Focusing parameter $\gamma$ for Focal Loss (reduces easy sample gradients when $\gamma > 0$). |
 | `--focal-alpha` | float | `0.25` | Positive class balancing factor $\alpha$ for Focal Loss (churn label weight). |
 | `--decay-half-life`| float | `60.0` | Half-life $t_{1/2}$ in days for exponential recency decay weighting. |
-| `--allow-nonlinear-representations` | flag | `False` | Enables non-linear kernel / neural representation learning in the pipeline. |
-| `--nonlinear-method` | string | `null` (uses config) | Non-linear representation method: `supervised`, `contrastive`, `autoencoder`, or `kernel`. |
-| `--nonlinear-mode` | string | `null` (uses config) | Mode: `augment` (concatenates latent vectors with raw features) or `replace`. |
-| `--nonlinear-latent-dim` | integer | `null` (uses config) | Bottleneck latent dimension for neural embeddings (default: 16). |
-| `--nonlinear-epochs` | integer | `null` (uses config) | Number of epochs for neural network representation training. |
-| `--nonlinear-checkpoint-dir` | string | `null` (uses config) | Directory to save/load neural checkpoints (default: `models/saved/nonlinear`). |
+| `--enable-temporal-embeddings` | flag | `False` | Enables 6-month longitudinal event sequence extraction from raw logs and Bi-GRU Autoencoder embeddings ($z$). |
+| `--temporal-dim` | integer | `16` | Latent embedding dimension $z$ for temporal behavioral representation. |
+| `--temporal-epochs` | integer | `25` | Number of training epochs for Bi-GRU Sequence Autoencoder. |
+| `--feature-selection-metric` | string | `null` (uses config) | Feature selection metric: `MI_Score`, `Pearson`, `MI_Pearson_Hybrid`, or `RF_Importance`. |
+| `--hybrid-pearson-weight` | float | `0.50` | Weight $w_p \in [0, 1]$ of Pearson correlation vs MI in `MI_Pearson_Hybrid`. |
+| `--top-k-features` | integer | `null` (uses config) | Number of top features to select after multi-metric ranking. |
 | `--rebuild-dataset`| flag | `False` | Forces multi-table ETL rebuild from `data/full_dataset/`. |
-| `--output-dir` | string | `null` (auto-routed) | Custom directory for outputs; defaults to `results/{comparison\|lr\|rf\|xgboost}`. |
+| `--output-dir` | string | `null` (auto-routed) | Custom directory for outputs; defaults to `results/{comparison\|lr\|rf\|xgboost\|temporal}`. |
 | `--report-name` | string | `null` (auto-templated)| Custom report filename; defaults to `{mode}_{model}_report.md`. |
 
 ---
@@ -527,27 +527,26 @@ features:
     smote_sampling_strategy: "auto"  # Equalize minority class to 1:1 on train fold
     smote_k_neighbors: 5
 
-  # Feature Selection (Mutual Information)
+  # Feature Selection (MI, Pearson, MI_Pearson_Hybrid, RF_Importance)
   feature_selection:
-    top_k_features: null             # Set an integer (e.g., 40) or null to keep all
-    feature_selection_metric: "MI_Score"  # Mutual Information Classif (mutual_info_classif)
+    top_k_features: null                  # Set an integer (e.g., 50) or null to keep all
+    feature_selection_metric: "MI_Score"  # "MI_Score" | "Pearson" | "MI_Pearson_Hybrid" | "RF_Importance"
+    hybrid_pearson_weight: 0.50           # Weight of Pearson vs MI (0.0 to 1.0)
     compute_feature_importance: false
 
-  # Non-Linear & Neural Representation Learning
-  allow_nonlinear_representations: false
-  nonlinear_representations:
-    method: "supervised"            # "supervised" | "contrastive" | "autoencoder" | "kernel"
-    mode: "augment"                 # "augment" (concatenates with raw features) | "replace"
-    latent_dim: 16                  # Bottleneck representation dimension
-    hidden_dims: [64, 32]           # MLP hidden layer widths
-    epochs: 25                      # Training epochs
+  # Temporal Multi-Snapshot Sequence Embeddings (Self-Supervised Bi-GRU)
+  temporal_embeddings:
+    enabled: false                        # Set to true or use --enable-temporal-embeddings
+    raw_data_dir: "data/full_dataset"
+    latent_dim: 16                        # Dimensionality of latent embeddings z (temporal_z0...z15)
+    hidden_dim: 64                        # Bi-GRU hidden state size
+    num_layers: 2                         # Number of recurrent layers
+    epochs: 25                            # Training epochs for sequence autoencoder
     batch_size: 256
     learning_rate: 0.001
     dropout: 0.20
-    noise_level: 0.10
-    temperature: 0.07
-    kernel_components: 100
-    checkpoint_dir: "models/saved/nonlinear"
+    checkpoint_dir: "models/saved/temporal"
+    cache_path: "data/processed/temporal_embeddings.csv"
 ```
 
 ---

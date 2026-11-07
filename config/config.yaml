@@ -8,6 +8,7 @@ dataset:
   raw_full_dataset_dir: "data/full_dataset"
   rebuild_full_dataset: false
   target_col: "churn"
+  group_col: "customer_id"          # Phân tách khách hàng cô lập (Customer isolation) né rò rỉ dữ liệu panel
   test_size: 0.10                   # 10% tập Test độc lập
   val_size: 0.10                    # 10% tập Validation
   enable_cv: true                   # Kích hoạt K-Fold Cross-Validation
@@ -30,7 +31,7 @@ features:
   enable_target_encoding: true      # Smoothed Target Encoding (m-estimate)
   enable_smote: true                # Cân bằng mẫu thiểu số bằng SMOTE trên tập Train
   enable_feature_selection: false   # Lọc đặc trưng Top-K theo độ quan trọng
-  allow_nonlinear_representations: false # Biến đổi không gian đặc trưng phi tuyến / neural latent vectors
+  enable_temporal_embeddings: true # Biểu diễn chuỗi sự kiện thời gian (Multi-snapshot Bi-GRU Autoencoder)
 
   # Chi tiết biến đổi phân phối lệch (Skewness sub-toggles)
   skewness_transform:
@@ -109,29 +110,25 @@ features:
     churn_weight_multiplier: 1.5    # Phạt nặng hơn khi bỏ sót khách hàng churn (FN)
     normalize: true                 # Chuẩn hóa để giữ nguyên thang đo gradient
 
-  # Chi tiết lựa chọn đặc trưng (Feature selection)
+  # Chi tiết lựa chọn đặc trưng (Feature selection: MI, Pearson, hoặc Hybrid)
   feature_selection:
     top_k_features: null
-    feature_selection_metric: "MI_Score"  # Sử dụng Mutual Information Classif theo chuẩn dự án
+    feature_selection_metric: "MI_Score"  # "MI_Score" | "Pearson" | "MI_Pearson_Hybrid" | "RF_Importance"
+    hybrid_pearson_weight: 0.50          # Trọng số cho Pearson trong MI_Pearson_Hybrid (0.0 đến 1.0)
     compute_feature_importance: false
 
-  # Chi tiết biểu diễn phi tuyến & Neural Latent Embeddings
-  nonlinear_representations:
-    enabled: false                      # allow_nonlinear_representations
-    method: "supervised"                # "supervised" | "contrastive" | "autoencoder" | "kernel"
-    mode: "augment"                     # "augment" (ghép [X, z]) | "replace" (chỉ dùng z)
-    latent_dim: 16                      # Chiều của vector ẩn bottleneck z
-    hidden_dims:
-      - 64
-      - 32
-    epochs: 30                          # Số epoch huấn luyện mạng neural
+  # Chi tiết biểu diễn chuỗi hành vi thời gian (Temporal Multi-Snapshot Sequence Embeddings)
+  temporal_embeddings:
+    enabled: true                      # Bật/tắt khai thác chuỗi sự kiện thô từ transactions, logins, complaints
+    latent_dim: 16                      # Kích thước vector ẩn nén hành vi z (nối vào bảng đặc trưng)
+    hidden_dim: 64                      # Số nơ-ron hidden trong Bi-GRU Encoder & Decoder
+    num_layers: 2                       # Số lớp Bi-GRU
+    epochs: 30                          # Số epoch huấn luyện Self-Supervised Sequence Autoencoder
     batch_size: 256                     # Kích thước mini-batch
-    learning_rate: 0.001                # Tốc độ học AdamW
-    dropout: 0.20                       # Tỷ lệ Dropout chống quá khớp
-    noise_level: 0.15                   # Mức nhiễu cho Denoising Autoencoder
-    temperature: 0.10                   # Tham số nhiệt độ cho Supervised Contrastive Loss
-    kernel_components: 32               # Số chiều cho Nystroem RBF kernel
-    checkpoint_dir: "models/saved/nonlinear" # Thư mục lưu / nạp checkpoint weights (.pt)
+    learning_rate: 0.005                # Tốc độ học AdamW
+    dropout: 0.20                       # Dropout chống quá khớp
+    checkpoint_dir: "models/saved/temporal" # Thư mục lưu checkpoint trọng số mô hình PyTorch
+    cache_path: "data/processed/temporal_embeddings.csv" # Cache vector embeddings để load tức thì
 
 # 3. CẤU HÌNH MÔ HÌNH (Model Configuration: xgboost | lr | rf)
 model:

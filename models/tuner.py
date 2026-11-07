@@ -9,6 +9,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import shutil
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
@@ -196,11 +197,17 @@ class OptunaTuner:
             print("=======================================================")
 
         # 1. Partition dataset via DataSplitter: keep Test partition strictly untouched
+        feat_cfg = getattr(self.config, "features", self.config)
+        test_sz = getattr(feat_cfg, "test_size", 0.20)
+        val_sz = getattr(feat_cfg, "val_size", 0.10)
+        grp_col = getattr(feat_cfg, "group_col", "customer_id")
+
         splitter = DataSplitter(
-            test_size=self.config.features.test_size,
-            val_size=getattr(self.config.features, "val_size", 0.10),
-            stratify=self.config.features.stratify,
+            test_size=test_sz,
+            val_size=val_sz,
+            stratify=getattr(feat_cfg, "stratify", True),
             random_state=self.random_state,
+            group_col=grp_col,
         )
         split = splitter.train_val_test_split(df, target_col=target)
         train_df = split.train_df
@@ -210,14 +217,36 @@ class OptunaTuner:
         # Combine train + val for CV tuning (Test remains strictly held-out!)
         cv_train_pool = pd.concat([train_df, val_df], ignore_index=True) if split.has_val else train_df
 
+        # Pre-compute fold-isolated temporal sequence encoders if enabled (Strict Inductive)
+        enable_temporal = getattr(feat_cfg, "enable_temporal_embeddings", False)
+        if enable_temporal:
+            if verbose:
+                print(f"\n[INFO] Pre-computing Fold-Isolated Temporal Sequence Encoders across {self.cv_folds} folds (Strict Inductive)...")
+            # 1. Pre-cache raw snapshot tensor for all customers so fold slicing is instantaneous (0.001s)
+            from preprocessing.temporal.extractor import TemporalSnapshotExtractor
+            raw_data_dir = getattr(feat_cfg, "raw_full_dataset_dir", "data/full_dataset")
+            raw_extractor = TemporalSnapshotExtractor(raw_data_dir=raw_data_dir)
+            raw_extractor.extract(df["customer_id"].values, verbose=verbose)
+
+            # 2. Pre-warm isolated encoder per CV fold and cache both train & val representations
+            for fold in splitter.get_cv_folds(cv_train_pool, target_col=target, n_splits=self.cv_folds):
+                p_fold = FeatureEngineeringPipeline(copy.deepcopy(feat_cfg), fold_id=fold.fold)
+                p_fold.fit(fold.train_df, target_col=target)
+                p_fold.transform(fold.val_df)
+            if verbose:
+                print(f"[OK] All {self.cv_folds} fold-isolated temporal encoders pre-computed and cached!\n")
+            # Ensure Optuna trials read from the newly generated cache without re-training
+            feat_cfg.temporal_force_retrain = False
+            self.config.features.temporal_force_retrain = False
+
         # 2. Define Optuna Objective with K-Fold CV
         def objective(trial: optuna.Trial) -> float:
             sampled_params = self._sample_params(trial)
             fold_scores: List[float] = []
 
             for fold in splitter.get_cv_folds(cv_train_pool, target_col=target, n_splits=self.cv_folds):
-                # Fresh pipeline for each fold to prevent data leakage
-                fold_pipe = FeatureEngineeringPipeline(copy.deepcopy(self.config.features))
+                # Fresh pipeline for each fold to prevent data leakage (with fold-isolated temporal embeddings)
+                fold_pipe = FeatureEngineeringPipeline(copy.deepcopy(self.config.features), fold_id=fold.fold)
                 fold_pipe.fit(fold.train_df, target_col=target)
 
                 # Transform partitions
@@ -304,7 +333,7 @@ class OptunaTuner:
             print("=======================================================")
 
         # 4. Refit Best Model on Full Training Pool & Evaluate on Independent Test Set
-        final_pipe = FeatureEngineeringPipeline(copy.deepcopy(self.config.features))
+        final_pipe = FeatureEngineeringPipeline(copy.deepcopy(self.config.features), fold_id="final")
         final_pipe.fit(cv_train_pool, target_col=target)
 
         tr_full = final_pipe.transform(cv_train_pool)
@@ -349,12 +378,10 @@ class OptunaTuner:
 
         fit_kwargs = {"sample_weight": sw_final} if sw_final is not None else {}
         if self.model_type == "xgboost":
-            if X_val_final is not None and y_val_final is not None:
-                best_model.fit(X_train_res, y_train_res, X_val=X_val_final, y_val=y_val_final, verbose=False, **fit_kwargs)
-            else:
-                # No validation split: fit on cv_train_pool with tuned n_estimators without early stopping.
-                # Strictly prevents data leakage by keeping test set completely unseen during fitting.
-                best_model.fit(X_train_res, y_train_res, X_val=None, y_val=None, verbose=False, **fit_kwargs)
+            # Note: cv_train_pool already consolidates train_df and val_df into the full training pool.
+            # Passing val_df as X_val would cause early stopping to evaluate on samples that are already
+            # present in X_train_res. Therefore, fit cleanly on X_train_res with tuned n_estimators.
+            best_model.fit(X_train_res, y_train_res, X_val=None, y_val=None, verbose=False, **fit_kwargs)
         else:
             best_model.fit(X_train_res, y_train_res, **fit_kwargs)
 

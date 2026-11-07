@@ -62,7 +62,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "'train' (single model training), "
             "'recall' (threshold optimization, high-recall analysis & baseline lift comparison), "
             "'separability' (PCA, t-SNE, bar charts, boxplots, KDE distributions & separability metrics), "
-            "'representation' (Nonlinear Kernel, DAE, Supervised & Contrastive Neural Latent embeddings)"
+            "'representation' (Bi-GRU Temporal Behavioral Sequence Embeddings benchmark)"
         ),
     )
     parser.add_argument(
@@ -143,41 +143,51 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Half-life days for exponential recency decay in sample weighting (default: 60.0)",
     )
     parser.add_argument(
+        "--enable-temporal-embeddings",
+        action="store_true",
+        help="Enable multi-snapshot Bi-GRU event sequence embeddings (transactions, logins, complaints)",
+    )
+    parser.add_argument(
+        "--temporal-epochs",
+        type=int,
+        default=None,
+        help="Number of epochs for temporal sequence autoencoder training (default: 25)",
+    )
+    parser.add_argument(
+        "--temporal-dim",
+        type=int,
+        default=None,
+        help="Latent embedding dimension z for temporal representation (default: 16)",
+    )
+    parser.add_argument(
+        "--force-retrain-temporal",
+        action="store_true",
+        help="Force re-training of Bi-GRU temporal sequence encoders from scratch, ignoring cached checkpoints",
+    )
+    parser.add_argument(
+        "--feature-selection-metric",
+        type=str,
+        default=None,
+        choices=["MI_Score", "Pearson", "MI_Pearson_Hybrid", "RF_Importance"],
+        help="Metric for feature ranking/selection (MI_Score | Pearson | MI_Pearson_Hybrid | RF_Importance)",
+    )
+    parser.add_argument(
+        "--hybrid-pearson-weight",
+        type=float,
+        default=None,
+        help="Weight of Pearson vs MI in MI_Pearson_Hybrid (0.0 to 1.0, default: 0.50)",
+    )
+    parser.add_argument(
+        "--top-k-features",
+        type=int,
+        default=None,
+        help="Top K features to retain when feature selection is enabled",
+    )
+    # Legacy alias for backward compatibility
+    parser.add_argument(
         "--allow-nonlinear-representations",
         action="store_true",
-        help="Enable non-linear neural / kernel representation learning (supervised, contrastive, autoencoder, or kernel)",
-    )
-    parser.add_argument(
-        "--nonlinear-method",
-        type=str,
-        default=None,
-        choices=["supervised", "contrastive", "autoencoder", "kernel"],
-        help="Non-linear representation method (supervised | contrastive | autoencoder | kernel)",
-    )
-    parser.add_argument(
-        "--nonlinear-mode",
-        type=str,
-        default=None,
-        choices=["augment", "replace"],
-        help="Non-linear representation mode: 'augment' (adds latent vectors to raw features) or 'replace'",
-    )
-    parser.add_argument(
-        "--nonlinear-latent-dim",
-        type=int,
-        default=None,
-        help="Bottleneck latent dimension for neural embeddings (default: 16)",
-    )
-    parser.add_argument(
-        "--nonlinear-epochs",
-        type=int,
-        default=None,
-        help="Number of epochs for neural representation training",
-    )
-    parser.add_argument(
-        "--nonlinear-checkpoint-dir",
-        type=str,
-        default=None,
-        help="Directory to save/load neural representation checkpoints (default: models/saved/nonlinear)",
+        help="(Legacy alias for --enable-temporal-embeddings)",
     )
     return parser
 
@@ -206,20 +216,28 @@ def main() -> None:
     if args.focal_alpha is not None:
         cfg.model.focal_alpha = args.focal_alpha
 
-    # Apply Non-linear Representation overrides if passed via CLI
-    if args.allow_nonlinear_representations:
-        cfg.features.allow_nonlinear_representations = True
-        print("[INFO] Non-linear & Neural Representation Learning enabled via CLI")
-    if args.nonlinear_method is not None:
-        cfg.features.nonlinear_method = args.nonlinear_method
-    if args.nonlinear_mode is not None:
-        cfg.features.nonlinear_mode = args.nonlinear_mode
-    if args.nonlinear_latent_dim is not None:
-        cfg.features.nonlinear_latent_dim = args.nonlinear_latent_dim
-    if args.nonlinear_epochs is not None:
-        cfg.features.nonlinear_epochs = args.nonlinear_epochs
-    if args.nonlinear_checkpoint_dir is not None:
-        cfg.features.nonlinear_checkpoint_dir = args.nonlinear_checkpoint_dir
+    # Apply Feature Selection overrides if passed via CLI
+    if args.feature_selection_metric is not None:
+        cfg.features.feature_selection_metric = args.feature_selection_metric
+        print(f"[INFO] Feature Selection metric set to: {args.feature_selection_metric}")
+    if args.hybrid_pearson_weight is not None:
+        cfg.features.hybrid_pearson_weight = args.hybrid_pearson_weight
+    if args.top_k_features is not None:
+        cfg.features.top_k_features = args.top_k_features
+        cfg.features.enable_feature_selection = True
+        print(f"[INFO] Feature Selection enabled: Top-{args.top_k_features} features")
+
+    # Apply Temporal Behavioral Embeddings overrides if passed via CLI
+    if args.enable_temporal_embeddings or args.allow_nonlinear_representations:
+        cfg.features.enable_temporal_embeddings = True
+        print("[INFO] Temporal Behavioral Sequence Embeddings (Bi-GRU Autoencoder) enabled via CLI")
+    if args.temporal_dim is not None:
+        cfg.features.temporal_latent_dim = args.temporal_dim
+    if args.temporal_epochs is not None:
+        cfg.features.temporal_epochs = args.temporal_epochs
+    if args.force_retrain_temporal:
+        cfg.features.temporal_force_retrain = True
+        print("[INFO] Force re-training enabled for Temporal Sequence Encoders (ignoring checkpoints)")
 
     # 2. Ingest / load dataset via pipeline (auto-orchestrates ETL if needed)
     force_rebuild = args.rebuild_dataset or getattr(cfg.features, "rebuild_full_dataset", False)
@@ -501,11 +519,11 @@ def main() -> None:
         )
 
     elif args.mode == "representation":
-        from preprocessing.nonlinear import run_representation_benchmark
+        from preprocessing.temporal.benchmark import run_temporal_representation_benchmark
 
-        target_out = args.output_dir or "results/visualizations"
+        target_out = args.output_dir or "results/temporal"
         pipe = pipeline.FeatureEngineeringPipeline(cfg.features)
-        run_representation_benchmark(
+        run_temporal_representation_benchmark(
             df=df,
             pipeline_obj=pipe,
             output_dir=target_out,
