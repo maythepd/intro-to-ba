@@ -1,81 +1,49 @@
-# Hierarchical clustering ? ph?n b?n giao
+# Hierarchical Clustering
 
-## C?u h?nh ch?t
-**StandardScaler + no_friction + Ward/Euclidean + k = 4.**
-??y l? ph?n b? sung v?o project XGBoost/RF ?? c?; kh?ng ph?i to?n b? project ch?y ??c l?p. Ch?p/merge n?i dung folder n?y v?o th? m?c g?c project c?a nh?m (c?ng c?p main.py). Ch? ch?a file m?i c?a nh?nh hierarchical, c?u h?nh ri?ng, k?t qu? t?ng h?p v? artifact. Kh?ng k?m d? li?u ngu?n ho?c b?ng t?ng kh?ch, kh?ng k?m model XGBoost/RF, kh?ng thay main.py/config.yaml/pipeline_config.py/__init__.py c?. Ch?y b?ng run_hierarchical.py ?? kh?ng c?n s?a CLI classification.
-N?u trong project nh?m ?? c? file hierarchical c?ng t?n t? l??t tr??c, c?n c?p nh?t b?ng b?n n?y. File .gitignore n?n gh?p c?c d?ng v?o file hi?n c?, kh?ng x?a quy t?c c?.
+Final configuration: **StandardScaler + no_friction + Ward linkage + 4 clusters**.
 
-## V? sao ch?n b? n?y?
-M?c ti?u l? nh?m h?nh vi d? gi?i th?ch, c? gi? tr? ?u ti?n gi? ch?n v? kh?ng thay ??i qu? m?nh khi l?y m?u l?i. Kh?ng ch?n ch? b?ng Silhouette ho?c churn cao nh?t.
+## Results
 
-| C?u h?nh k=4 | Silhouette | ARI l?y m?u l?i | Churn th?p?cao | Ch?nh l?ch ?i?m % |
-| --- | --- | --- | --- | --- |
-| Standard/no_friction ? ch?n | 0.1429 | 0.5898 | 13.80%?25.55% | 11.75 |
-| Robust/no_friction | 0.1248 | 0.3931 | 14.54%?27.16% | 12.62 |
-| Standard/no_digital | 0.1958 | 0.7357 | 14.54%?24.96% | 10.42 |
-| Standard/full | 0.1607 | 0.6514 | 14.49%?24.45% | 9.96 |
-| Robust/RFM sau l?c (ch? RF) | 0.4501 | 0.6031 | 13.89%?26.01% | 12.13 |
+All results below use 4 clusters. Higher stability ARI means more consistent groups when customers are sampled again.
 
-Robust/no_friction c? ch?nh l?ch churn l?n h?n kho?ng 0.87 ?i?m %, nh?ng ?? ?n ??nh th?p h?n r?. Standard/no_digital ?n ??nh h?n, nh?ng b? ???c ch?n ph?n bi?t ???c nh?m v?n d?ng app nh?ng l?u kh?ng giao d?ch, thu?n l?i cho th?o lu?n gi? ch?n. RF ??n gi?n l? ??i ch?ng t?t nh?ng persona ch? y?u d?a tr?n t?n su?t/recency. Silhouette gi?a c?c b? feature kh?c nhau kh?ng ph?i ph?p so s?nh ho?n to?n t??ng ???ng.
-**??y l? l?a ch?n c? tham kh?o churn tr?n ch?nh snapshot ?ang ph?n t?ch, ch?a c? t?p ??c l?p x?c nh?n.** Kh?ng tuy?n b? t?i ?u cho kh?ch m?i/qu? sau. Silhouette 0.143 cho th?y c?c nh?m c?n ch?ng l?n. k=4 ???c gi? v? c? b?n nh?m ?? l?n v? d? gi?i th?ch; kh?ng kh?ng ??nh l? s? c?m t?i ?u duy nh?t.
+| Configuration | Silhouette | Stability ARI | Lowest churn | Highest churn | Gap (percentage points) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **Standard / no_friction (selected)** | **0.1429** | **0.5898** | **13.80%** | **25.55%** | **11.75** |
+| Robust / no_friction | 0.1248 | 0.3931 | 14.54% | 27.16% | 12.62 |
+| Standard / no_digital | 0.1958 | 0.7357 | 14.54% | 24.96% | 10.42 |
+| Standard / full | 0.1607 | 0.6514 | 14.49% | 24.45% | 9.96 |
+| Robust / RFM after filtering (R and F only) | 0.4501 | 0.6031 | 13.89% | 26.01% | 12.13 |
 
-## Persona cu?i c?ng
-S? li?u h?nh vi d??i ??y l? trung v?, kh?ng ph?i m?i kh?ch trong nh?m ??u gi?ng nhau. ID c?m kh?ng ph?i th? t? r?i ro.
+### Selected customer groups
 
-| ID | Persona | Kh?ch | ??c ?i?m | Churn |
-| --- | --- | --- | --- | --- |
-| 0 | Giao d?ch v? d?ng app t?ch c?c | 3232 | Recency 3.04 ng?y; 7.48 giao d?ch ch? ??ng/th?ng; 19.46 login th?nh c?ng/th?ng | 13.80% |
-| 1 | V?n d?ng app nh?ng l?u kh?ng giao d?ch | 3018 | Recency 143.00 ng?y; 1.16 giao d?ch/th?ng; 15.14 login/th?ng; median ti?n ra Q3 b?ng 0 | 25.55% |
-| 2 | ?t giao d?ch v? ?t d?ng app | 2521 | Recency 120.01 ng?y; 1.00 giao d?ch/th?ng; 4.99 login/th?ng | 20.39% |
-| 3 | Nhi?u t?i kho?n/ti?t ki?m, gi?m giao d?ch | 1229 | 2 t?i kho?n; savings share 0.12; recency 60.47 ng?y; trend ti?n ra kho?ng 0.01 | 24.86% |
+| Cluster | Customer group | Customers | Churn rate |
+| --- | --- | ---: | ---: |
+| 0 | Active transactions and app use | 3,232 | 13.80% |
+| 1 | Frequent app use, but no recent transactions | 3,018 | 25.55% |
+| 2 | Low transaction and app activity | 2,521 | 20.39% |
+| 3 | Multiple accounts and savings, with declining transaction activity | 1,229 | 24.86% |
 
-Nh?m 1 chi?m 30.18% kh?ch nh?ng ch?a 37.85% t?ng churn. Churn lift kho?ng 1.254 l?n m?c chung 20.37%. C? th? ?u ti?n t?m nguy?n nh?n kh?ch c?n ??ng nh?p nh?ng ng?ng giao d?ch. Nh?m 0 duy tr? tr?i nghi?m; nh?m 2 th? t?i k?ch ho?t; nh?m 3 t?m hi?u nhu c?u ti?n g?i v? gi?m ho?t ??ng. ??y l? ?? xu?t h?nh ??ng, ch?a ?o hi?u qu? chi?n d?ch.
+## Why this configuration?
 
-## Feature v? scaler
-B? cu?i gi? 9 feature: recency_days; initiated_transactions_monthly; successful_logins_monthly; login_recency_days; trans_daily_trend; login_daily_trend; products_number; savings_share; total_accounts.
-- log1p tr??c: recency, t?n su?t giao d?ch/login, login recency, hai trend v? total_accounts.
-- Kh?ng log: products_number, savings_share.
-- Sau ?i?n thi?u median v? l?c t??ng quan, **m?i c?t gi? l?i d?ng StandardScaler**, h?c tr?n to?n b? t?p kh?ch ?ang ph?n t?ch. Ch? d?ng b?n bi?n ??i trong kho?ng c?ch, kh?ng gh?p l?i b?n g?c.
-- trans_amount_3m ban ??u c? trong RFM, nh?ng b? lo?i v? |Pearson| kho?ng 0.906 v?i log recency, v??t ng??ng 0.9. V? v?y baseline RFM trong k?t qu? th?c t? l? RF sau l?c.
-- RobustScaler l? th? nghi?m thay th? to?n b? StandardScaler, d?ng median/IQR; kh?ng ph?i scaler ch?y n?i ti?p.
-- no_friction kh?ng d?ng nh?m khi?u n?i/l?i l?m kho?ng c?ch. Nh?m digital v? momentum v?n ???c d?ng.
-- Churn, target encoding, MI theo churn, SMOTE v? supervised embedding kh?ng d?ng ?? t?o c?m.
-Xem feature_processing.csv v? scaler_parameters.csv trong th? m?c artifact ?? bi?t ch?nh x?c c?t/log/t?m/thang chia.
+- It balances churn differences, group stability, and clear customer profiles.
+- Robust / no_friction has a slightly larger churn gap, but its groups are less stable.
+- Standard / no_digital is more stable, but has a smaller churn gap and does not include app-use frequency or login recency.
+- Cluster 1 is useful for retention analysis: it contains 30.18% of customers and 37.85% of all churners.
+- Churn was not used to create clusters. It was used to compare the results afterwards. These findings still need testing on new data; the groups overlap.
 
-## C?ch ch?y sau khi gh?p v?o project nh?m
-C?n c?c file c? s?n c?a project g?c: preprocessing/etl.py v? c?u tr?c package models, preprocessing, utils, visualization. V?i project c? n?p classifier/neural ngay trong __init__.py, v?n c?n c?i requirements c?a project g?c. requirements-hierarchical.txt ch? li?t k? th? vi?n tr?c ti?p c?a nh?nh n?y.
-??t b?y b?ng ngu?n trong data/full_dataset/ ho?c d?ng data/full_bank_data.csv ?? ???c ETL m?i t?o. C?n schema ETL m?i c? customer_initiated_tx_count, days_observed_q2/q3 v? s? t?i kho?n ?ang m?.
+## Run
+
+Run from the shared project root after adding these files. The existing project must provide the ETL module and data in `data/full_dataset/`, or a compatible `data/full_bank_data.csv`.
 
 ```powershell
-py -m pip install -r requirements-hierarchical.txt
-# Final: b?n nh?m feature RFM, digital, momentum, portfolio
+# Train the selected configuration
 py run_hierarchical.py --mode train --config config/hierarchical_final.yaml --output-dir results/hierarchical/final
-# Ablation lu?n d?ng ?? n?m nh?m l?m full r?i l?n l??t b? nh?m; kh?ng l?y c?u h?nh final l?m full
+
+# StandardScaler ablation: 6 feature sets, k = 2 to 8
 py run_hierarchical.py --mode ablation --config config/hierarchical_standard_ablation.yaml --output-dir results/hierarchical/standard
+
+# RobustScaler ablation
 py run_hierarchical.py --mode ablation --config config/hierarchical_robust_ablation.yaml --output-dir results/hierarchical/robust
-py test_hierarchical.py
 ```
-???ng d?n t??ng ??i ???c t?nh t? th? m?c ch?a run_hierarchical.py. C?ng output-dir/mode s? ghi ?? l??t tr??c. Train final v?n kh?o s?t k=2..8 v? xu?t profile m?c ??nh k=4. Kh?ng t? ch?n k theo churn.
 
-## K?t qu? v? business metrics
-results/hierarchical/standard v? robust ch?a CSV t?ng h?p train/ablation; final ch?a c?c h?nh c?a b? ???c ch?n. ??y l? k?t qu? t?ng h?p, kh?ng c? d?ng kh?ch h?ng.
-L??t ch?y m?i xu?t experiment/k_2 ... k_8/business_metrics.csv, cluster_profiles.csv, customer_clusters.csv v? report.md. C?c b?ng t?ng kh?ch ???c .gitignore lo?i kh?i push.
-- churn_rate = s? churn c?m / s? kh?ch c?m.
-- churn_lift = churn_rate c?m / churn_rate to?n b?.
-- churn_share = s? churn c?m / t?ng churn.
-- total_balance v? balance_share = t?ng s? d? c?m v? t? tr?ng trong to?n b? s? d?.
-- mean_balance, median_balance; churned_customer_balance = s? d? snapshot c?a kh?ch sau ?? churn.
-T? l? ? thang 0?1; lift l? s? l?n; s? d? d?ng CU. S? d? kh?ng ph?i CLV, l?i nhu?n ho?c kho?n l? ch?c ch?n. Kh?ng c? gi? ??nh chi ph? gi? ch?n ???c t? th?m v?o.
-
-## Weights/artifact
-models/saved/hierarchical_standard_no_friction_k4/:
-- linkage.npy: c?y ph?n c?p ?? fit, 9999 l?n gh?p cho 10000 kh?ch.
-- preprocessing.pkl: imputer, scaler v? metadata feature ?? fit; ?? b? b?ng profile_features ch?a d? li?u t?ng kh?ch.
-- feature_processing.csv, scaler_parameters.csv: c?ch x? l? t?ng bi?n.
-- metadata.json, config_used.yaml: c?u h?nh v? gi?i h?n.
-- business_metrics.csv, cluster_profiles.csv: k?t qu? t?ng h?p k=4.
-Hierarchical kh?ng c? weights nh? m?ng neural. C? th? cut_tree(linkage, n_clusters=4) ?? l?y l?i nh?n theo th? t? d? li?u g?c, nh?ng g?i n?y kh?ng ch?a customer_id/th? t? ID. **Ch?a tri?n khai g?n c?m cho kh?ch m?i**; pickle kh?ng ph?i m?t API predict. Ch? n?p pickle t? ngu?n tin c?y.
-
-## Ki?m tra v? gi?i h?n
-?? ch?y standard/robust, 6 b? feature ? 7 s? c?m m?i scaler. ?? ki?m tra s? kh?ch, s? c?m, business totals, t? tr?ng c?ng b?ng 1, ??u v?o h?u h?n v? scaler ??ng c?u h?nh. Test ki?m tra ??i churn kh?ng ??i feature, chu?n h?a, t?nh business v? x? l? tr??ng h?p kh?ng c? churn/s? d?.
-Kh?ng ??ng g?i data/, customer_clusters.csv, clustering_input.csv, cache, smoke, ho?c model classification. C?c ?nh/b?ng kh?c nhau kh?ng t? ch?ng minh b? n?o c? gi? tr? kinh doanh cao h?n. C?n ki?m ch?ng snapshot kh?c tr??c s? d?ng th?c t?.
+Results are saved under `results/hierarchical/`. The selected fitted hierarchy and preprocessing parameters are in `models/saved/hierarchical_standard_no_friction_k4/`. Raw customer data is not included. Assignment of new customers to clusters is not implemented.
