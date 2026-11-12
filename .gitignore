@@ -1,5 +1,8 @@
 __pycache__/
-*.joblib
-*.db
-eda/
+*.pyc
+.matplotlib_cache/
+.pytest_cache/
 data/
+results/hierarchical/**/customer_clusters.csv
+results/hierarchical/**/clustering_input.csv
+results/hierarchical/smoke/
