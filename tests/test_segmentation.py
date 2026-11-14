@@ -152,3 +152,99 @@ def test_feature_population_identity_and_no_supervised_steps():
         prep = GroupPreprocessor().fit(matrix)
         assert not {"TargetEncoder", "ClassBalancer", "SMOTE", "FeatureSelector"} & {
             type(component).__name__ for component in prep.groups_.values()}
+
+
+def test_churn_wilson_and_label_invariant_agreement():
+    from segmentation.evaluation import churn_summary, agreement, risk_separation
+    labels = np.array([0, 0, 1, 1])
+    churn = np.array([0, 0, 1, 1])
+    summary = churn_summary(labels, churn)
+    assert summary.customer_count.sum() == 4
+    assert summary.churn_count.sum() == 2
+    assert summary.iloc[0].ci_low == pytest.approx(0, abs=1e-10)
+    assert summary.iloc[1].ci_high == pytest.approx(1)
+    assert summary.iloc[1].lift == 2
+    assert agreement(labels, 1 - labels)["ari"] == 1
+    assert agreement(labels, 1 - labels)["nmi"] == 1
+    assert risk_separation(labels, churn) == 1
+
+
+def test_runner_outputs_and_heldout_population(tmp_path):
+    from segmentation.runner import run_experiments
+    from segmentation.config import SegmentationConfig
+    cfg = SegmentationConfig(k_values=[2, 3], seeds=[42, 43], permutation_seeds=[1, 2],
+        n_init=2, silhouette_sample=70, common_k=2, sensitivity_weights=[.25],
+        output_dir=str(tmp_path / "results"), model_dir=str(tmp_path / "models"))
+    frame = analytical_fixture(120)
+    result = run_experiments(frame, cfg, {"test_size": .2, "val_size": .2, "random_state": 42},
+                             audit={"fixture_only": True}, make_plots=False)
+    assignments = pd.read_csv(tmp_path / "results" / "cluster_assignments.csv")
+    assert len(assignments) == 120 and assignments.customer_id.is_unique
+    assert assignments[["cluster_A", "cluster_B", "cluster_C"]].notna().all().all()
+    assert len(assignments.loc[assignments.partition.eq("test")]) == 24
+    assert set(result.experiment) >= {"A", "B", "C", "D_1", "D_2"}
+    for name in ("comparison.csv", "churn_by_cluster.csv", "personas.csv", "common_k_comparison.csv",
+                 "permutation_results.csv", "original_distribution_profiles.csv", "report.md", "run_manifest.json"):
+        assert (tmp_path / "results" / name).exists()
+    churn_summary = pd.read_csv(tmp_path / "results" / "churn_by_cluster.csv")
+    assert (churn_summary.groupby("experiment").customer_count.sum() == 24).all()
+    np.testing.assert_allclose(churn_summary.groupby("experiment").customer_share.sum(), 1)
+    # Changing only held-out feature values and all labels must not affect any fit.
+    import joblib
+    from dataclasses import replace
+    names = ["A", "B", "C", "D_1", "D_2", "C_weight_0.25", "B_reduced_dependency", "C_reduced_dependency"]
+    before = {name: joblib.load(tmp_path / "models" / (name + ".joblib")) for name in names}
+    heldout_ids = assignments.loc[assignments.partition.eq("test"), "customer_id"]
+    frame.loc[frame.customer_id.isin(heldout_ids), "balance"] *= 1e8
+    frame["churn"] = 0  # Also prove one-class evaluation reports unavailable statistics honestly.
+    second = replace(cfg, output_dir=str(tmp_path / "second"), model_dir=str(tmp_path / "second_models"))
+    run_experiments(frame, second, {"test_size": .2, "val_size": .2, "random_state": 42},
+                    audit={"fixture_only": True}, make_plots=True)
+    assert "unavailable" in (tmp_path / "second" / "report.md").read_text(encoding="utf-8")
+    assert (tmp_path / "second" / "permutation_control.png").exists()
+    for name in names:
+        after = joblib.load(tmp_path / "second_models" / (name + ".joblib"))
+        np.testing.assert_array_equal(before[name].named_steps["kmeans"].cluster_centers_, after.named_steps["kmeans"].cluster_centers_)
+
+
+def test_label_free_split_and_cli_defaults():
+    from preprocessing.splitting import DataSplitter
+    from main import build_arg_parser
+    frame = analytical_fixture()
+    split = DataSplitter(stratify=False, val_size=.1).train_val_test_split(frame.drop(columns="churn"))
+    assert set(split.train_df.customer_id).isdisjoint(split.test_df.customer_id)
+    assert len(split.train_df) + len(split.val_df) + len(split.test_df) == len(frame)
+    assert build_arg_parser().parse_args([]).mode == "compare"
+    assert build_arg_parser().parse_args(["--mode", "segmentation"]).mode == "segmentation"
+
+
+def test_observation_start_and_savings_overlap():
+    tables = raw_tables()
+    early = tables["transactions"].iloc[[2]].copy()
+    early["transaction_id"] = "before_window"
+    early["transaction_datetime"] = "2026-03-31"
+    tables["transactions"] = pd.concat([tables["transactions"], early], ignore_index=True)
+    early_login = tables["login"].iloc[[0]].copy()
+    early_login["login_id"] = "before_join"
+    early_login["customer_id"] = 2
+    early_login["sign_in_datetime"] = "2026-08-01"
+    tables["login"] = pd.concat([tables["login"], early_login], ignore_index=True)
+    cycle = tables["savings_cycles"].iloc[[0]].copy()
+    cycle["started_at"] = "2026-03-01"
+    tables["savings_cycles"] = pd.concat([tables["savings_cycles"], cycle], ignore_index=True)
+    clean, audit = guard_tables(tables)
+    assert "before_window" not in set(clean["transactions"].transaction_id)
+    assert "before_join" not in set(clean["login"].login_id)
+    assert len(clean["savings_cycles"]) == 2  # March six-month term overlaps April.
+    assert audit["transactions"]["excluded_outside_observation"] == 2
+
+
+def test_invalid_internal_pair_and_foreign_key_fail_closed():
+    tables = raw_tables()
+    tables["transactions"].loc[1, "amount"] = 20
+    with pytest.raises(ValueError, match="paired internal"):
+        guard_tables(tables)
+    tables = raw_tables()
+    tables["transactions"].loc[1, "account_id"] = "unknown"
+    with pytest.raises(ValueError, match="foreign key"):
+        guard_tables(tables)

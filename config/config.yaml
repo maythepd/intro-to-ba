@@ -2,6 +2,24 @@
 # UNIFIED CONFIGURATION: FEATURE ENGINEERING & MODELS
 # ==============================================================================
 
+# Module 5B: independent from supervised features/SMOTE/target encoding.
+segmentation:
+  k_values: [2, 3, 4, 5, 6, 7, 8, 9, 10]
+  seeds: [42, 137, 2026]
+  permutation_seeds: [101, 211, 307, 401, 503]
+  n_init: 10
+  max_iter: 300
+  silhouette_sample: 1000
+  min_cluster_share: 0.02
+  stability_floor: 0.80
+  silhouette_tolerance: 0.02
+  original_weight: 0.5
+  sensitivity_weights: [0.25, 0.75]
+  common_k: 4
+  output_dir: "results/segmentation"
+  model_dir: "models/saved/segmentation"
+  threads: 4
+
 # 1. CẤU HÌNH DỮ LIỆU & PHÂN CHIA TRAIN/VAL/TEST/CV (Dataset & Partition Settings)
 dataset:
   data_path: "data/full_bank_data.csv"

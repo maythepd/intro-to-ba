@@ -69,6 +69,10 @@ def guard_tables(source):
                 raise ValueError(f"{name}.{col}: values must be finite and nonnegative")
             tables[name][col] = values
     sav = tables["savings_cycles"]
+    if tables["transactions"].amount.le(0).any() or sav.init_balance.le(0).any():
+        raise ValueError("Transaction amounts and savings principal must be positive")
+    if not sav.account_id.map(acc.set_index("account_id").account_type).eq("savings").all():
+        raise ValueError("Savings cycles require savings accounts")
     if not sav.term_months.isin([1, 3, 6]).all() or (sav.early_withdrawal_rate > sav.interest_rate).any() or sav.interest_rate.gt(1).any():
         raise ValueError("Invalid savings terms or rates")
     if not cust.churn.isin([0, 1]).all():
@@ -171,7 +175,10 @@ def load_segmentation_data(raw_dir, verbose=True):
     for path in sorted(raw_dir.glob("*")):
         if path.is_file() and path.suffix in (".csv", ".json"):
             with path.open("rb") as stream:
-                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                hasher = hashlib.sha256()
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+                digest = hasher.hexdigest()
             sources[path.name] = {"bytes": path.stat().st_size, "sha256": digest}
     manifest = raw_dir / "generation_manifest.json"
     return frame, {"tables": etl.audit_, "sources": sources,

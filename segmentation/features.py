@@ -43,7 +43,7 @@ def provenance():
                           "balances hard endpoints; funding uses salary; dates consistent with tenure"}
     result.update({c: {"origin": "mixed_or_unverified", "source": "excluded",
                        "dependency": reason} for c, reason in {
-        "savings_balance": "Summed account balances deterministically equal original balance",
+        "savings_balance": "Component of total snapshot account balances constrained to original balance",
         "everyday_balance": "Component of original balance",
         "relationship_tenure_days": "Generated consistently with original tenure",
         "wealth_deceleration_risk": "Original balance times synthetic trend; supervised risk design",

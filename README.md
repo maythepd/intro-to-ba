@@ -1,5 +1,14 @@
 # Digital Bank Customer Churn Prediction
 
+Module 5B adds comparative customer segmentation. See [the segmentation report](docs/segmentation.md)
+for dataset setup, feature provenance, real A–D results, limitations and reproduction.
+
+```powershell
+python -m segmentation.download_data
+python main.py --mode segmentation
+python -m pytest tests/test_segmentation.py -q
+```
+
 > **Business Analytics Group Project — Module 5: Model Development**
 
 
