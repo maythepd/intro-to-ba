@@ -3,3 +3,8 @@ __pycache__/
 *.db
 eda/
 data/
+.venv/
+.pytest_cache/
+.matplotlib_cache/
+results/segmentation/
+models/saved/segmentation/
