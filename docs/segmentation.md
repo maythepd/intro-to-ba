@@ -1,58 +1,78 @@
 # Module 5B: Customer Segmentation
 
-## Method
+## 1. Experimental settings
 
-Analyze **10,000 customers** from the [group's Kaggle dataset](https://www.kaggle.com/datasets/maythepd/full-dataset-intro2ba),
-using 7,999 train, 1,001 validation and 1,000 independent test customers.
-Behavioral data covers 1 April to 1 October 2026 (exclusive).
+| Setting | Value |
+|---|---|
+| Data | 10,000 customers; train/validation/test = 7,999/1,001/1,000; split seed 42, no churn stratification |
+| Observation window | 2026-04-01 inclusive to 2026-10-01 exclusive |
+| Experiments | A: 10 original features; B: 24 behavioral features; C: A+B; D: A + permuted B rows |
+| Preprocessing | Train-fitted imputation, log transform for skewed numerics, StandardScaler and one-hot encoding |
+| K-Means | k=2–10; n_init=10; max_iter=300; seeds 42, 137, 2026; silhouette sample capped at 1,000 |
+| Group weights | C/D: original 50%, behavioral 50% of expected squared distance; sensitivity: 25%/75% and 75%/25% |
+| Permutation control | Whole behavioral rows shuffled within each partition; seeds 101, 211, 307, 401, 503 |
 
-Preprocessing and K-Means fit only on train. Validation selects k from 2–10;
-churn is used only after clustering. The combined experiment balances the two
-feature groups. Feature definitions are in [features.py](../segmentation/features.py).
+Choose the smallest k within **0.02** of the best mean validation silhouette,
+subject to mean minimum training cluster share ≥ **2%** and seed-stability ARI ≥ **0.8**.
+If no candidate meets both constraints, fall back to valid silhouettes and flag it in the CSV.
+Fit preprocessing/centers only on train; use churn only after all models are frozen.
+Feature definitions: [features.py](../segmentation/features.py).
 
-## Main results
+## 2. Clustering metrics
 
-All churn rates below are from the independent test set; overall churn is **20.3%**.
+Inertia is from the saved training model (seed 42); silhouette and Davies–Bouldin
+are validation means over three seeds. Stability is pairwise validation ARI across
+initializations. D reports the mean over five permutation runs.
 
-| Experiment | Features | Selected k | Segments and churn rates |
-|---|---|---:|---|
-| A | 10 original Kaggle features | 2 | Lower balance: **14.5%**; higher balance: **23.7%** |
-| B | 24 synthetic behavioral features | 2 | Observed transactors: **19.0%**; less engaged: **34.6%** |
-| C | Original + behavioral features | 2 | Less engaged: **27.5%**; active: **13.5%** |
-| D | Original + permuted behavioral rows | 2–3 | Five control seeds; rows shuffled within each partition |
+| Experiment | Selected k | Train inertia ↓ | Validation silhouette ↑ | Validation DB ↓ | Stability ARI ↑ |
+|---|---:|---:|---:|---:|---:|
+| A | 2 | 6973.56 | 0.1407 | 2.4514 | 1.0000 |
+| B | 2 | 6297.41 | 0.5118 | 1.1689 | 1.0000 |
+| C | 2 | 6982.48 | 0.1385 | 2.3912 | 1.0000 |
+| D (5-seed mean) | 2–3 | 6722.18 | 0.1426 | 2.3942 | 0.9975 |
 
-A mainly separates balance levels; C separates activity levels and substantially
-reorganizes the original groups. Less-engaged customers warrant checking
-onboarding barriers and failed transactions before targeted reactivation.
+These geometry metrics describe each feature space; their values do not establish
+that B or C is better than A across different feature spaces.
 
-## Conclusion and limitations
+## 3. Held-out comparison
 
-- C separates churn more strongly than A at selected k=2. At common **k=4**,
-  A performs better: churn variance fractions **0.0529 vs 0.0403**.
-- C exceeds all five permutation controls, but five seeds give limited evidence
-  (corrected permutation tail **0.1667**).
-- Removing transaction/savings features reduces C's churn variance fraction to
-  **0.0005**. The simulator conditions behavior on original activity flags, so
-  generation rules may explain the apparent benefit.
+Test churn prevalence is **20.3%**. Churn separation below is the customer-weighted
+variance of cluster churn rates divided by overall binary churn variance (higher
+means stronger descriptive association). Common k controls for cluster count.
 
-**Synthetic data does not consistently improve segmentation over original data.**
-The generator source and real behavioral reference data are unavailable; this
-analysis cannot establish real-world fidelity. Future-quarter churn is a project
-assumption rather than independently observed future behavior.
+| Experiment | Test churn separation: selected k | Test churn separation: common k=4 |
+|---|---:|---:|
+| A | 0.01208 | 0.05288 |
+| B | 0.01109 | 0.03359 |
+| C | 0.03055 | 0.04028 |
+| D (5-seed mean) | 0.00280 | 0.00606 (0.00384–0.00973) |
+
+At selected k=2, C's less-engaged/active groups have churn rates **27.52%/13.45%**.
+Held-out cluster agreement (ARI/NMI account for arbitrary cluster labels):
+
+| Pair | ARI | NMI |
+|---|---:|---:|
+| A vs B | -0.00151 | 0.00003 |
+| A vs C | -0.00008 | 0.00042 |
+| B vs C | 0.03460 | 0.12741 |
+
+## 4. Conclusion
+
+C improves churn separation at selected k=2 but underperforms A at common k=4.
+It exceeds all five permutation controls, with a coarse corrected tail estimate
+of **0.1667**. Removing transaction/savings features reduces C's separation to
+**0.00050**: original activity flags used by the simulator may explain the benefit.
+**There is no consistent improvement over original-only segmentation.**
+The generator source and real behavioral reference are unavailable; future-quarter
+churn is a project assumption, so real-world fidelity is not established.
 
 ## Run and outputs
 
-From the repository root, using the prepared environment:
-
 ```powershell
-.\.venv\Scripts\python.exe -m segmentation.download_data
 .\.venv\Scripts\python.exe main.py --mode segmentation
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Results, assignments, personas and charts: `results/segmentation/`.
-Saved pipelines: `models/saved/segmentation/`. These generated files stay local;
-settings are in `config/config.yaml` and detailed metrics remain in the CSVs.
-
-Validation: **13 tests passed**, the existing regression suite passed, and saved
-models reproduced the recorded assignments after reload.
+Detailed CSVs/charts: `results/segmentation/`; saved pipelines: `models/saved/segmentation/`.
+These generated files stay local. **13 tests and the existing regression suite passed**;
+reloaded models reproduced their saved assignments.
