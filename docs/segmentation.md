@@ -2,11 +2,21 @@
 
 ## 1. Experimental settings
 
+| Experiment | Type and inputs | Purpose |
+|---|---|---|
+| **A — Original-only** | 10 original Kaggle features: age, balance, credit score, product count, etc. | Establish the baseline customer segments. |
+| **B — Synthetic-only** | 24 simulated behavioral features: transactions, logins, complaints and savings. | Identify segments described by behavioral information alone. |
+| **C — Combined** | All 34 features from A+B, with balanced group contributions. | Assess whether behavioral information adds useful distinctions to the baseline. |
+| **D — Permutation control** | Original features unchanged; complete behavioral rows shuffled across customers within each train/validation/test partition. | Test whether C benefits from customer–behavior associations beyond simply adding dimensions. |
+
+Compare **C vs A** for the effect of adding behavior, and **C vs D** for the
+information in the original customer–behavior pairing. All experiments use the
+same customers and partitions; the control does not establish synthetic-data realism.
+
 | Setting | Value |
 |---|---|
 | Data | 10,000 customers; train/validation/test = 7,999/1,001/1,000; split seed 42, no churn stratification |
 | Observation window | 2026-04-01 inclusive to 2026-10-01 exclusive |
-| Experiments | A: 10 original features; B: 24 behavioral features; C: A+B; D: A + permuted B rows |
 | Preprocessing | Train-fitted imputation, log transform for skewed numerics, StandardScaler and one-hot encoding |
 | K-Means | k=2–10; n_init=10; max_iter=300; seeds 42, 137, 2026; silhouette sample capped at 1,000 |
 | Group weights | C/D: original 50%, behavioral 50% of expected squared distance; sensitivity: 25%/75% and 75%/25% |
