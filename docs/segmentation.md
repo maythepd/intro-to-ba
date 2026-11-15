@@ -84,5 +84,6 @@ churn is a project assumption, so real-world fidelity is not established.
 ```
 
 Detailed CSVs/charts: `results/segmentation/`; saved pipelines: `models/saved/segmentation/`.
-These generated files stay local. **13 tests and the existing regression suite passed**;
+See the [grouped output guide](segmentation_outputs.md) for the consolidated files.
+These generated files stay local. **16 tests and the existing regression suite passed**;
 reloaded models reproduced their saved assignments.

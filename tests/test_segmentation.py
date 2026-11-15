@@ -175,6 +175,12 @@ def test_runner_outputs_and_heldout_population(tmp_path):
     cfg = SegmentationConfig(k_values=[2, 3], seeds=[42, 43], permutation_seeds=[1, 2],
         n_init=2, silhouette_sample=70, common_k=2, sensitivity_weights=[.25],
         output_dir=str(tmp_path / "results"), model_dir=str(tmp_path / "models"))
+    output = tmp_path / "results"
+    output.mkdir()
+    for legacy in ("k_selection_A.csv", "k_selection_A.png", "churn_common_k_A.csv",
+                   "permutation_results.csv", "existing_regression.log", "regression_temporal_encoder.pt"):
+        (output / legacy).write_text("obsolete generated output")
+    (output / "my_notes.txt").write_text("keep user notes")
     frame = analytical_fixture(120)
     result = run_experiments(frame, cfg, {"test_size": .2, "val_size": .2, "random_state": 42},
                              audit={"fixture_only": True}, make_plots=False)
@@ -184,8 +190,23 @@ def test_runner_outputs_and_heldout_population(tmp_path):
     assert len(assignments.loc[assignments.partition.eq("test")]) == 24
     assert set(result.experiment) >= {"A", "B", "C", "D_1", "D_2"}
     for name in ("comparison.csv", "churn_by_cluster.csv", "personas.csv", "common_k_comparison.csv",
-                 "permutation_results.csv", "original_distribution_profiles.csv", "report.md", "run_manifest.json"):
+                 "k_selection.csv", "churn_common_k.csv", "cluster_transitions.csv", "README.md",
+                 "original_distribution_profiles.csv", "report.md", "run_manifest.json"):
         assert (tmp_path / "results" / name).exists()
+    assert not list(output.glob("k_selection_*.csv"))
+    assert not list(output.glob("k_selection_*.png"))
+    assert not list(output.glob("churn_common_k_*.csv"))
+    for legacy in ("permutation_results.csv", "existing_regression.log", "regression_temporal_encoder.pt"):
+        assert not (output / legacy).exists()
+    assert (output / "my_notes.txt").read_text() == "keep user notes"
+    selection = pd.read_csv(output / "k_selection.csv")
+    assert set(selection.experiment) == set(result.experiment)
+    assert selection.groupby("experiment").selected.sum().eq(1).all()
+    common_churn = pd.read_csv(output / "churn_common_k.csv")
+    assert common_churn.groupby("experiment").customer_count.sum().eq(24).all()
+    transitions = pd.read_csv(output / "cluster_transitions.csv")
+    assert transitions.groupby("pair").customer_count.sum().eq(24).all()
+    np.testing.assert_allclose(transitions.groupby(["pair", "source_cluster"]).source_share.sum(), 1)
     churn_summary = pd.read_csv(tmp_path / "results" / "churn_by_cluster.csv")
     assert (churn_summary.groupby("experiment").customer_count.sum() == 24).all()
     np.testing.assert_allclose(churn_summary.groupby("experiment").customer_share.sum(), 1)
@@ -202,6 +223,9 @@ def test_runner_outputs_and_heldout_population(tmp_path):
                     audit={"fixture_only": True}, make_plots=True)
     assert "unavailable" in (tmp_path / "second" / "report.md").read_text(encoding="utf-8")
     assert (tmp_path / "second" / "permutation_control.png").exists()
+    assert (tmp_path / "second" / "k_selection.png").exists()
+    assert (tmp_path / "second" / "cluster_comparison.png").exists()
+    assert not (tmp_path / "second" / "original_distribution_comparison.png").exists()
     for name in names:
         after = joblib.load(tmp_path / "second_models" / (name + ".joblib"))
         np.testing.assert_array_equal(before[name].named_steps["kmeans"].cluster_centers_, after.named_steps["kmeans"].cluster_centers_)
@@ -248,3 +272,41 @@ def test_invalid_internal_pair_and_foreign_key_fail_closed():
     tables["transactions"].loc[1, "account_id"] = "unknown"
     with pytest.raises(ValueError, match="foreign key"):
         guard_tables(tables)
+
+
+def test_legacy_cleanup_stays_inside_output_and_preserves_user_files(tmp_path):
+    from segmentation.outputs import cleanup_legacy_outputs
+    output = tmp_path / "results"
+    output.mkdir()
+    legacy = output / "k_selection_A.csv"
+    legacy.write_text("old export")
+    notes = output / "my_notes.txt"
+    notes.write_text("keep")
+    outside = tmp_path / "escape.csv"
+    outside.write_text("keep outside")
+    with pytest.raises(ValueError, match="inside the output"):
+        cleanup_legacy_outputs(output, ["A", "A/../../escape"])
+    assert legacy.exists() and outside.read_text() == "keep outside"
+    assert cleanup_legacy_outputs(output, ["A"]) == ["k_selection_A.csv"]
+    assert notes.read_text() == "keep" and outside.exists()
+
+
+def test_legacy_cleanup_rejects_traversal_to_user_file(tmp_path):
+    from segmentation.outputs import cleanup_legacy_outputs
+    notes = tmp_path / "my_notes.csv"
+    notes.write_text("keep user CSV")
+    with pytest.raises(ValueError):
+        cleanup_legacy_outputs(tmp_path, ["A/../my_notes"])
+    assert notes.read_text() == "keep user CSV"
+
+
+def test_legacy_cleanup_skips_symbolic_links(tmp_path, monkeypatch):
+    from pathlib import Path
+    from segmentation.outputs import cleanup_legacy_outputs
+    # Simulate link detection without Windows symlink-creation privileges.
+    legacy = tmp_path / "k_selection_A.csv"
+    legacy.write_text("linked content must be left alone")
+    original = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda path: path == legacy or original(path))
+    cleanup_legacy_outputs(tmp_path, ["A"])
+    assert legacy.exists()

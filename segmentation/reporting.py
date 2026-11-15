@@ -26,7 +26,7 @@ def write_report(out, comparison, common, personas, agreements, transitions, man
         "For each k, evaluate multiple deterministic KMeans seeds with explicit n_init. Among candidates meeting the training "
         "minimum cluster share and validation stability floor, select the smallest k within the configured tolerance of the best "
         "mean validation silhouette. If constraints exclude every candidate, use valid silhouette candidates and flag the fallback "
-        "in k_selection_*.csv. Davies–Bouldin breaks same-k ties; inertia/elbow, size entropy and stability are diagnostic. "
+        "in k_selection.csv. Davies–Bouldin breaks same-k ties; inertia/elbow, size entropy and stability are diagnostic. "
         "The serialized model uses the prespecified first seed, never a seed chosen using test results.", "",
         "Numerics use train-median imputation (including missingness indicators), signed log1p on monetary/count/recency/trend "
         "fields and StandardScaler. Categorical inputs use train-fitted one-hot encoding. Training-constant dimensions are removed. "
@@ -94,6 +94,7 @@ def write_report(out, comparison, common, personas, agreements, transitions, man
         "tests association beyond shuffled rows, not realism. Source simulation, geometry, group redundancy and seed sensitivity "
         "remain plausible explanations for apparent gains.", "",
         "## Files and reproduction", "",
+        "Start with README.md for the grouped output guide and comparative_summary.csv for primary metrics. "
         "See docs/segmentation.md for setup and commands. CSVs include assignments/donors, selected and common-k metrics, "
         "profiles/personas, held-out churn, transitions, distributions, correlations and provenance. Models and feature names are "
         "serialized separately under the configured model directory. Reload with joblib.load and supply the recorded input columns. "
@@ -104,7 +105,7 @@ def write_report(out, comparison, common, personas, agreements, transitions, man
     (Path(out) / "report.md").write_text("\n".join(lines), encoding="utf-8")
 
 
-def plot_results(out, selections, assignments, churn, contingencies, original_profiles, common, frame=None):
+def plot_results(out, selections, assignments, churn, contingencies, common, frame=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -117,15 +118,22 @@ def plot_results(out, selections, assignments, churn, contingencies, original_pr
         fig.savefig(out / name, bbox_inches="tight")
         plt.close(fig)
 
-    for name, scores in selections.items():
-        fig, axes = plt.subplots(2, 2, figsize=(10, 7))
-        for ax, metric, title in zip(axes.flat, ["train_inertia", "silhouette", "davies_bouldin", "stability_ari"],
-                                      ["Training inertia", "Validation silhouette", "Validation Davies–Bouldin", "Validation stability (ARI)"]):
+    fig, axes = plt.subplots(2, 4, figsize=(15, 7))
+    controls = [scores for name, scores in selections.items() if name.startswith("D_")]
+    d_scores = pd.concat(controls).groupby("k", as_index=False).mean(numeric_only=True)
+    selected_d = sorted({int(scores.loc[scores.selected, "k"].iloc[0]) for scores in controls})
+    for column, name in enumerate(["A", "B", "C", "D"]):
+        scores = d_scores if name == "D" else selections[name]
+        selected_k = selected_d if name == "D" else scores.loc[scores.selected, "k"].tolist()
+        for row, (metric, title) in enumerate([("train_inertia", "Training inertia"), ("silhouette", "Validation silhouette")]):
+            ax = axes[row, column]
             ax.plot(scores.k, scores[metric], "o-", color=colors[0])
-            ax.axvline(scores.loc[scores.selected, "k"].iloc[0], color=colors[2], linestyle="--")
-            ax.set(xlabel="k", title=title, xticks=scores.k)
-        fig.suptitle(f"{name}: unsupervised k selection")
-        save(fig, f"k_selection_{name}.png")
+            for k in selected_k:
+                ax.axvline(k, color=colors[2], linestyle="--", alpha=.7)
+            label = f"D: mean of {len(controls)} permutations" if name == "D" else name
+            ax.set(xlabel="k", title=f"{label}: {title}", xticks=scores.k)
+    fig.suptitle("Unsupervised k selection; full seed/sensitivity diagnostics in k_selection.csv")
+    save(fig, "k_selection.png")
     main_names = ["A", "B", "C"] + [next(n for n in selections if n.startswith("D_"))]
     fig, axes = plt.subplots(1, 4, figsize=(15, 4))
     test = assignments.loc[assignments.partition.eq("test")]
@@ -134,16 +142,16 @@ def plot_results(out, selections, assignments, churn, contingencies, original_pr
         ax.bar(counts.index.astype(str), counts / counts.sum() * 100, color=colors[:len(counts)] if len(counts) <= len(colors) else colors[0])
         ax.set(title=name, xlabel="Cluster", ylabel="Held-out customers (%)")
     save(fig, "cluster_sizes.png")
-    for pair, table in contingencies.items():
+    fig, axes = plt.subplots(1, len(contingencies), figsize=(15, 4))
+    for ax, (pair, table) in zip(np.atleast_1d(axes), contingencies.items()):
         values = table.div(table.sum(axis=1), axis=0).to_numpy()
-        fig, ax = plt.subplots(figsize=(6, 5))
         plot = ax.imshow(values, cmap="Blues", vmin=0, vmax=1)
         for (r, c), value in np.ndenumerate(values):
             ax.text(c, r, f"{table.iloc[r, c]}\n{value:.0%}", ha="center", va="center", color="white" if value > .5 else "#17364b")
         ax.set(xticks=range(table.shape[1]), xticklabels=table.columns, yticks=range(table.shape[0]), yticklabels=table.index,
                xlabel=pair.split("_vs_")[1], ylabel=pair.split("_vs_")[0], title=f"{pair}: held-out transitions")
         fig.colorbar(plot, ax=ax, label="Share of row cluster")
-        save(fig, f"transition_{pair}.png")
+    save(fig, "cluster_comparison.png")
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
     for ax, name in zip(axes, ["A", "B", "C"]):
         rows = churn.loc[churn.experiment.eq(name)]
@@ -152,15 +160,6 @@ def plot_results(out, selections, assignments, churn, contingencies, original_pr
         ax.axhline(rows.overall_prevalence.iloc[0] * 100, color=colors[2], linestyle="--")
         ax.set(title=name, ylabel="Held-out churn (%)", xlabel="Cluster")
     save(fig, "churn_by_cluster.png")
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    for ax, name in zip(axes, ["A", "C"]):
-        data = original_profiles.loc[original_profiles.experiment.eq(name) & original_profiles.level.fillna("").eq("")]
-        matrix = data.pivot(index="feature", columns="cluster", values="standardized_difference")
-        im = ax.imshow(matrix, aspect="auto", cmap="RdBu_r", vmin=-2, vmax=2)
-        ax.set(title=f"{name}: original attribute composition", yticks=range(len(matrix)), yticklabels=matrix.index,
-               xticks=range(matrix.shape[1]), xticklabels=matrix.columns, xlabel="Cluster")
-    fig.colorbar(im, ax=axes[-1], label="Mean difference / training SD")
-    save(fig, "original_distribution_comparison.png")
     if frame is not None:
         features = ["age", "credit_score", "balance", "products_number", "active_member", "country"]
         fig, axes = plt.subplots(2, len(features), figsize=(19, 7))

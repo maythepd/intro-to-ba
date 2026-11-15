@@ -17,6 +17,7 @@ from .data import load_segmentation_data
 from .features import (ORIGINAL_FEATURES, SYNTHETIC_FEATURES, REDUCED_FEATURES,
                        build_features, feature_sets, provenance)
 from .kmeans import select_model, fit_at_k, permute_synthetic, quality
+from .outputs import cleanup_legacy_outputs
 from .evaluation import (churn_summary, risk_separation, agreement, align_clusters,
                          distribution_profiles, personas, synthetic_diagnostics)
 
@@ -28,6 +29,8 @@ def run_experiments(frame, cfg, dataset, audit=None, make_plots=True):
     out, saved = Path(cfg.output_dir), Path(cfg.model_dir)
     out.mkdir(parents=True, exist_ok=True)
     saved.mkdir(parents=True, exist_ok=True)
+    previous_manifest = out / "run_manifest.json"
+    previous_experiments = set(json.loads(previous_manifest.read_text(encoding="utf-8")).get("experiments", {})) if previous_manifest.exists() else set()
     # Reuse ratios and seed. Label-independent split satisfies the strict churn-only-after-fit rule.
     split = DataSplitter(test_size=dataset.get("test_size", .1), val_size=dataset.get("val_size", .1),
                          random_state=dataset.get("random_state", 42), stratify=False).train_val_test_split(frame.drop(columns="churn"))
@@ -91,10 +94,9 @@ def run_experiments(frame, cfg, dataset, audit=None, make_plots=True):
             "test_risk_separation": risk_separation(predictions[name][te], frame.loc[te, "churn"]),
             **{f"test_{key}": value for key, value in test_metrics.items()}})
         churn_tables.append(churn_summary(predictions[name][te], frame.loc[te, "churn"]).assign(experiment=name))
-        selections[name].to_csv(out / f"k_selection_{name}.csv", index=False)
         pd.Series(model.named_steps["preprocess"].feature_names_, name="encoded_feature").to_csv(saved / f"{name}_features.csv", index=False)
 
-    common_rows = []
+    common_rows, common_churn_tables = [], []
     for name, model in common_models.items():
         labels = model.predict(spaces[name].loc[te])
         common_predictions[name] = labels
@@ -104,19 +106,20 @@ def run_experiments(frame, cfg, dataset, audit=None, make_plots=True):
         common_rows.append({"experiment": name, "k": common_k, **metrics,
             "risk_separation": risk_separation(labels, frame.loc[te, "churn"]),
             "ari_vs_A": agreement(common_predictions["A"], labels)["ari"]})
-        churn_summary(labels, frame.loc[te, "churn"]).to_csv(out / f"churn_common_k_{name}.csv", index=False)
+        common_churn_tables.append(churn_summary(labels, frame.loc[te, "churn"]).assign(experiment=name, k=common_k))
 
     comparison = pd.DataFrame(comparison)
     common = pd.DataFrame(common_rows)
     churn = pd.concat(churn_tables, ignore_index=True)
-    agreement_rows, contingencies = [], {}
+    agreement_rows, contingencies, transition_tables = [], {}, []
     for left, right in (("A", "B"), ("A", "C"), ("B", "C")):
         labels_l, labels_r = predictions[left][te], predictions[right][te]
         agreement_rows.append({"pair": f"{left}_vs_{right}", **agreement(labels_l, labels_r)})
         table = pd.crosstab(pd.Series(labels_l, name=left), pd.Series(labels_r, name=right))
         contingencies[f"{left}_vs_{right}"] = table
-        table.to_csv(out / f"contingency_{left}_vs_{right}.csv")
-        table.div(table.sum(axis=1), axis=0).to_csv(out / f"transitions_{left}_vs_{right}.csv")
+        long_table = table.rename_axis(index="source_cluster", columns="target_cluster").stack().rename("customer_count").reset_index()
+        long_table["source_share"] = long_table.customer_count / long_table.groupby("source_cluster").customer_count.transform("sum")
+        transition_tables.append(long_table.assign(pair=f"{left}_vs_{right}"))
     aligned, mapping = align_clusters(predictions["A"][tr], predictions["C"][tr], predictions["C"])
     assignments["C_aligned_to_A"] = aligned
     assignments["A_to_C_changed_after_alignment"] = aligned != np.array([f"A_{a}" for a in predictions["A"]])
@@ -125,7 +128,7 @@ def run_experiments(frame, cfg, dataset, audit=None, make_plots=True):
     transition_summary = pd.DataFrame({"original_cluster": shares.index, "customer_count": transitions.sum(axis=1),
         "largest_combined_subgroup_share": shares.max(axis=1),
         "transition_entropy": -(shares * np.log(shares.where(shares > 0))).sum(axis=1)})
-    transition_summary.to_csv(out / "transition_summary.csv", index=False)
+    pd.concat(transition_tables, ignore_index=True).to_csv(out / "cluster_transitions.csv", index=False)
 
     profiles, persona_tables, original_profiles = [], [], []
     for name in ("A", "B", "C"):
@@ -148,7 +151,6 @@ def run_experiments(frame, cfg, dataset, audit=None, make_plots=True):
         q3_spend_positive=("trans_amount_3m", lambda s: s.gt(0).mean()),
         monthly_actions=("monthly_transactions", "mean"))
     dependence.to_csv(out / "activity_conditioning.csv")
-    frame[ORIGINAL_FEATURES + SYNTHETIC_FEATURES].dtypes.astype(str).to_csv(out / "feature_types.csv", header=["dtype"])
     assignments.to_csv(out / "cluster_assignments.csv", index=False)
     pd.concat(donor_records, ignore_index=True).to_csv(out / "permutation_donors.csv", index=False)
     comparison.to_csv(out / "comparison.csv", index=False)
@@ -159,10 +161,13 @@ def run_experiments(frame, cfg, dataset, audit=None, make_plots=True):
     pd.concat([summary, pd.DataFrame([d_mean])], ignore_index=True).to_csv(out / "comparative_summary.csv", index=False)
     pd.concat(size_tables, ignore_index=True).to_csv(out / "cluster_sizes.csv", index=False)
     common.to_csv(out / "common_k_comparison.csv", index=False)
-    common.loc[common.experiment.str.startswith("D_")].to_csv(out / "permutation_results.csv", index=False)
+    pd.concat(common_churn_tables, ignore_index=True).to_csv(out / "churn_common_k.csv", index=False)
+    pd.concat([scores.assign(experiment=name) for name, scores in selections.items()], ignore_index=True).to_csv(out / "k_selection.csv", index=False)
     churn.to_csv(out / "churn_by_cluster.csv", index=False)
     pd.DataFrame(agreement_rows).to_csv(out / "agreement.csv", index=False)
-    pd.DataFrame(provenance()).T.rename_axis("feature").to_csv(out / "feature_provenance.csv")
+    lineage = pd.DataFrame(provenance()).T.rename_axis("feature")
+    lineage["dtype"] = frame.dtypes.astype(str).reindex(lineage.index).fillna("not used")
+    lineage.to_csv(out / "feature_provenance.csv")
     manifests = {name: {"input_features": list(spaces[name]), "selected_k": models[name].named_steps["kmeans"].n_clusters,
                        "original_weight": models[name].named_steps["preprocess"].original_weight} for name in models}
     try:
@@ -173,14 +178,19 @@ def run_experiments(frame, cfg, dataset, audit=None, make_plots=True):
         dirty = None
     manifest = {"config": cfg.to_dict(), "dataset_config": dataset, "partitions": partition.value_counts().to_dict(),
         "split_stratified": False, "git_head": commit, "git_worktree_dirty": dirty, "python": platform.python_version(),
-        "versions": {p: importlib.metadata.version(p) for p in ("numpy", "pandas", "scikit-learn", "scipy", "joblib")},
+        "versions": dict(sorted((dist.metadata["Name"], dist.version) for dist in importlib.metadata.distributions() if dist.metadata.get("Name"))),
         "experiments": manifests, "common_k": common_k, "alignment_learned_on": "train", "C_to_A_mapping": mapping,
         "audit": audit or {}}
     (out / "run_manifest.json").write_text(json.dumps(manifest, indent=2, default=str), encoding="utf-8")
     from .reporting import write_report, plot_results
     write_report(out, comparison, common, persona_table, pd.DataFrame(agreement_rows), transition_summary, manifest)
+    guide = Path(__file__).resolve().parent.parent / "docs" / "segmentation_outputs.md"
+    (out / "README.md").write_text(guide.read_text(encoding="utf-8"), encoding="utf-8")
     if make_plots:
-        plot_results(out, selections, assignments, churn, contingencies, original_profiles, common, frame)
+        plot_results(out, selections, assignments, churn, contingencies, common, frame)
+    removed = cleanup_legacy_outputs(out, set(models) | previous_experiments)
+    if removed:
+        print(f"[SEG] Removed {len(removed)} obsolete exports after consolidation", flush=True)
     print(f"[SEG] Results: {out.resolve()}", flush=True)
     return comparison
 
