@@ -1,5 +1,7 @@
 # Module 5B: Customer Segmentation
 
+[Báo cáo tiếng Việt](segmentation_vi.md)
+
 ## 1. Experimental settings
 
 | Experiment | Type and inputs | Purpose |
