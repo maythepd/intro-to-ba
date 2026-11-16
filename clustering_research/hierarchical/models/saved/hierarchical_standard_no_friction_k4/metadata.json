@@ -1,0 +1,47 @@
+{
+  "configuration": "StandardScaler / no_friction / Ward-Euclidean / k=4",
+  "feature_groups": [
+    "rfm",
+    "digital",
+    "momentum",
+    "portfolio"
+  ],
+  "feature_columns": [
+    "recency_days",
+    "initiated_transactions_monthly",
+    "successful_logins_monthly",
+    "login_recency_days",
+    "trans_daily_trend",
+    "login_daily_trend",
+    "products_number",
+    "savings_share",
+    "total_accounts"
+  ],
+  "metrics": {
+    "experiment": "no_friction",
+    "k": 4,
+    "n_features": 9,
+    "silhouette": 0.1428950328390625,
+    "davies_bouldin": 1.833772154120227,
+    "calinski_harabasz": 1836.917295688134,
+    "min_cluster_size": 1229,
+    "max_cluster_share": 0.3232,
+    "silhouette_sample_size": 2000,
+    "subsample_stability_ARI": 0.5898139702674409,
+    "elapsed_seconds": 44.933894100016914
+  },
+  "n_customers": 10000,
+  "limitations": [
+    "Descriptive fit to one synthetic snapshot. Selection compared observed churn; no independent assessment of the selected configuration.",
+    "No raw customer records, customer IDs or ID-to-leaf mapping are included. linkage rows refer to original training row order.",
+    "No prediction/assignment function for new customers is implemented.",
+    "preprocessing.pkl contains fitted imputer/scaler parameters and feature report; profile_features has been removed."
+  ],
+  "versions": {
+    "python": "3.14.6",
+    "numpy": "2.5.2",
+    "pandas": "3.0.5",
+    "scipy": "1.18.1",
+    "scikit_learn": "1.9.1"
+  }
+}

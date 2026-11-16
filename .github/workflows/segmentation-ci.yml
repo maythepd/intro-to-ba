@@ -1,0 +1,29 @@
+name: Segmentation CI
+on:
+  push:
+    branches:
+      - feature/segmentation-kmeans-hierarchical-api-ui
+  pull_request:
+    paths:
+      - 'api/**'
+      - 'frontend/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - '.github/workflows/segmentation-ci.yml'
+jobs:
+  segmentation-and-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -p 'test_segmentation_api.py' -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
