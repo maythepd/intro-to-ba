@@ -1,0 +1,77 @@
+﻿- total_transactions, monthly_transactions: 
++ Vấn đề: vẫn tính cả nhận lãi, trừ phí và nhận tiền tự động vào mức sử dụng của khách; cần đếm riêng giao dịch do khách tự thực hiện (preprocessing/etl.py dòng 287–290; preprocessing/behavioral_momentum.py dòng 78). 
++ Ví dụ: khách không làm gì nhưng được trả lãi 6 lần vẫn được tính là có 6 giao dịch.
+
+- recency_days:
++ Vấn đề: chỉ lọc channel != system nên chưa chắc đã loại hết giao dịch mà khách chỉ là người nhận; cần kiểm tra thêm loại giao dịch, chiều tiền và cách dữ liệu ghi phía gửi/nhận (preprocessing/etl.py dòng 311–313).
++ Ví dụ: A chỉ nhận tiền từ B nhưng có thể bị coi là vừa tự giao dịch nếu bản ghi nhận tiền có kênh mobile_app; cần kiểm tra dữ liệu để biết trường hợp này có xảy ra không.
+
+- trans_count_3m, trans_amount_3m:
++ Vấn đề: chỉ đo giao dịch chủ động đưa tiền ra ngoài, chưa đo mọi hoạt động dùng để xác định active_member; nên đổi tên cho rõ và thêm biến đếm hoạt động riêng (preprocessing/etl.py dòng 258–271, 293–296).
++ Ví dụ: khách chỉ nộp tiền mặt hoặc chuyển tiền giữa hai tài khoản của mình vẫn có thể active_member = 1 nhưng trans_count_3m = 0.
+
+- monthly_logins:
++ Vấn đề: dùng total_logins nên tính cả đăng nhập thất bại; nên dùng successful_logins nếu muốn đo mức sử dụng, hoặc đổi tên thành số lần thử đăng nhập (preprocessing/behavioral_momentum.py dòng 81–82; preprocessing/etl.py dòng 195).
++ Ví dụ: 2 lần thành công và 18 lần sai mật khẩu được tính thành 20 lần đăng nhập.
+
+- desktop_login_ratio, mobile_login_ratio:
++ Vấn đề: tử số chỉ đếm đăng nhập thành công, mẫu số lại đếm cả thất bại; nếu muốn tỷ lệ thiết bị trong các lần thành công thì chia cho successful_logins (preprocessing/behavioral_momentum.py dòng 153–155).
++ Ví dụ: 4 lần máy tính thành công, 6 lần điện thoại thành công, 10 lần thất bại cho tỷ lệ 20% và 30%, thay vì 40% và 60% trong các lần thành công.
+
+- is_new_customer:
++ Vấn đề: dùng exposure_months <= 3 nên có thể xác định sai khách vào đầu Q3; nên so sánh ngày tham gia trực tiếp với ngày 1/7 (preprocessing/behavioral_momentum.py dòng 71; preprocessing/etl.py dòng 89).
++ Ví dụ: từ 1/7 đến 1/10 là khoảng 3,023 tháng theo công thức hiện tại, nên khách vào 1/7 không được tính là khách mới Q3.
+
+- trans_trend_ratio, trans_count_trend_ratio, login_trend_ratio:
++ Vấn đề: chưa tính số ngày khách được quan sát riêng trong Q2 và Q3; nên so sánh mức sử dụng trên mỗi ngày được quan sát (preprocessing/behavioral_momentum.py dòng 92–106).
++ Ví dụ: khách vào cuối tháng 6 có 1 giao dịch Q2 và 30 giao dịch Q3, nhưng chưa chắc số giao dịch mỗi ngày tăng.
+
+- trans_trend_ratio, trans_count_trend_ratio, login_trend_ratio:
++ Vấn đề: gán bằng 1 cho khách mới chỉ là cách điền khi thiếu lịch sử, không chứng minh mức dùng không đổi; cần giải thích cùng cờ is_new_customer (preprocessing/behavioral_momentum.py dòng 93, 101, 106).
++ Ví dụ: khách vào tháng 8 không có Q2 để so sánh, nên chưa thể kết luận hoạt động giữ nguyên.
+
+- avg_ticket_size:
++ Vấn đề: công thức trans_amount_3m / (trans_count_3m + 1) làm số tiền trung bình bị thấp; nên chia đúng count và xử lý riêng count = 0 (preprocessing/behavioral_momentum.py dòng 127).
++ Ví dụ: một giao dịch 1.000 CU cho kết quả 500 CU thay vì 1.000 CU.
+
+- avg_ticket_size (nhánh dự phòng):
++ Vấn đề: khi thiếu trans_count_3m, code dùng số tiền Q3 nhưng ước lượng số giao dịch từ trung bình cả kỳ; nên yêu cầu tiền và count cùng kỳ (preprocessing/behavioral_momentum.py dòng 130).
++ Ví dụ: Q3 có 5 giao dịch nhưng mẫu số có thể được ước lượng thành 33.
+
+- portfolio_utilization:
++ Vấn đề: số giao dịch chia số sản phẩm chưa cho biết khách dùng từng sản phẩm ra sao; chỉ nên coi đây là một tỷ số tổng hợp (preprocessing/product_portfolio.py dòng 81–82).
++ Ví dụ: khách có 4 sản phẩm và 20 giao dịch, nhưng cả 20 giao dịch có thể chỉ thuộc một tài khoản.
+
+- is_product_sweetspot, is_product_danger_zone, portfolio_health_score:
++ Vấn đề: vẫn dựa trên ngưỡng và trọng số tự chọn, cần ghi rõ giả định và kiểm tra xem có giúp dự đoán tốt hơn không (preprocessing/product_portfolio.py dòng 106–130); với cả sao biết được đâu là sweetspot với danger? giả định là gì?
++ Ví dụ: đổi trọng số 0,35 thành 0,5 có thể đổi điểm dù khách không đổi hành vi.
+
+- is_product_sweetspot, is_product_danger_zone, portfolio_health_score (khi chạy ablation):
++ Vấn đề: phụ thuộc các biến thuộc nhóm khác nên tắt một nhóm cũng đổi cách tính những biến này; cần nói rõ khi so sánh (preprocessing/domain_features.py dòng 98–101; preprocessing/product_portfolio.py dòng 92–100).
++ Ví dụ: tắt nhóm xu hướng giao dịch cũng làm điều kiện giảm chi tiêu trong sweetspot/danger zone chuyển sang giá trị mặc định.
+
+- num_savings_accounts, total_accounts, has_savings_account, multi_account_holder:
++ Vấn đề: đang tính cả tài khoản đã đóng nên chưa thể diễn giải là tài khoản đang có tại ngày chốt; nên đếm riêng tài khoản còn mở (preprocessing/etl.py dòng 109–112; preprocessing/product_portfolio.py dòng 140, 155).
++ Ví dụ: khách đã đóng savings, chỉ còn một everyday, vẫn có thể được đánh dấu có savings và nhiều tài khoản.
+
+- has_closed_account, closed_account_ratio:
++ Vấn đề: có thể giữ làm biến nhưng không nên coi đóng tài khoản tiết kiệm là chắc chắn rời ngân hàng (preprocessing/product_portfolio.py dòng 143–147).
++ Ví dụ: savings hết kỳ hạn rồi tiền chuyển sang everyday cùng chủ, khách vẫn ở lại ngân hàng.
+
+- inactive_high_balance, germany_high_balance, is_middle_aged_vulnerable:
++ Vấn đề: tên biến gắn sẵn ý nghĩa rủi ro cần được kiểm chứng; riêng inactive_high_balance chỉ yêu cầu balance > 0 nên chưa đúng nghĩa số dư cao (preprocessing/risk_interactions.py dòng 60–79).
++ Ví dụ: khách không hoạt động có 1 CU cũng bị đánh dấu inactive_high_balance = 1.
+
+- country_target_enc, gender_target_enc, preferred_channel_target_enc, primary_device_target_enc:
++ Vấn đề: feature được tính từ chính target churn thì có tính là bị leakage không? (preprocessing/categorical_encoding.py dòng 83–87, 104).
++ Ví dụ: nhóm ít người có giá trị mã hóa chịu ảnh hưởng mạnh từ từng nhãn. Đây không phải lấy nhãn từ test.
+
+- enable_feature_selection, top_k_features:
++ có nên xét thử Pearson correlation giữa 133 biến để loại bớt biến có correlation cao không (ngưỡng tự đặt +-0.8 hoặc +-0.9), sau đó mới dùng MI score
+
+- X_test_final, y_test_final trong bước tuning:
++ Vấn đề: phải dùng tập val trong lúc tuning thay vì tập test, tập test phải hoàn toàn độc lập.
+
+- df truyền vào cross_validate:
++ Vấn đề: là toàn bộ dữ liệu, gồm cả khách thuộc test của lần chia chính; không đúng mô tả giữ test ngoài đánh giá chéo (main.py dòng 184–185).
++ Ví dụ: một khách ở test có thể xuất hiện trong phần train của một lượt đánh giá chéo. Việc này không tự làm thay đổi mô hình chính đã học.

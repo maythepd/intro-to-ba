@@ -1,0 +1,168 @@
+clustering:
+  correlation_threshold: 0.9
+  k_candidates:
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  linkage: ward
+  log_transform: true
+  n_clusters: 4
+  scaler: robust
+  silhouette_sample_size: 2000
+  stability_repeats: 3
+dataset:
+  cv_folds: 5
+  data_path: data/full_bank_data.csv
+  enable_cv: true
+  exclude_cols:
+  - customer_id
+  - churn
+  - country
+  - gender
+  random_state: 42
+  raw_full_dataset_dir: data/full_dataset
+  rebuild_full_dataset: false
+  stratify: true
+  target_col: churn
+  test_size: 0.1
+  val_size: 0.1
+experiment:
+  model_save_path: models/saved/{model}_churn.{ext}
+  output_dir: results
+  report_filename: '{mode}_{model}_report.md'
+  save_model: true
+features:
+  allow_nonlinear_representations: false
+  balancing:
+    smote_k_neighbors: 5
+    smote_sampling_strategy: auto
+  categorical_encoding:
+    categorical_cols:
+    - country
+    - gender
+    - preferred_channel
+    - primary_device
+    ohe_drop_first: false
+    target_encoding_m_weight: 10.0
+  domain_features:
+    complaint_count_weight: 1.5
+    danger_zone_min_products: 3
+    enable_behavioral_momentum: true
+    enable_customer_friction: true
+    enable_product_bundling: true
+    enable_risk_interactions: true
+    high_friction_complaints_thresh: 2
+    high_risk_country: Germany
+    login_collapse_threshold: 0.5
+    spending_collapse_threshold: 0.5
+    sweetspot_min_products: 2
+    tx_failure_weight: 2.0
+    unresolved_weight: 3.0
+    velocity_smoothing: 1.0
+    vulnerable_age_max: 60
+    vulnerable_age_min: 45
+  enable_domain_features: true
+  enable_feature_selection: false
+  enable_one_hot_encoding: true
+  enable_scaling: true
+  enable_skewness: true
+  enable_smote: true
+  enable_target_encoding: true
+  feature_selection:
+    compute_feature_importance: false
+    feature_selection_metric: MI_Score
+    top_k_features: null
+  nonlinear_representations:
+    batch_size: 256
+    checkpoint_dir: models/saved/nonlinear
+    dropout: 0.2
+    enabled: false
+    epochs: 30
+    hidden_dims:
+    - 64
+    - 32
+    kernel_components: 32
+    latent_dim: 16
+    learning_rate: 0.001
+    method: supervised
+    mode: augment
+    noise_level: 0.15
+    temperature: 0.1
+  sample_weighting:
+    balance_col: balance
+    churn_weight_multiplier: 1.5
+    decay_half_life_days: 60.0
+    decay_mode: exponential
+    enable_value_weighting: true
+    enabled: false
+    normalize: true
+    recency_col: recency_days
+    value_weight_alpha: 0.5
+  scaling:
+    apply_robust_scaling: true
+    apply_standard_scaling: true
+    robust_features:
+    - recency_days
+    - monthly_transactions
+    - trans_amount_3m
+    - trans_trend_ratio
+    - app_logins_monthly
+    standard_features:
+    - age
+    - credit_score
+    - estimated_salary
+    - tenure
+  skewness_transform:
+    transform_recency_log: true
+    transform_trans_amount_log: true
+    transform_yeo_johnson: true
+    zero_balance_hurdle: true
+model:
+  early_stopping_rounds: 30
+  focal_loss:
+    alpha: 0.25
+    enabled: false
+    gamma: 2.0
+  lr_params:
+    C: 0.05
+    class_weight: balanced
+    max_iter: 2000
+    penalty: l1
+    random_state: 42
+    solver: saga
+  name: xgboost
+  rf_params:
+    class_weight: balanced_subsample
+    max_depth: 12
+    max_features: sqrt
+    min_samples_leaf: 5
+    min_samples_split: 15
+    n_estimators: 500
+    n_jobs: -1
+    oob_score: true
+    random_state: 42
+  xgboost_params:
+    colsample_bytree: 0.8
+    eval_metric: auc
+    gamma: 0.1
+    learning_rate: 0.001
+    max_depth: 30
+    min_child_weight: 1
+    n_estimators: 300
+    n_jobs: -1
+    random_state: 42
+    scale_pos_weight: 1.0
+    subsample: 0.8
+tuning:
+  cv_folds: 5
+  direction: maximize
+  enabled: true
+  metric: PR_AUC
+  n_trials: 30
+  random_state: 42
+  study_name: bank_churn_tuning
+  timeout: null

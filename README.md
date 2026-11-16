@@ -85,3 +85,34 @@ not be loaded directly as `artifacts/churn_bundle.joblib`; the demo endpoint req
 preprocessing pipeline plus its compatible feature order. The `api/export_bundle.py` workflow remains
 separate until an explicitly validated model export is built. This merge does not claim that the
 experimental model has been deployed or that the end-to-end API has been tested on the new data.
+
+## KMeans + hierarchical customer segmentation
+
+Research sources have been preserved in `clustering_research/kmeans/` (source branch `feature/module-5b-kmeans`) and `clustering_research/hierarchical/` (source branch `feature/hierarchical-cluster`). These research trees are references: they depend on their original feature/ETL context and are not imported directly into the production API.
+
+The integrated, tested serving adapter lives in `api/segmentation_service.py` and uses ONLY `data/official/customer_features.csv` prepared by the official six-table Kaggle workflow. It refits both models on that snapshot rather than representing incompatible archived files as deployed models. It uses the same approved original and behavioral feature columns with 50/50 group-balanced preprocessing, without using churn as a clustering input.
+
+```bash
+pip install -r requirements.txt
+python -m api.official_data --download
+python -m api.segmentation_service  # saves artifacts/segmentation/cluster_bundle.joblib
+uvicorn api.main:app --reload
+cd frontend && npm install && npm run dev
+```
+
+The API reports **503** if the clustering bundle is missing or its SHA-256 does not match the official feature table; no fabricated fallback is used. `/health` exposes `segmentation_loaded`. The included Render blueprint runs the segmentation export at build time.
+
+Endpoints:
+- `GET /api/segments?algorithm=kmeans` or `algorithm=hierarchical`: cluster counts, profiles, descriptive churn, evaluation sample silhouette, method and provenance.
+- `GET /api/segments/customers/{customer_id}`: both assignments for a known customer in the fitted official snapshot.
+- `POST /api/segments/predict?algorithm=kmeans|hierarchical`: accepts the same validated `CustomerInput` JSON used for churn prediction, and assigns a new customer to a cluster.
+
+**Important hierarchical limitation:** the original upstream Ward checkpoint has no customer-ID-to-leaf mapping and cannot directly predict new customers. For this serving adapter we fit a fresh Ward hierarchy on up to 1,500 customers drawn deterministically from the official snapshot, retain exact Ward labels for the fitted subset, and assign all other customers (and new incoming records) to the nearest cluster centroid in the same fitted feature space. Those assignments are **approximations**, explicitly identified in responses and UI, not native hierarchical predictions or the original upstream cluster IDs. Upstream k=4 hierarchical business labels and metrics must not be mixed with this new fit.
+
+The UI `/segments` switches between KMeans and Ward, visualizes actual server-returned cluster sizes and profiles, and supports customer-ID lookup. Customer detail pages show both assignments. Models are experimental descriptive clustering of a synthetic-extended dataset, **not operational customer segmentation**. No cloud deployment has been verified.
+
+Tests:
+```bash
+python -m unittest discover -s tests -p 'test_segmentation_api.py' -v
+cd frontend && npm run build
+```

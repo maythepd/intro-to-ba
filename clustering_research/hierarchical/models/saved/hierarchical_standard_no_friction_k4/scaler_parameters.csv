@@ -1,0 +1,10 @@
+feature,center_after_log_imputation,scale,scaler
+recency_days,3.4114007087285048,1.7704455889769606,StandardScaler
+initiated_transactions_monthly,1.3467006713868832,0.9722061391664856,StandardScaler
+successful_logins_monthly,2.6072079939511137,0.9915212542749485,StandardScaler
+login_recency_days,1.3348555886634017,1.1288348949136375,StandardScaler
+trans_daily_trend,0.4431742858714792,0.6542358685129583,StandardScaler
+login_daily_trend,0.6876410329683392,0.42999044560694527,StandardScaler
+products_number,1.5302,0.5816252745539864,StandardScaler
+savings_share,0.01689966905705062,0.04488779078738008,StandardScaler
+total_accounts,0.9130821631007271,0.2608912892055707,StandardScaler

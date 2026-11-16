@@ -9,6 +9,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from api import segmentation_service
 
 MODEL_PATH = Path(os.environ.get("MODEL_BUNDLE_PATH", "artifacts/churn_bundle.joblib"))
 DATA_PATH = Path(os.environ.get("CUSTOMERS_CSV_PATH", "data/official/customer_features.csv"))
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
     app.state.bundle = joblib.load(MODEL_PATH) if MODEL_PATH.is_file() else None
     app.state.customers = pd.read_csv(DATA_PATH) if DATA_PATH.is_file() else None
     app.state.inference_count = 0
+    app.state.segmentation = segmentation_service.load(DATA_PATH)
     yield
 
 app = FastAPI(title="BaBank Analytics API", version="1.0.0", lifespan=lifespan)
@@ -53,7 +55,8 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return {"status":"ready" if app.state.bundle is not None else "model_unavailable",
-            "model_loaded":app.state.bundle is not None,"customers_loaded":app.state.customers is not None}
+            "model_loaded":app.state.bundle is not None,"customers_loaded":app.state.customers is not None,
+            "segmentation_loaded":app.state.segmentation is not None}
 
 def signals(p: CustomerInput) -> list[dict[str,str]]:
     result=[]
@@ -161,6 +164,29 @@ def monitoring():
             "predictions_this_process":app.state.inference_count,"drift_available":False,
             "performance_tracking_available":False}
 
+def require_segmentation():
+    bundle = app.state.segmentation
+    if bundle is None:
+        raise HTTPException(503, "Segmentation unavailable or official feature snapshot does not match the exported model. Run python -m api.segmentation_service.")
+    return bundle
+
+
 @app.get("/api/segments")
-def segments():
-    raise HTTPException(503,"Segmentation model has not been provided")
+def segments(algorithm: Literal["kmeans", "hierarchical"] = "kmeans"):
+    return segmentation_service.summary(require_segmentation(), algorithm)
+
+
+@app.get("/api/segments/customers/{customer_id}")
+def customer_segments(customer_id: int):
+    result = segmentation_service.customer_membership(require_segmentation(), str(customer_id))
+    if result is None:
+        raise HTTPException(404, "Customer not found in the fitted segmentation snapshot")
+    return result
+
+
+@app.post("/api/segments/predict")
+def predict_segments(payload: CustomerInput, algorithm: Literal["kmeans", "hierarchical"] = "kmeans"):
+    try:
+        return segmentation_service.predict(require_segmentation(), payload.model_dump(), algorithm)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(422, "Invalid segmentation features") from exc

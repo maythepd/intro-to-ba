@@ -56,6 +56,43 @@ export interface HealthResponse {
 
 export type GenericRecord = Record<string, unknown>;
 
+export type ClusterAlgorithm = "kmeans" | "hierarchical";
+export interface ClusterProfile {
+  id: number;
+  name: string;
+  customers: number;
+  share: number;
+  avg_balance: number;
+  avg_monthly_transactions: number;
+  avg_app_logins_monthly: number;
+  observed_churn_rate?: number;
+}
+export interface SegmentSummary {
+  algorithm: ClusterAlgorithm;
+  source: string;
+  customer_count: number;
+  n_clusters: number;
+  silhouette_sample: number | null;
+  features: string[];
+  clusters: ClusterProfile[];
+  assignment_method: string;
+  cluster_labels_are_risk_rankings: boolean;
+  study_note: string;
+}
+export interface SegmentCustomer {
+  customer_id: string;
+  kmeans: number;
+  hierarchical: number;
+  hierarchical_assignment_method: "fitted_ward" | "nearest_centroid_approximation";
+}
+export interface SegmentPrediction {
+  algorithm: ClusterAlgorithm;
+  cluster_id: number;
+  method: string;
+  warning: string | null;
+}
+
+
 export class ApiNotConfiguredError extends Error {
   constructor() {
     super("API is not configured (VITE_API_BASE_URL).");
@@ -144,7 +181,13 @@ export const api = {
   predict: (payload: CustomerFeatures, signal?: AbortSignal) =>
     request<PredictionResult>("/api/predict", { method: "POST", body: {...payload, customer_id: /^\d+$/.test(payload.customer_id) ? Number(payload.customer_id) : null}, signal, timeoutMs: 20000 }),
   metrics: (signal?: AbortSignal) => request<GenericRecord>("/api/metrics", { signal }),
-  segments: (signal?: AbortSignal) => request<GenericRecord | GenericRecord[]>("/api/segments", { signal }),
+  segments: (algorithm: ClusterAlgorithm, signal?: AbortSignal) =>
+    request<SegmentSummary>(`/api/segments?algorithm=${encodeURIComponent(algorithm)}`, { signal }),
+  segmentCustomer: (id: string, signal?: AbortSignal) =>
+    request<SegmentCustomer>(`/api/segments/customers/${encodeURIComponent(id)}`, { signal }),
+  predictSegment: (payload: CustomerFeatures, algorithm: ClusterAlgorithm, signal?: AbortSignal) =>
+    request<SegmentPrediction>(`/api/segments/predict?algorithm=${encodeURIComponent(algorithm)}`,
+      { method: "POST", body: payload, signal }),
   monitoring: (signal?: AbortSignal) => request<GenericRecord>("/api/monitoring", { signal }),
 };
 

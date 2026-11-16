@@ -29,6 +29,11 @@ function CustomerDetail() {
     enabled: isApiConfigured,
     retry: false,
   });
+  const segments = useQuery({
+    queryKey: ["segment-customer", id],
+    queryFn: ({ signal }) => api.segmentCustomer(id, signal),
+    enabled: isApiConfigured, retry: false,
+  });
   const c: CustomerFeatures | undefined = q.data;
 
   const back = (
@@ -74,6 +79,25 @@ function CustomerDetail() {
             <p className="mt-1 font-display text-2xl font-bold tabular">{v}</p>
           </div>
         ))}
+      </div>
+
+      <div className="mt-6">
+        <Panel title="Customer Segmentation" subtitle="Clustering assignments from the official snapshot">
+          {segments.isLoading ? <p className="text-sm text-muted-foreground">Loading segmentation…</p>
+          : segments.data ? (
+            <>
+              <Field label="KMeans cluster" value={`Cluster ${segments.data.kmeans}`} />
+              <Field label="Hierarchical cluster" value={`Cluster ${segments.data.hierarchical}`} />
+              <p className="mt-3 text-xs text-muted-foreground">
+                {segments.data.hierarchical_assignment_method === "fitted_ward"
+                  ? "Exact Ward-fit sample assignment." : "Nearest-centroid approximation beyond Ward-fit sample."}
+              </p>
+              <Link to="/segments" className="mt-3 inline-block text-sm text-primary underline">Explore clusters</Link>
+            </>
+          ) : <p className="text-sm text-muted-foreground">
+            Segmentation unavailable. Run the clustering export and connect the API.
+          </p>}
+        </Panel>
       </div>
 
       <div className="mt-6 grid gap-5 lg:grid-cols-3">
