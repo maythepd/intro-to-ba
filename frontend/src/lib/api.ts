@@ -49,6 +49,21 @@ export interface PredictionResult {
   signals: PredictionSignal[];
 }
 
+export interface RiskSummary {
+  status: "scored";
+  source: string;
+  data_kind: string;
+  model_name: string;
+  total_customers: number;
+  scored_customers: number;
+  counts: { low: number; medium: number; high: number };
+  customers_requiring_attention: number;
+  risk_thresholds: { medium_from: number; high_from: number };
+  scored_at: string;
+  cached?: boolean;
+  predictions?: Array<Pick<PredictionResult, "customer_id" | "churn_probability" | "predicted_churn" | "risk_level">>;
+}
+
 export interface HealthResponse {
   status?: string;
   [key: string]: unknown;
@@ -181,6 +196,11 @@ export const api = {
   predict: (payload: CustomerFeatures, signal?: AbortSignal) =>
     request<PredictionResult>("/api/predict", { method: "POST", body: {...payload, customer_id: /^\d+$/.test(payload.customer_id) ? Number(payload.customer_id) : null}, signal, timeoutMs: 20000 }),
   metrics: (signal?: AbortSignal) => request<GenericRecord>("/api/metrics", { signal }),
+  riskSummary: (signal?: AbortSignal) =>
+    request<RiskSummary>("/api/dashboard/risk-summary", { signal }),
+  batchScore: (force = false) =>
+    request<RiskSummary>(`/api/predict/batch?force=${force ? "true" : "false"}`,
+      { method: "POST", timeoutMs: 120000 }),
   segments: (algorithm: ClusterAlgorithm, signal?: AbortSignal) =>
     request<SegmentSummary>(`/api/segments?algorithm=${encodeURIComponent(algorithm)}`, { signal }),
   segmentCustomer: (id: string, signal?: AbortSignal) =>
