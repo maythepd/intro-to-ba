@@ -1,0 +1,181 @@
+# ==============================================================================
+# UNIFIED CONFIGURATION: FEATURE ENGINEERING & MODELS
+# ==============================================================================
+
+# 1. CẤU HÌNH DỮ LIỆU & PHÂN CHIA TRAIN/VAL/TEST/CV (Dataset & Partition Settings)
+dataset:
+  data_path: "data/full_bank_data.csv"
+  raw_full_dataset_dir: "data/full_dataset"
+  rebuild_full_dataset: false
+  target_col: "churn"
+  test_size: 0.10                   # 10% tập Test độc lập
+  val_size: 0.10                    # 10% tập Validation
+  enable_cv: true                   # Kích hoạt K-Fold Cross-Validation
+  cv_folds: 5                       # Số fold cho Stratified K-Fold CV
+  random_state: 42
+  stratify: true
+  exclude_cols:
+    - customer_id
+    - churn
+    - country
+    - gender
+
+# 2. CẤU HÌNH KỸ NGHỆ ĐẶC TRƯNG (Feature Engineering Settings)
+features:
+  # Bật/tắt các mô-đun chính (High-level Module Toggles for Ablation)
+  enable_skewness: true             # Biến đổi Log1p, Zero-balance hurdle, Yeo-Johnson
+  enable_scaling: true              # Chuẩn hóa RobustScaler & StandardScaler
+  enable_domain_features: true      # Tạo các đặc trưng nghiệp vụ ngân hàng
+  enable_one_hot_encoding: true     # One-Hot Encoding cho các cột phân loại
+  enable_target_encoding: true      # Smoothed Target Encoding (m-estimate)
+  enable_smote: true                # Cân bằng mẫu thiểu số bằng SMOTE trên tập Train
+  enable_feature_selection: false   # Lọc đặc trưng Top-K theo độ quan trọng
+
+  # Chi tiết biến đổi phân phối lệch (Skewness sub-toggles)
+  skewness_transform:
+    transform_trans_amount_log: true
+    transform_recency_log: true
+    zero_balance_hurdle: true
+    transform_yeo_johnson: true
+
+  # Chi tiết chuẩn hóa (Scaling sub-toggles)
+  scaling:
+    apply_robust_scaling: true
+    apply_standard_scaling: true
+    robust_features:
+      - recency_days
+      - monthly_transactions
+      - trans_amount_3m
+      - trans_trend_ratio
+      - app_logins_monthly
+    standard_features:
+      - age
+      - credit_score
+      - estimated_salary
+      - tenure
+
+  # Chi tiết đặc trưng nghiệp vụ (Domain features sub-groups)
+  domain_features:
+    enable_behavioral_momentum: true  # velocity, spending collapsing, ticket size, app logins ratio
+    enable_customer_friction: true    # friction_index, is_high_friction
+    enable_product_bundling: true     # is_product_sweetspot, is_product_danger_zone
+    enable_risk_interactions: true    # wealth_deceleration_risk, germany_high_balance, middle-aged
+
+    # Tham số động lượng hành vi (Behavioral momentum - không hardcode)
+    spending_collapse_threshold: 0.50
+    login_collapse_threshold: 0.50
+    velocity_smoothing: 1.0
+
+    # Tham số ma sát dịch vụ (Customer friction - không hardcode)
+    unresolved_weight: 3.0
+    complaint_count_weight: 1.5
+    tx_failure_weight: 2.0
+    high_friction_complaints_thresh: 2
+
+    # Tham số danh mục sản phẩm (Product portfolio - không hardcode)
+    sweetspot_min_products: 2
+    danger_zone_min_products: 3
+
+    # Tham số tương tác rủi ro (Risk interactions - không hardcode)
+    vulnerable_age_min: 45
+    vulnerable_age_max: 60
+    high_risk_country: "Germany" 
+
+  # Chi tiết mã hóa danh mục (Categorical encoding)
+  categorical_encoding:
+    categorical_cols:
+      - country
+      - gender
+      - preferred_channel
+      - primary_device
+    target_encoding_m_weight: 10.0
+    ohe_drop_first: false
+
+  # Chi tiết cân bằng lớp (Class balancing / SMOTE)
+  balancing:
+    smote_sampling_strategy: "auto"
+    smote_k_neighbors: 5
+
+  # Chi tiết trọng số mẫu (Sample Weighting / Recency Decay / Value Weighting - Phương án 1)
+  sample_weighting:
+    enabled: false                  # Bật/tắt phương án 1
+    decay_mode: "exponential"       # "exponential" | "linear" | "none"
+    recency_col: "recency_days"     # Cột tính độ mới
+    decay_half_life_days: 60.0      # Chu kỳ bán rã (ngày)
+    enable_value_weighting: true    # Ưu tiên tài khoản số dư cao
+    balance_col: "balance"          # Cột số dư
+    value_weight_alpha: 0.5         # Hệ số logarithmic alpha cho số dư
+    churn_weight_multiplier: 1.5    # Phạt nặng hơn khi bỏ sót khách hàng churn (FN)
+    normalize: true                 # Chuẩn hóa để giữ nguyên thang đo gradient
+
+  # Chi tiết lựa chọn đặc trưng (Feature selection)
+  feature_selection:
+    top_k_features: null
+    feature_selection_metric: "MI_Score"  # Sử dụng Mutual Information Classif theo chuẩn dự án
+    compute_feature_importance: false
+
+# 3. CẤU HÌNH MÔ HÌNH (Model Configuration: xgboost | lr | rf)
+model:
+  name: "xgboost"                   # Mô hình mặc định khi train đơn lẻ: "xgboost" | "lr" | "rf"
+
+  # Cấu hình Focal Loss (Phương án 2: Tập trung gradient vào các ca khó)
+  focal_loss:
+    enabled: false                  # Kích hoạt Focal Loss cho XGBoost và Logistic Regression
+    gamma: 2.0                      # Tham số focusing
+    alpha: 0.25                     # Trọng số cho nhãn churn (class 1)
+
+  # Cấu hình XGBoost (Gradient Boosting)
+  xgboost_params:
+    n_estimators: 300
+    max_depth: 30
+    learning_rate: 0.001
+    subsample: 0.8
+    colsample_bytree: 0.8
+    gamma: 0.1
+    min_child_weight: 1
+    scale_pos_weight: 1.0           # 1.0 nếu dùng SMOTE; nếu không SMOTE có thể set 3.9
+    eval_metric: "auc"
+    random_state: 42
+    n_jobs: -1
+  early_stopping_rounds: 30
+
+  # Cấu hình Logistic Regression (Linear Model — ghi đè DEFAULT_PARAMS)
+  lr_params:
+    C: 0.05                         # Tăng regularization (C nhỏ hơn) để giảm variance
+    solver: "saga"                  # saga hỗ trợ L1/ElasticNet, phù hợp khi cần sparsity
+    penalty: "l1"                   # L1: tự động zero-out các feature ít quan trọng
+    max_iter: 2000                  # Cần nhiều iteration hơn cho saga + L1
+    class_weight: "balanced"
+    random_state: 42
+
+  # Cấu hình Random Forest (Ensemble Bagging — ghi đè DEFAULT_PARAMS)
+  rf_params:
+    n_estimators: 500               # Nhiều cây hơn → phương sai thấp hơn
+    max_depth: 12                   # Thấp hơn default (15) → regularization chặt hơn
+    min_samples_split: 15           # Node phải đủ mẫu trước khi chia
+    min_samples_leaf: 5             # Lá cây tối thiểu 5 mẫu
+    max_features: "sqrt"
+    class_weight: "balanced_subsample"
+    oob_score: true
+    random_state: 42
+    n_jobs: -1
+
+# 4. CẤU HÌNH THÍ NGHIỆM & KẾT QUẢ (Experiment & Reporting Settings)
+experiment:
+  output_dir: "results"
+  save_model: true
+  # Template lưu model tự động cho từng model ({model} = xgboost|lr|rf, {ext} = json|pkl)
+  model_save_path: "models/saved/{model}_churn.{ext}"
+  # Template tên file báo cáo tự động ({mode} = compare|ablation|train|tune, {model} = xgboost|lr|rf)
+  report_filename: "{mode}_{model}_report.md"
+
+# 5. CẤU HÌNH TỐI ƯU HÓA SIÊU THAM SỐ (Optuna Hyperparameter Tuning Settings)
+tuning:
+  enabled: true
+  n_trials: 30                      # Số lượng trials tối ưu
+  timeout: null                      # Giới hạn thời gian (giây), null nếu không giới hạn
+  metric: "PR_AUC"                  # Mục tiêu tối ưu ("PR_AUC" | "ROC_AUC" | "F1_Score")
+  cv_folds: 5                       # Số fold Cross-Validation trên tập Train
+  study_name: "bank_churn_tuning"
+  direction: "maximize"
+  random_state: 42

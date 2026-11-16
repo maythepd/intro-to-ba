@@ -1,0 +1,519 @@
+"""
+Master Feature Engineering Pipeline for Digital Bank Churn Prediction.
+Orchestrates skewness transformation, scaling, domain feature engineering,
+categorical encoding, SMOTE class balancing, feature selection, and sample weighting.
+
+Configuration is decoupled into the config/ module with YAML support.
+"""
+
+import copy
+from dataclasses import dataclass
+import os
+from pathlib import Path
+import sys
+from typing import Any, Callable, Dict, List, Optional, Union
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.impute import SimpleImputer
+
+# Ensure config module is discoverable
+try:
+    from config import PipelineConfig
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from config import PipelineConfig
+
+from .base import BaseFeatureTransformer
+from .etl import BankDataETL, load_or_build_dataset
+from .skewness_transform import SkewnessTransformer
+from .scaling import FeatureScaler
+from .domain_features import DomainFeatureEngineer
+from .categorical_encoding import CategoricalEncoder
+from .balancing import ClassBalancer
+from .feature_selector import FeatureSelector
+from .sample_weighting import SampleWeightConfig, SampleWeightGenerator
+from .splitting import DataSplitter, DatasetSplit, CVFold, CVResult
+
+
+def load_dataset(
+    features_cfg: Optional[PipelineConfig] = None,
+    force_rebuild: bool = False,
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    Unified dataset ingestion & loading function.
+    Resolves data_path, checks cache, and builds from raw multi-table files via BankDataETL if needed.
+    """
+    cfg = features_cfg or PipelineConfig()
+    target_data_str = cfg.data_path
+    rebuild = force_rebuild or getattr(cfg, "rebuild_full_dataset", False)
+
+    target_path = Path(target_data_str)
+    if not target_path.is_absolute():
+        repo_root = Path(__file__).resolve().parent.parent
+        resolved = (repo_root / target_path).resolve()
+        if not resolved.exists() and not rebuild:
+            cwd_cand = Path.cwd() / target_path
+            resolved = cwd_cand if cwd_cand.exists() else resolved
+    else:
+        resolved = target_path
+
+    if rebuild or not resolved.exists() or resolved.is_dir():
+        raw_dir = getattr(cfg, "raw_full_dataset_dir", "data/full_dataset")
+        out_path = str(resolved) if not resolved.is_dir() else "data/full_bank_data.csv"
+        return load_or_build_dataset(
+            raw_data_dir=raw_dir,
+            output_path=out_path,
+            force_rebuild=rebuild,
+            verbose=verbose,
+        )
+
+    if verbose:
+        print(f"[OK] Ingesting dataset from: {resolved}")
+    return pd.read_csv(resolved)
+
+
+# Backward-compatible alias
+load_or_build_full_dataset = load_or_build_dataset
+
+
+@dataclass
+class PipelineResult:
+    """Output container for prepared train/test feature sets."""
+
+    X_train: pd.DataFrame
+    X_test: pd.DataFrame
+    y_train: pd.Series
+    y_test: pd.Series
+    X_train_resampled: pd.DataFrame
+    y_train_resampled: pd.Series
+    model_features: List[str]
+    X_val: Optional[pd.DataFrame] = None
+    y_val: Optional[pd.Series] = None
+    sample_weight: Optional[np.ndarray] = None
+    sample_weight_resampled: Optional[np.ndarray] = None
+    feature_importance: Optional[pd.DataFrame] = None
+    full_transformed_df: Optional[pd.DataFrame] = None
+
+
+class FeatureEngineeringPipeline:
+    """
+    Final end-to-end Feature Engineering & Transformation Pipeline.
+    
+    Coordinates:
+      1. SkewnessTransformer: Log1p, zero-balance hurdle, Yeo-Johnson
+      2. FeatureScaler: RobustScaler and StandardScaler
+      3. DomainFeatureEngineer: Velocity, friction, bundling, interaction terms
+      4. CategoricalEncoder: One-Hot and smoothed Target Encoding
+      5. ClassBalancer: SMOTE minority oversampling (train only)
+      6. FeatureSelector: MI + RF importance ranking and Top-K selection
+      7. SampleWeightGenerator: Exponential recency decay + financial value weighting
+    """
+
+    def __init__(
+        self,
+        config: Optional[Union[PipelineConfig, Dict[str, Any], str, Path]] = None,
+    ):
+        if config is None:
+            self.config = PipelineConfig.from_yaml()
+        elif isinstance(config, (str, Path)):
+            self.config = PipelineConfig.from_yaml(config)
+        elif isinstance(config, dict):
+            self.config = PipelineConfig.from_dict(config)
+        elif isinstance(config, PipelineConfig):
+            self.config = config
+        else:
+            raise TypeError(f"Invalid config type: {type(config)}. Expected PipelineConfig, dict, str, or Path.")
+
+        self._init_modules()
+
+    @classmethod
+    def from_yaml(cls, path: Optional[Union[str, Path]] = None) -> "FeatureEngineeringPipeline":
+        """Instantiate pipeline directly from a YAML config file."""
+        return cls(config=PipelineConfig.from_yaml(path))
+
+    def _init_modules(self) -> None:
+        """Instantiate sub-modules based on current configuration."""
+        cfg = self.config
+
+        # 1. Skewness
+        self.skewness_transformer = SkewnessTransformer(
+            enabled=cfg.enable_skewness,
+            transform_trans_amount_log=cfg.transform_trans_amount_log,
+            transform_recency_log=cfg.transform_recency_log,
+            zero_balance_hurdle=cfg.zero_balance_hurdle,
+            transform_yeo_johnson=cfg.transform_yeo_johnson,
+        )
+
+        # 2. Scaling
+        self.scaler = FeatureScaler(
+            enabled=cfg.enable_scaling,
+            apply_robust_scaling=cfg.apply_robust_scaling,
+            apply_standard_scaling=cfg.apply_standard_scaling,
+            robust_features=cfg.robust_features,
+            standard_features=cfg.standard_features,
+        )
+
+        # 3. Domain Features (Coordinated modular transformers)
+        self.domain_engineer = DomainFeatureEngineer(
+            enabled=cfg.enable_domain_features,
+            enable_behavioral_momentum=cfg.enable_behavioral_momentum,
+            enable_customer_friction=cfg.enable_customer_friction,
+            enable_product_bundling=cfg.enable_product_bundling,
+            enable_risk_interactions=cfg.enable_risk_interactions,
+            spending_collapse_threshold=getattr(cfg, "spending_collapse_threshold", 0.50),
+            login_collapse_threshold=getattr(cfg, "login_collapse_threshold", 0.50),
+            velocity_smoothing=getattr(cfg, "velocity_smoothing", 1.0),
+            unresolved_weight=getattr(cfg, "unresolved_weight", 3.0),
+            complaint_count_weight=getattr(cfg, "complaint_count_weight", 1.5),
+            tx_failure_weight=getattr(cfg, "tx_failure_weight", 2.0),
+            high_friction_complaints_thresh=getattr(cfg, "high_friction_complaints_thresh", 2),
+            sweetspot_min_products=getattr(cfg, "sweetspot_min_products", 2),
+            danger_zone_min_products=getattr(cfg, "danger_zone_min_products", 3),
+            vulnerable_age_min=getattr(cfg, "vulnerable_age_min", 45),
+            vulnerable_age_max=getattr(cfg, "vulnerable_age_max", 60),
+            high_risk_country=getattr(cfg, "high_risk_country", "Germany"),
+        )
+        self.momentum_engineer = self.domain_engineer.momentum_engineer
+        self.friction_engineer = self.domain_engineer.friction_engineer
+        self.portfolio_engineer = self.domain_engineer.portfolio_engineer
+        self.risk_engineer = self.domain_engineer.risk_engineer
+
+        # 4. Categorical Encoding
+        self.categorical_encoder = CategoricalEncoder(
+            enabled=(cfg.enable_one_hot_encoding or cfg.enable_target_encoding),
+            apply_ohe=cfg.enable_one_hot_encoding,
+            apply_target_enc=cfg.enable_target_encoding,
+            categorical_cols=cfg.categorical_cols,
+            m_weight=cfg.target_encoding_m_weight,
+            ohe_drop_first=cfg.ohe_drop_first,
+        )
+
+        # 5. Balancing
+        self.balancer = ClassBalancer(
+            enabled=cfg.enable_smote,
+            method="smote",
+            random_state=cfg.random_state,
+            sampling_strategy=cfg.smote_sampling_strategy,
+            k_neighbors=cfg.smote_k_neighbors,
+        )
+
+        # 6. Feature Selection
+        self.feature_selector = FeatureSelector(
+            enabled=cfg.enable_feature_selection,
+            top_k=cfg.top_k_features,
+            ranking_metric=cfg.feature_selection_metric,
+            random_state=cfg.random_state,
+        )
+
+        # 7. Sample Weighting
+        sw_cfg = getattr(cfg, "sample_weighting", None)
+        if sw_cfg is None:
+            self.sample_weighter = SampleWeightGenerator(
+                enabled=getattr(cfg, "enable_sample_weighting", False),
+                decay_mode=getattr(cfg, "weight_decay_mode", "exponential"),
+                recency_col=getattr(cfg, "weight_recency_col", "recency_days"),
+                decay_half_life_days=getattr(cfg, "weight_decay_half_life_days", 60.0),
+                enable_value_weighting=getattr(cfg, "weight_enable_value_weighting", True),
+                balance_col=getattr(cfg, "weight_balance_col", "balance"),
+                value_weight_alpha=getattr(cfg, "weight_value_weight_alpha", 0.5),
+                churn_weight_multiplier=getattr(cfg, "weight_churn_multiplier", 1.5),
+                normalize=getattr(cfg, "weight_normalize", True),
+            )
+        else:
+            self.sample_weighter = SampleWeightGenerator(sw_cfg)
+
+    def fit(self, df: pd.DataFrame, target_col: Optional[str] = None) -> "FeatureEngineeringPipeline":
+        """
+        Fit all stateful transformers sequentially on training dataframe.
+        """
+        target_name = target_col or self.config.target_col
+        y = df[target_name] if target_name in df.columns else None
+
+        current = df.copy()
+
+        # Step 1: Skewness
+        self.skewness_transformer.fit(current, y)
+        current = self.skewness_transformer.transform(current)
+
+        # Step 2: Domain Features (Run before scaling so domain features can be scaled)
+        self.domain_engineer.fit(current, y)
+        current = self.domain_engineer.transform(current)
+
+        # Step 3: Scaling (Properly scales raw and domain features like monthly_transactions, trans_trend_ratio, app_logins_monthly)
+        self.scaler.fit(current, y)
+        current = self.scaler.transform(current)
+
+        # Step 4: Categorical
+        self.categorical_encoder.fit(current, y)
+        current = self.categorical_encoder.transform(current)
+
+        # Step 5: Numeric Imputer (handles genuine NaNs like avg_resolution_delay_days cleanly without leakage)
+        feature_cols = self.extract_model_features(current)
+        self.imputer = SimpleImputer(strategy="median")
+        self.imputer.fit(current[feature_cols])
+
+        return self
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Transform dataframe using all fitted transformers sequentially.
+        """
+        out = df.copy()
+
+        # Step 1: Skewness
+        out = self.skewness_transformer.transform(out)
+
+        # Step 2: Domain Features
+        out = self.domain_engineer.transform(out)
+
+        # Step 3: Scaling
+        out = self.scaler.transform(out)
+
+        # Step 4: Categorical
+        out = self.categorical_encoder.transform(out)
+
+        # Step 5: Numeric Imputer
+        if hasattr(self, "imputer"):
+            feature_cols = self.extract_model_features(out)
+            out[feature_cols] = self.imputer.transform(out[feature_cols])
+
+        return out
+
+    def fit_transform(self, df: pd.DataFrame, target_col: Optional[str] = None) -> pd.DataFrame:
+        """Fit on df and return transformed dataframe."""
+        return self.fit(df, target_col).transform(df)
+
+    def extract_model_features(
+        self, df: pd.DataFrame, exclude_cols: Optional[List[str]] = None
+    ) -> List[str]:
+        """
+        Select all numeric feature columns, filtering out specified exclusion columns.
+        """
+        excludes = exclude_cols or self.config.exclude_cols
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        return [c for c in numeric_cols if c not in excludes]
+
+    def prepare_train_test(
+        self,
+        df: pd.DataFrame,
+        target_col: Optional[str] = None,
+        compute_feature_importance: Optional[bool] = None,
+    ) -> PipelineResult:
+        """
+        End-to-end execution with leak-free Train/Test partitioning:
+          1. Stratified split (80/20 by default).
+          2. Fit transformers exclusively on train partition.
+          3. Transform train and test partitions.
+          4. Extract numerical model features.
+          5. Apply SMOTE balancing on train partition.
+          6. Compute sample weights on train partition (exponential recency decay + value weighting).
+          7. Compute feature importances & optionally select top-K features.
+        """
+        target = target_col or self.config.target_col
+        if target not in df.columns:
+            raise KeyError(f"Target column '{target}' not found in dataframe.")
+
+        # If baseline mode is requested, restrict dataframe strictly to original raw Kaggle features
+        if getattr(self.config, "use_raw_kaggle_features_only", False):
+            raw_cols = [
+                "credit_score", "country", "gender", "age", "tenure",
+                "balance", "products_number", "credit_card", "active_member",
+                "estimated_salary", target
+            ]
+            available_raw = [c for c in raw_cols if c in df.columns]
+            df = df[available_raw].copy()
+            self.config.enable_domain_features = False
+            self.domain_engineer.enabled = False
+
+        # 1. Stratified Partitioning via DataSplitter
+        splitter = DataSplitter(
+            test_size=self.config.test_size,
+            val_size=getattr(self.config, "val_size", 0.0),
+            stratify=self.config.stratify,
+            random_state=self.config.random_state,
+        )
+        split = splitter.train_val_test_split(df, target_col=target)
+
+        train_df = split.train_df
+        test_df = split.test_df
+        val_df = split.val_df
+
+        # 2. Fit transformers exclusively on train_df
+        self.fit(train_df, target_col=target)
+
+        # 3. Transform partitions
+        train_tr = self.transform(train_df)
+        test_tr = self.transform(test_df)
+        val_tr = self.transform(val_df) if split.has_val else None
+
+        # 4. Extract numeric feature matrices
+        feature_cols = self.extract_model_features(train_tr)
+        X_train = train_tr[feature_cols].copy()
+        y_train = train_tr[target].copy()
+        X_test = test_tr[feature_cols].copy()
+        y_test = test_tr[target].copy()
+
+        if val_tr is not None:
+            X_val = val_tr[feature_cols].copy()
+            y_val = val_tr[target].copy()
+        else:
+            X_val = None
+            y_val = None
+
+        # 5. Class Imbalance Remediation (SMOTE) strictly on training set
+        X_train_res, y_train_res = self.balancer.fit_resample(X_train, y_train)
+
+        # 5a. Sample Weighting strictly computed on training partition (zero leakage)
+        self.sample_weighter.fit(train_df, y_train)
+        sample_weight_train = self.sample_weighter.compute_weights(train_df, y_train)
+        if self.config.enable_smote and len(y_train_res) > len(y_train):
+            sample_weight_res = SampleWeightGenerator.expand_for_smote(
+                weights=sample_weight_train,
+                y_train_original=y_train,
+                y_train_resampled=y_train_res,
+            )
+        else:
+            sample_weight_res = sample_weight_train
+
+        # 6. Feature Selection / Importance
+        should_rank = (
+            self.config.enable_feature_selection
+            or (compute_feature_importance if compute_feature_importance is not None else self.config.compute_feature_importance)
+        )
+        self.feature_selector.fit(X_train, y_train, compute_ranking=should_rank)
+        df_importance = self.feature_selector.get_importance_ranking()
+
+        if self.config.enable_feature_selection and self.config.top_k_features:
+            X_train = self.feature_selector.transform(X_train)
+            X_test = self.feature_selector.transform(X_test)
+            X_train_res = self.feature_selector.transform(X_train_res)
+            if X_val is not None:
+                X_val = self.feature_selector.transform(X_val)
+            feature_cols = list(X_train.columns)
+
+        # Full transformed df (fit_transform on whole dataset for exploratory export)
+        full_transformed = self.transform(df)
+
+        return PipelineResult(
+            X_train=X_train,
+            X_test=X_test,
+            y_train=y_train,
+            y_test=y_test,
+            X_train_resampled=X_train_res,
+            y_train_resampled=y_train_res,
+            model_features=feature_cols,
+            X_val=X_val,
+            y_val=y_val,
+            sample_weight=sample_weight_train,
+            sample_weight_resampled=sample_weight_res,
+            feature_importance=df_importance,
+            full_transformed_df=full_transformed,
+        )
+
+    def cross_validate(
+        self,
+        df: pd.DataFrame,
+        model_builder: Callable[[Any, pd.Series], Any],
+        target_col: Optional[str] = None,
+        n_splits: Optional[int] = None,
+        verbose: bool = False,
+    ) -> Any:
+        """
+        Executes leak-free Cross-Validation using DataSplitter.
+        """
+        target = target_col or self.config.target_col
+        if getattr(self.config, "use_raw_kaggle_features_only", False):
+            raw_cols = [
+                "credit_score", "country", "gender", "age", "tenure",
+                "balance", "products_number", "credit_card", "active_member",
+                "estimated_salary", target
+            ]
+            available_raw = [c for c in raw_cols if c in df.columns]
+            df = df[available_raw].copy()
+            self.config.enable_domain_features = False
+
+        k = n_splits or getattr(self.config, "cv_folds", 5)
+        splitter = DataSplitter(
+            n_splits=k,
+            stratify=self.config.stratify,
+            random_state=self.config.random_state,
+        )
+        return splitter.evaluate_cv(
+            df=df,
+            pipeline_builder=lambda: FeatureEngineeringPipeline(copy.deepcopy(self.config)),
+            model_builder=model_builder,
+            target_col=target,
+            n_splits=k,
+            verbose=verbose,
+        )
+
+    def export_processed_data(
+        self,
+        result: PipelineResult,
+        output_dir: str = "data/processed",
+        verbose: bool = True,
+    ) -> Dict[str, str]:
+        """
+        Export all transformed feature matrices and splits into data/processed/.
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        exported: Dict[str, str] = {}
+
+        # 1. Full transformed dataset
+        if result.full_transformed_df is not None:
+            p = os.path.join(output_dir, "full_transformed.csv")
+            result.full_transformed_df.to_csv(p, index=False)
+            exported["full_transformed"] = p
+
+        # 2. Complete split datasets with target
+        p_train = os.path.join(output_dir, "train.csv")
+        df_train = result.X_train.copy()
+        df_train["churn"] = result.y_train.values
+        df_train.to_csv(p_train, index=False)
+        exported["train"] = p_train
+
+        p_test = os.path.join(output_dir, "test.csv")
+        df_test = result.X_test.copy()
+        df_test["churn"] = result.y_test.values
+        df_test.to_csv(p_test, index=False)
+        exported["test"] = p_test
+
+        if result.X_val is not None and result.y_val is not None:
+            p_val = os.path.join(output_dir, "val.csv")
+            df_val = result.X_val.copy()
+            df_val["churn"] = result.y_val.values
+            df_val.to_csv(p_val, index=False)
+            exported["val"] = p_val
+
+        # 3. SMOTE balanced sets
+        p_smote = os.path.join(output_dir, "train_smote.csv")
+        df_smote = result.X_train_resampled.copy()
+        df_smote["churn"] = result.y_train_resampled.values
+        df_smote.to_csv(p_smote, index=False)
+        exported["train_smote"] = p_smote
+
+        # 4. Feature importance ranking
+        if result.feature_importance is not None:
+            p_imp = os.path.join(output_dir, "feature_importance_ranking.csv")
+            result.feature_importance.to_csv(p_imp, index=False)
+            exported["feature_importance"] = p_imp
+
+        # 5. Metadata JSON (list of feature names)
+        import json
+        p_meta = os.path.join(output_dir, "feature_metadata.json")
+        with open(p_meta, "w", encoding="utf-8") as f:
+            json.dump({
+                "num_features": len(result.model_features),
+                "model_features": result.model_features,
+            }, f, indent=2)
+        exported["feature_metadata"] = p_meta
+
+        if verbose:
+            print(f"[OK] Saved processed datasets to: {output_dir}")
+
+        return exported
+
+    # Backward-compatible alias
+    export_artifacts = export_processed_data
