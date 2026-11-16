@@ -114,8 +114,46 @@ def customer(customer_id:int):
 
 @app.get("/api/metrics")
 def metrics():
-    return {"model":"XGBoost","source":"Repository ablation report, not deployment performance",
-            "roc_auc":.9999,"pr_auc":.9997,"f1":.9914,"recall":.9877}
+    """Return the committed Module 5 comparison, never deployment telemetry."""
+    report = Path(__file__).resolve().parent.parent / "model_development/results/comparison/model_comparison_metrics.csv"
+    if not report.is_file():
+        raise HTTPException(503, "Committed model comparison results are unavailable")
+    try:
+        df = pd.read_csv(report)
+        names = {"LR": "Logistic Regression", "RF": "Random Forest", "XGBOOST": "XGBoost"}
+        required = {"Model", "ROC_AUC", "PR_AUC", "F1_Score", "Precision", "Recall", "Accuracy", "Balanced_Accuracy", "CV_ROC_AUC", "CV_PR_AUC"}
+        if not required.issubset(df.columns):
+            raise ValueError("Comparison CSV is missing required metric columns")
+        rows = [
+            {
+                "model": names[str(row["Model"]).upper()],
+                "roc_auc": float(row["ROC_AUC"]),
+                "pr_auc": float(row["PR_AUC"]),
+                "f1": float(row["F1_Score"]),
+                "precision": float(row["Precision"]),
+                "recall": float(row["Recall"]),
+                "accuracy": float(row["Accuracy"]),
+                "balanced_accuracy": float(row["Balanced_Accuracy"]),
+                "cv_roc_auc": float(row["CV_ROC_AUC"]),
+                "cv_pr_auc": float(row["CV_PR_AUC"]),
+            }
+            for _, row in df.iterrows()
+        ]
+        champion = next(row for row in rows if row["model"] == "XGBoost")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(503, "Committed model comparison results are invalid") from exc
+    return {
+        "model": "XGBoost",
+        "source": "Committed Module 5 model comparison (development study, not live API performance)",
+        "report_path": "model_development/results/comparison/model_comparison_metrics.csv",
+        "roc_auc": champion["roc_auc"],
+        "pr_auc": champion["pr_auc"],
+        "f1": champion["f1"],
+        "precision": champion["precision"],
+        "recall": champion["recall"],
+        "models": rows,
+        "deployment_evaluated": False,
+    }
 
 @app.get("/api/monitoring")
 def monitoring():

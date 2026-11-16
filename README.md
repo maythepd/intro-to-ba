@@ -50,3 +50,38 @@ A Render API Blueprint is in `render.yaml`; it downloads Kaggle data and trains 
 API docs after startup: `http://localhost:8000/docs`. Segmentation still requires the team's clustering model; `/api/segments` returns 503 until then.
 
 Do not present the study data, synthetic extension, or temporary trained model as live bank operational information.
+
+## Module 5 model code & evaluation results (merged into `demo`)
+
+The upstream `maythepd/intro-to-ba` branch `model/xgboost` has been brought into
+[`model_development/`](model_development/), preserving its own `main.py`,
+`config/`, `models/` (Logistic Regression, Random Forest, XGBoost, tuning/recall utilities and saved experimental weights),
+`preprocessing/`, `visualization/`, and `results/` (CSV tables, Markdown reports, and PNG plots).
+This keeps the existing `demo` API/frontend and its official-data workflow intact rather than overwriting them
+with the model-development branch's divergent preprocessing and data assumptions.
+
+To reproduce experiments after obtaining the required source data:
+
+```bash
+cd model_development
+pip install -r requirements.txt
+python main.py --mode compare
+python main.py --mode train --model-type xgboost
+```
+
+See [the original model-development guide](model_development/README.md) for the full CLI,
+expected input data (`data/full_bank_data.csv` or raw tables in `data/full_dataset/`), and experiment variants.
+The input dataset required by that pipeline is **not tracked** in this integration; it must be provided separately.
+
+The **Models** page shows the committed [comparison metrics](model_development/results/comparison/model_comparison_metrics.csv)
+for all three classifiers; `GET /api/metrics` reads this CSV instead of returning the previous hard-coded values.
+For XGBoost the reported ROC-AUC is 0.8372, PR-AUC 0.6060, F1 0.3389, recall 1.0000,
+and precision 0.2040. Those figures describe the research study, **not** current deployed predictions.
+The committed comparison report's stated test count should be reconciled with the CSV's `X_test_Shape`
+before any final presentation.
+
+**Model compatibility:** files in `model_development/models/saved/` are archival checkpoints and must
+not be loaded directly as `artifacts/churn_bundle.joblib`; the demo endpoint requires a fitted
+preprocessing pipeline plus its compatible feature order. The `api/export_bundle.py` workflow remains
+separate until an explicitly validated model export is built. This merge does not claim that the
+experimental model has been deployed or that the end-to-end API has been tested on the new data.
