@@ -116,3 +116,24 @@ Tests:
 python -m unittest discover -s tests -p 'test_segmentation_api.py' -v
 cd frontend && npm run build
 ```
+
+## Batch churn scoring and live-inference risk distribution
+
+The dashboard **Customers Requiring Attention** tile and **Risk Level Distribution** now use model inference on all rows of the official snapshot, not illustrative percentages. The historical EDA KPIs and the separately labeled **Churn Risk Trend** remain historical/illustrative; batch results are not a measured time series.
+
+Workflow: download/materialize official Kaggle data, export the fitted temporary XGBoost bundle, start FastAPI, then click **Run batch scoring** on the Dashboard or call:
+
+```bash
+curl -X POST 'http://localhost:8000/api/predict/batch'
+curl 'http://localhost:8000/api/dashboard/risk-summary'
+# Optionally retrieve every customer score; large response for full snapshot:
+curl -X POST 'http://localhost:8000/api/predict/batch?include_predictions=true'
+# Force a new complete batch calculation:
+curl -X POST 'http://localhost:8000/api/predict/batch?force=true'
+```
+
+- `POST /api/predict/batch` scores **every** loaded customer, in bounded chunks (default 1,000); by default it returns a summary to avoid transferring 10,000 individual records. Use `include_predictions=true` to return the customer ID, churn probability, predicted churn and risk level for every row. `force=true` recalculates; otherwise later requests reuse the completed in-process cache.
+- `GET /api/dashboard/risk-summary` returns the most recent successful batch-scoring counts and timestamp. It returns HTTP **503** before the first completed run, or when the model or official data is unavailable. The UI shows a **Run batch scoring** button rather than fabricating values.
+- Risk thresholds are **Low** p < 0.30, **Medium** 0.30 ≤ p < 0.70, **High** p ≥ 0.70. **Customers Requiring Attention = High count**, not Medium+High. These thresholds match single-customer inference and are heuristic business cutoffs, not externally validated intervention rules.
+- Both single and batch inference share `api/scoring.py`; the fitted feature list and order are preserved. True `churn` labels are never used as model features, and unexpected model outputs fail closed. If any batch fails, the previously completed snapshot remains cached; there is no partially updated distribution.
+- Batch results are stored **only in the API process's memory**, not persisted to the repository or a database. They reset upon API restart and are not shared across multiple Uvicorn workers. For scale and authenticated production use, add a scheduled worker, persistent versioned scoring table, authentication/authorization and request throttling. The current public demo is a **synthetic-extended study dataset** and the trained bundle is experimental; these are actual computations on that model, **not** bank production measurements or independently validated performance.

@@ -2,10 +2,14 @@
 from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
+from datetime import datetime, timezone
+from threading import Lock
 from typing import Literal
 import os
 import joblib
 import pandas as pd
+from pydantic import TypeAdapter, ValidationError
+from api.scoring import score_probabilities, risk_level
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -42,6 +46,9 @@ async def lifespan(app: FastAPI):
     app.state.customers = pd.read_csv(DATA_PATH) if DATA_PATH.is_file() else None
     app.state.inference_count = 0
     app.state.segmentation = segmentation_service.load(DATA_PATH)
+    app.state.risk_summary = None
+    app.state.batch_predictions = None
+    app.state.batch_lock = Lock()
     yield
 
 app = FastAPI(title="BaBank Analytics API", version="1.0.0", lifespan=lifespan)
@@ -69,29 +76,110 @@ def signals(p: CustomerInput) -> list[dict[str,str]]:
         if flag: result.append({"title":title,"description":description,"direction":"risk"})
     return result
 
+def require_churn_model():
+    bundle = app.state.bundle
+    if bundle is None:
+        raise HTTPException(503, "Fitted churn model unavailable. Run python -m api.export_bundle")
+    if not isinstance(bundle, dict) or not {"model", "pipeline", "features"} <= bundle.keys():
+        raise HTTPException(503, "Invalid churn model bundle")
+    return bundle
+
+
+@app.post("/api/predict/batch")
+def predict_batch(
+    include_predictions: bool = Query(False, description="Include every customer's probability and risk level."),
+    force: bool = Query(False, description="Recompute instead of returning the current process cache."),
+    batch_size: int = Query(1000, ge=1, le=5000),
+):
+    """Score the entire official customer snapshot; cache only completed runs."""
+    bundle = require_churn_model()
+    customers = app.state.customers
+    if customers is None:
+        raise HTTPException(503, "Official customer feature table unavailable")
+    if customers.empty or "customer_id" not in customers.columns:
+        raise HTTPException(503, "Official customer dataset is empty or has no customer IDs")
+    if customers.customer_id.isna().any() or customers.customer_id.duplicated().any():
+        raise HTTPException(503, "Official customer IDs must be unique and non-null")
+
+    with app.state.batch_lock:
+        if app.state.risk_summary is not None and not force:
+            result = dict(app.state.risk_summary, cached=True)
+            if include_predictions:
+                result["predictions"] = app.state.batch_predictions
+            return result
+
+        required_columns = list(CustomerInput.model_fields)
+        missing = set(required_columns) - set(customers.columns)
+        if missing:
+            raise HTTPException(503, "Official dataset is missing columns required by the prediction API")
+
+        scores = []
+        counts = {"low": 0, "medium": 0, "high": 0}
+        for start in range(0, len(customers), batch_size):
+            chunk = customers.iloc[start:start + batch_size].loc[:, required_columns]
+            records = chunk.to_dict(orient="records")
+            try:
+                TypeAdapter(list[CustomerInput]).validate_python(records)
+            except ValidationError as exc:
+                raise HTTPException(503, "Official customer features failed input validation") from exc
+            try:
+                probabilities = score_probabilities(bundle, chunk)
+            except Exception as exc:
+                raise HTTPException(500, "Batch scoring failed: verify fitted model compatibility") from exc
+            for identifier, probability in zip(chunk["customer_id"], probabilities):
+                p = float(probability)
+                level = risk_level(p)
+                counts[level] += 1
+                scores.append({
+                    "customer_id": str(int(identifier)),
+                    "churn_probability": p,
+                    "predicted_churn": p >= 0.5,
+                    "risk_level": level,
+                })
+        if sum(counts.values()) != len(customers):
+            raise HTTPException(500, "Batch scoring was incomplete")
+        summary = {
+            "status": "scored",
+            "source": "XGBoost inference on the official customer feature table",
+            "data_kind": "synthetic-extended study snapshot; not live bank activity",
+            "model_name": "XGBoost",
+            "total_customers": len(customers),
+            "scored_customers": len(scores),
+            "counts": counts,
+            "customers_requiring_attention": counts["high"],
+            "risk_thresholds": {"medium_from": 0.3, "high_from": 0.7},
+            "scored_at": datetime.now(timezone.utc).isoformat(),
+        }
+        # An interrupted or failed batch must never replace the previous completed result.
+        app.state.batch_predictions = scores
+        app.state.risk_summary = summary
+        app.state.inference_count += len(scores)
+        result = dict(summary, cached=False)
+        if include_predictions:
+            result["predictions"] = scores
+        return result
+
+
+@app.get("/api/dashboard/risk-summary")
+def dashboard_risk_summary():
+    require_churn_model()
+    if app.state.customers is None:
+        raise HTTPException(503, "Official customer feature table unavailable")
+    summary = app.state.risk_summary
+    if summary is None:
+        raise HTTPException(503, "Batch scoring not run yet. POST /api/predict/batch to compute actual risk counts")
+    return summary
+
+
 @app.post("/api/predict")
 def predict(p: CustomerInput):
-    bundle=app.state.bundle
-    if bundle is None: raise HTTPException(503,"No fitted model bundle. Run python -m api.export_bundle")
-    if not isinstance(bundle,dict) or not {"model","pipeline","features"} <= bundle.keys():
-        raise HTTPException(503,"Invalid model bundle")
-    row=pd.DataFrame([p.model_dump()])
-    row["churn"]=0
+    bundle = require_churn_model()
     try:
-        transformed=bundle["pipeline"].transform(row)
-        features=bundle["features"]
-        if any(k not in transformed.columns for k in features):
-            raise ValueError("Missing feature columns")
-        X=transformed.loc[:,features]
-        model=bundle["model"]
-        if hasattr(model,"is_fitted"):
-            prob=float(model.predict_proba(X)[0])
-        else:
-            prob=float(model.predict_proba(X)[0,1])
+        prob = float(score_probabilities(bundle, pd.DataFrame([p.model_dump()]))[0])
     except Exception as exc:
-        raise HTTPException(500,"Model inference failed: verify training artifact compatibility") from exc
+        raise HTTPException(500, "Model inference failed: verify training artifact compatibility") from exc
     app.state.inference_count += 1
-    level="high" if prob>=.7 else "medium" if prob>=.3 else "low"
+    level = risk_level(prob)
     return {"customer_id": str(p.customer_id or ""),"churn_probability":prob,
             "predicted_churn":prob>=.5,"risk_level":level,"model_name":"XGBoost","signals":signals(p)}
 
