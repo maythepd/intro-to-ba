@@ -93,7 +93,7 @@ class DataSplitter:
         If each customer has exactly 1 row (as in snapshot-aggregated tables),
         Stratified split preserves group isolation while guaranteeing exact class balance.
         """
-        if target_col not in df.columns:
+        if self.stratify and target_col not in df.columns:
             raise KeyError(f"Target column '{target_col}' not found in dataframe.")
 
         grp = group_col or self.group_col

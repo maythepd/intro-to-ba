@@ -7,34 +7,58 @@ Mô-đun hóa toàn bộ quy trình biến đổi dữ liệu và kỹ nghệ đ
 ## 1. Cấu trúc thư mục
 
 ```
-intro-to-ba/
-├── config/
-│   ├── __init__.py                # Export PipelineConfig, ModelConfig, UnifiedConfig
-│   ├── pipeline_config.py         # Dataclass cấu hình & load YAML
-│   └── config.yaml                # FILE CẤU HÌNH YAML DUY NHẤT (Features + Model + Dataset)
-├── data/
-│   ├── Bank Customer Churn Prediction.csv  # Dữ liệu gốc (12 cột)
-│   └── cleaned_bank_data.csv               # Dữ liệu sạch sau Data Cleaning (21 cột - INPUT của pipeline)
-├── preprocessing/
-│   ├── __init__.py                # Export các transformer, processor và pipeline
-│   ├── base.py                    # BaseFeatureTransformer (chuẩn fit/transform)
-│   ├── etl.py                     # BankDataETL: Ingest & aggregate 7 bảng quan hệ từ full_dataset
-│   ├── splitting.py               # DataSplitter: Stratified Train/Val/Test split & K-Fold CV
-│   ├── skewness_transform.py      # SkewnessTransformer: Log1p, zero-inflation hurdle, Yeo-Johnson
-│   ├── scaling.py                 # FeatureScaler: RobustScaler & StandardScaler
-│   ├── domain_features.py         # DomainFeatureEngineer: Momentum, Friction, Bundling, Interaction
-│   ├── categorical_encoding.py    # CategoricalEncoder: One-Hot & Smoothed Target Encoding (m-estimate)
-│   ├── balancing.py               # ClassBalancer: SMOTE resampling cho tập Train
-│   ├── feature_selector.py        # FeatureSelector: Xếp hạng Mutual Info & lọc Top-K
-│   ├── pipeline.py                # FeatureEngineeringPipeline & load_dataset: Lớp điều phối tổng thể
-│   └── README.md                  # Hướng dẫn chi tiết
-├── models/
+preprocessing/
+├── __init__.py                    # Export các transformer, processor và pipeline chính
+├── base.py                        # BaseFeatureTransformer (chuẩn fit/transform & BaseManager)
+├── pipeline.py                    # FeatureEngineeringPipeline & load_dataset: Điều phối toàn bộ quy trình
+│
+├── domain/                        # Feature Engineering nghiệp vụ ngân hàng
 │   ├── __init__.py
-│   ├── logistic_regression.py     # Logistic Regression Churn Classifier
-│   ├── random_forest.py           # Random Forest Churn Classifier
-│   └── xgboost.py                 # XGBoost Churn Classifier
-├── main.py                        # Entrypoint chạy huấn luyện, Ablation & So sánh mô hình
-└── test_pipeline.py               # Script kiểm thử pipeline và config
+│   ├── bundling.py                # BundlingFeatureEngineer (sản phẩm dịch vụ)
+│   ├── friction.py                # FrictionFeatureEngineer (khiếu nại, sự cố)
+│   ├── interactions.py            # InteractionFeatureEngineer (tương tác chéo)
+│   ├── momentum.py                # MomentumFeatureEngineer (xu hướng giao dịch)
+│   └── manager.py                 # DomainFeatureManager tổng hợp các module domain
+│
+├── gnn/                           # Graph Neural Network Embeddings
+│   ├── __init__.py
+│   ├── graph_builder.py           # CustomerGraphBuilder (xây dựng đồ thị khách hàng)
+│   ├── models.py                  # GraphSAGE / GAT architectures
+│   └── manager.py                 # GNNEmbeddingManager trích xuất vector không gian
+│
+├── ingestion/                     # Nhập liệu & Phân chia tập dữ liệu
+│   ├── __init__.py
+│   ├── etl.py                     # BankDataETL: Ingest & aggregate 7 bảng quan hệ từ full_dataset
+│   ├── kaggle_downloader.py       # Tải dataset từ Kaggle
+│   └── splitting.py               # DataSplitter: Stratified Train/Val/Test split & K-Fold CV
+│
+├── quant_signals/                 # Tín hiệu định lượng & vi cấu trúc tài chính
+│   ├── __init__.py
+│   ├── entropy.py                 # EntropySignals (độ hỗn loạn hành vi)
+│   ├── microstructure.py          # MicrostructureSignals (nhịp độ giao dịch)
+│   ├── statistical_arbitrage.py   # StatisticalArbitrageSignals (lệch chuẩn chi tiêu)
+│   └── manager.py                 # QuantSignalManager
+│
+├── selection/                     # Tuyển chọn đặc trưng (Feature Selection)
+│   ├── __init__.py
+│   ├── correlation.py             # CorrelationSelector (lọc đa cộng tuyến)
+│   ├── importance.py              # ImportanceSelector (Mutual Info, RF Importance)
+│   └── manager.py                 # FeatureSelectionManager
+│
+├── temporal/                      # Trích xuất chuỗi thời gian & Attention
+│   ├── __init__.py
+│   ├── manager.py                 # TemporalSequenceManager
+│   ├── model.py                   # PyTorch Temporal Sequence Model
+│   ├── raw_extractor.py           # Trích xuất sự kiện chuỗi thô
+│   ├── extractors/                # Extractors chuyên biệt (transaction, login, complaint, account)
+│   ├── modules/                   # Attention blocks & Loss functions
+│   └── strategies/                # ArcFace, Poincare, Optimal Transport, Neyman-Pearson
+│
+└── transforms/                    # Các biến đổi toán học & mã hóa
+    ├── __init__.py
+    ├── categorical_encoding.py    # CategoricalEncoder: One-Hot & Smoothed Target Encoding
+    ├── scaling.py                 # FeatureScaler: RobustScaler & StandardScaler
+    └── skewness_transform.py      # SkewnessTransformer: Log1p, zero-inflation hurdle, Yeo-Johnson
 ```
 
 ---

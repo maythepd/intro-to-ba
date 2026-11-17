@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: babank-retention-platform
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && (cd frontend && npm install && npm run build) && python api.py prepare --download && python api.py official-data --download && python api.py segmentation
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: OFFICIAL_DATA_DIR
+        value: data/official/raw

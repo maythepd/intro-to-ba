@@ -53,7 +53,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--mode",
         type=str,
         default="compare",
-        choices=["ablation", "train", "compare", "tune", "recall", "separability", "eda", "representation"],
+        choices=["ablation", "train", "compare", "tune", "recall", "separability", "eda", "representation", "segmentation", "clustering", "hierarchical"],
         help=(
             "Run mode: "
             "'compare' (LR vs RF vs XGBoost, same pipeline), "
@@ -62,7 +62,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "'train' (single model training), "
             "'recall' (threshold optimization, high-recall analysis & baseline lift comparison), "
             "'separability' (PCA, t-SNE, bar charts, boxplots, KDE distributions & separability metrics), "
-            "'representation' (Bi-GRU Temporal Behavioral Sequence Embeddings benchmark)"
+            "'representation' (Bi-GRU Temporal Behavioral Sequence Embeddings benchmark), "
+            "'segmentation' (comparative unsupervised K-Means experiments A-D), "
+            "'clustering' or 'hierarchical' (descriptive Ward hierarchical clustering & feature ablation)"
         ),
     )
     parser.add_argument(
@@ -195,6 +197,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
+
+    if args.mode == "segmentation":
+        from segmentation.runner import run_from_config
+        run_from_config(args.config, output_dir=args.output_dir)
+        return
+
+    if args.mode in ("clustering", "hierarchical"):
+        from utils.clustering_experiments import run_hierarchical
+        if args.config == "config/config.yaml" or not Path(args.config).exists():
+            args.config = "config/hierarchical_final.yaml"
+        # Map mode to hierarchical sub-mode (train or ablation)
+        args.mode = "ablation" if "ablation" in getattr(args, "config", "") else "train"
+        run_hierarchical(args)
+        return
 
     # 1. Load Unified Config
     cfg = load_unified_config(args.config)

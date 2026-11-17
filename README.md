@@ -17,6 +17,8 @@
 8. [Hyperparameter Optimization (Optuna)](#hyperparameter-optimization-optuna)
 9. [Visualizations & Generated Reports](#visualizations--generated-reports)
 10. [Evaluation Metrics & Business Rationale](#evaluation-metrics--business-rationale)
+11. [Continuous Deployment (CI/CD) & Public Hosting Guide](#continuous-deployment-cicd--public-hosting-guide)
+12. [System Telemetry & Monitoring Architecture](#system-telemetry--monitoring-architecture)
 
 ---
 
@@ -43,7 +45,27 @@ This project delivers **Module 5 (Model Development)** of the Business Analytics
 intro-to-ba/
 ├── requirements.txt                 # Project dependencies with version bounds
 ├── main.py                          # Unified CLI entrypoint (compare, ablation, tune, train, recall)
+├── api.py                           # MLOps & API Serving CLI (runs FastAPI backend + Vite frontend)
 ├── README.md                        # Project documentation & configuration guide
+│
+├── api/                             # FastAPI Serving Backend & Inference Service
+│   ├── __init__.py                  # Exposes FastAPI app instance
+│   ├── main.py                      # FastAPI routes (/health, /predict, /segments, /dashboard)
+│   ├── module5.py                   # XGBoost & preprocessing serving adapter
+│   ├── official_data.py             # Official Kaggle data preparation pipeline
+│   ├── scoring.py                   # Shared churn probability scoring & risk thresholds
+│   └── segmentation_service.py      # KMeans & Hierarchical clustering inference service
+│
+├── frontend/                        # Modern React 19 + Vite + Tailwind CSS Dashboard
+│   ├── package.json                 # Frontend dependencies (TanStack Router & Query, Recharts, Lucide)
+│   ├── vite.config.ts               # Vite configuration with proxy to FastAPI
+│   └── src/                         # Application source (routes, components, api client)
+│
+├── segmentation/                    # Customer Segmentation Engine (KMeans & Hierarchical Ward)
+│   ├── data.py                      # Data loading & feature snapshot preparation
+│   ├── kmeans.py                    # KMeans clustering model & evaluation
+│   ├── runner.py                    # Training & cluster profiling coordinator
+│   └── evaluation.py                # Silhouette score & business metrics evaluation
 │
 ├── config/
 │   ├── config.yaml                  # Master YAML configuration file
@@ -170,7 +192,61 @@ python test/test_pipeline.py
 
 ## CLI Entrypoint & Run Modes
 
-All operations are executed through the single root entrypoint: [`main.py`](file:///d:/Introduction%20to%20BA/intro-to-ba/main.py).
+All operations are executed through two primary entrypoints:
+- **[`main.py`](file:///d:/Introduction%20to%20BA/intro-to-ba/main.py):** Model training, ablation, tuning, comparison, and evaluation.
+- **[`api.py`](file:///d:/Introduction%20to%20BA/intro-to-ba/api.py):** MLOps data/artifact preparation and web serving (FastAPI + Vite Frontend).
+
+---
+
+### 4.1 MLOps & Web Serving CLI (`api.py`)
+
+[`api.py`](file:///d:/Introduction%20to%20BA/intro-to-ba/api.py) provides a unified command-line interface for running the live web service and managing production serving artifacts.
+
+#### One-Command Full Stack Startup & Auto Browser Pop-up
+
+Running `python api.py` (or `python api.py serve`) starts both the FastAPI backend on port 8000 AND the Vite frontend development server on port 5173, then **automatically opens the UI in your default web browser**:
+
+```bash
+# Starts both services and automatically pops open http://localhost:5173 in browser
+python api.py serve
+
+# Or run in headless mode (no auto-opening browser, e.g. for CI/remote servers)
+python api.py serve --no-browser
+```
+
+> [!TIP]
+> **Windows Browser Access Note:**
+> The CLI automatically opens [`http://localhost:5173`](http://localhost:5173). In Windows browsers (Chrome, Edge), always navigate to:
+> - **Frontend Web UI:** [`http://localhost:5173`](http://localhost:5173) (or `http://localhost:8000` when built)
+> - **FastAPI Swagger Docs:** [`http://localhost:8000/docs`](http://localhost:8000/docs)
+> - **API Health Check:** [`http://localhost:8000/health`](http://localhost:8000/health)
+>
+> Do **not** type `http://0.0.0.0:8000` into your browser address bar; `0.0.0.0` is an all-interfaces bind address that Windows browsers reject with `ERR_ADDRESS_INVALID`.
+
+#### Serving CLI Commands & Options:
+
+```bash
+# 1. Start both FastAPI (port 8000) and Frontend UI (port 5173) with auto browser pop-up
+python api.py serve --port 8000 --frontend-port 5173 --reload
+
+# 2. Start only the FastAPI backend (headless / API-only mode)
+python api.py serve --no-frontend --port 8000 --no-browser
+
+# 3. Download and reproduce Module 5 XGBoost serving artifacts
+python api.py prepare --download
+
+# 4. Download and prepare official customer feature snapshot
+python api.py official-data --download
+
+# 5. Train and export customer segmentation models (KMeans & Hierarchical Ward)
+python api.py segmentation --data data/official/customer_features.csv --output artifacts/segmentation
+```
+
+---
+
+### 4.2 Model Development & Evaluation CLI (`main.py`)
+
+All model research operations are executed through [`main.py`](file:///d:/Introduction%20to%20BA/intro-to-ba/main.py).
 
 Sub-modules (such as `etl.py`, `splitting.py`, `tuner.py`) contain no standalone entrypoints. Instead, `main.py` ingests data via `preprocessing.pipeline.load_dataset()`, dynamically checking if `data/full_bank_data.csv` exists and compiling it from `data/full_dataset/` raw tables if needed.
 
@@ -802,6 +878,103 @@ We prioritize metrics based on business impact:
 | **Top-Decile Lift (D1)** | $\ge 3.0\text{x}$ | **Targeting Efficiency:** Measures concentration of actual churners in the top 10% riskiest segment vs. random guessing (achieves **3.77x**). |
 | **Cumulative Lift (Top 20%)** | $\ge 2.5\text{x}$ | **Retention Campaign ROI:** Confirms that contacting the top 20% highest-risk customers captures $\approx 60\%$ of all impending churners (achieves **3.0x**). |
 | **Log-Loss** | Lower is better | Measures the calibration of predicted churn probabilities, critical for tiered customer intervention. |
+
+---
+
+## Continuous Deployment (CI/CD) & Public Hosting Guide
+
+Anyone can access the live dashboard via a public web link. The platform is designed with a **Unified Single-Port Architecture**: when built, FastAPI automatically serves the compiled React 19 single-page application (`frontend/dist`) alongside the REST API, meaning **only one cloud service is needed** and there are **zero CORS issues**.
+
+### 1. Free Cloud Hosting Options
+
+| Platform | Free Plan Specs | Best For | URL Format |
+|---|---|---|---|
+| **Render.com** | 512 MB RAM, 0.1 CPU, Free Web Service | Quickest setup, native git push integration | `https://babank-analytics.onrender.com` |
+| **Hugging Face Spaces** | **16 GB RAM**, 2 vCPUs, Free Docker Space | Heavy ML / deep learning models (PyTorch + RF) | `https://huggingface.co/spaces/<user>/<repo>` |
+| **Railway.app** | $5 monthly credit, fast builds | Developer control & instant build | `https://babank.up.railway.app` |
+
+---
+
+### 2. Deploying on Render (5-Minute Guide)
+
+1. Sign up / Log in to [Render.com](https://render.com).
+2. Click **New +** $\rightarrow$ **Web Service**.
+3. Connect your GitHub repository (`intro-to-ba`).
+4. Configure the service settings:
+   - **Name:** `babank-retention-platform` (or any custom name)
+   - **Environment:** `Python` (or `Docker` using the included `Dockerfile`)
+   - **Region:** Singapore / Frankfurt / Oregon (nearest to users)
+   - **Branch:** `main`
+   - **Build Command:**
+     ```bash
+     pip install -r requirements.txt && (cd frontend && npm install && npm run build) && python api.py prepare --download && python api.py official-data --download && python api.py segmentation
+     ```
+   - **Start Command:**
+     ```bash
+     uvicorn api:app --host 0.0.0.0 --port $PORT
+     ```
+5. Click **Create Web Service**. Render will build the React frontend into `frontend/dist`, download official data, export model checkpoints, and start the app.
+6. Once deployed, Render provides a public URL (e.g. `https://babank-retention-platform.onrender.com`) that anyone can open in their browser.
+
+---
+
+### 3. Automated Model Updates via GitHub Actions
+
+Whenever you train a new model, tune hyperparameters, or push new files in `models/saved/`, GitHub Actions automatically triggers testing and redeploys the service so your public link is always up-to-date.
+
+Workflow configuration is located in [`.github/workflows/deploy.yml`](file:///.github/workflows/deploy.yml):
+
+```
+Push new model / commit to main
+               │
+               ▼
+┌─────────────────────────────────┐
+│  GitHub Actions: deploy.yml     │
+│  1. Run model tests (unittest)  │
+│  2. Build React bundle (Vite)   │
+└─────────────────────────────────┘
+               │ (Pass)
+               ▼
+┌─────────────────────────────────┐
+│  Automated Cloud Deployment     │
+│  - Render Deploy Hook Triggered │
+│  - Or Render Git Auto-Deploy    │
+└─────────────────────────────────┘
+               │
+               ▼
+🚀 Public URL Updated with New Model!
+```
+
+#### Setting Up the GitHub Actions Deploy Hook:
+1. In your Render Dashboard, open your Web Service $\rightarrow$ **Settings**.
+2. Scroll to **Deploy Hook** and copy the URL (format: `https://api.render.com/deploy/srv-xxxx?key=yyyy`).
+3. In your GitHub repository, go to **Settings** $\rightarrow$ **Secrets and variables** $\rightarrow$ **Actions**.
+4. Click **New repository secret**:
+   - **Name:** `RENDER_DEPLOY_HOOK_URL`
+   - **Secret:** (paste your Render Deploy Hook URL)
+5. From now on, whenever you push to `main` (including updating `models/saved/xgboost_churn.json` or `models/saved/rf_churn.pkl`), GitHub Actions will run tests and automatically refresh your live public web application!
+
+---
+
+## System Telemetry & Monitoring Architecture
+
+The live monitoring dashboard (`/monitoring`) reports real hardware metrics and dataset facts via `psutil` and FastAPI middleware.
+
+### Why CPU Utilization Previously Showed 0%
+
+In Python's `psutil` library, `Process.cpu_percent(interval=None)` calculates CPU utilization by comparing:
+$$\frac{\Delta \text{Process CPU Time}}{\Delta \text{System Wall-Clock Time}}$$
+between **two consecutive calls on the exact same `psutil.Process` instance**.
+
+- When `proc = psutil.Process()` was instantiated inside the request handler, every incoming HTTP request created a brand new `Process` instance.
+- In `psutil`, the **first call on any new instance always returns 0.0% by design** because there is no prior baseline to compare against.
+- As a result, every poll was an initial baseline call, perpetually displaying `0%`.
+
+### The Resolution
+
+1. **Persistent Singleton Process (`_PROCESS`):** A module-level persistent `_PROCESS = psutil.Process()` is instantiated once at server startup and primed immediately to establish the baseline.
+2. **Dual Process & System Telemetry:** Subsequent requests calculate the real delta of CPU activity utilized by the Python process (normalized across logical CPU cores) and compare it against the active operating system CPU load (`psutil.cpu_percent(interval=None)`).
+3. **Active Spike Capture:** While idle between requests, the server uses negligible CPU (~0.5%-2%), but during model inference (e.g. batch scoring 10,000 customers with XGBoost), the metric accurately reflects the real CPU core activity spike.
 
 ---
 

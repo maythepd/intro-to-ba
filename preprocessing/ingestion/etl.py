@@ -62,6 +62,14 @@ class BankDataETL:
 
         raise FileNotFoundError(f"Required table '{filename}' not found in '{self.raw_data_dir}'.")
 
+    def _load_tables(self) -> dict[str, pd.DataFrame]:
+        """Single ingestion hook; subclasses may validate observation boundaries."""
+        names = (
+            "kaggle_bank_churn", "customer_context", "accounts", "savings_cycles",
+            "complaints", "login", "transactions"
+        )
+        return {name: pd.read_csv(self._resolve_file(f"{name}.csv")) for name in names}
+
     def process(self, verbose: bool = True) -> pd.DataFrame:
         """
         Executes schema-level joining and raw aggregations across all 7 tables.
@@ -72,13 +80,14 @@ class BankDataETL:
             print("[INFO] Starting schema-level ingestion and join across full_dataset tables...")
 
         # 1. Load Raw Tables
-        cust = pd.read_csv(self._resolve_file("kaggle_bank_churn.csv"))
-        ctx = pd.read_csv(self._resolve_file("customer_context.csv"))
-        acc = pd.read_csv(self._resolve_file("accounts.csv"))
-        sav = pd.read_csv(self._resolve_file("savings_cycles.csv"))
-        cmp = pd.read_csv(self._resolve_file("complaints.csv"))
-        log = pd.read_csv(self._resolve_file("login.csv"))
-        tx = pd.read_csv(self._resolve_file("transactions.csv"))
+        tables = self._load_tables()
+        cust = tables["kaggle_bank_churn"]
+        ctx = tables["customer_context"]
+        acc = tables["accounts"]
+        sav = tables["savings_cycles"]
+        cmp = tables["complaints"]
+        log = tables["login"]
+        tx = tables["transactions"]
 
         # 2. Customer Context & Exposure Boundaries
         obs_start = pd.to_datetime(ctx["observation_start"], format="ISO8601")
