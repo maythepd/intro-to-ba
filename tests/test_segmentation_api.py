@@ -2,6 +2,8 @@
 from pathlib import Path
 import tempfile
 import unittest
+import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
@@ -65,6 +67,30 @@ class SegmentationAdapterTest(unittest.TestCase):
             b = train(data,p2,4,35)
             for name in ("kmeans","hierarchical"):
                 np.testing.assert_array_equal(a["models"][name]["labels"],b["models"][name]["labels"])
+
+    def test_module_cli_artifact_loads_in_separate_process(self):
+        """Regression: python -m must not pickle BalancedFeatures as __main__."""
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            data, output = Path(tmp) / "official.csv", Path(tmp) / "export"
+            fixture(data)
+            subprocess.run(
+                [sys.executable, "-m", "api.segmentation_service",
+                 "--data", str(data), "--output", str(output),
+                 "--clusters", "4", "--hierarchical-sample", "35"],
+                cwd=root, check=True, capture_output=True, text=True, timeout=90,
+            )
+            check = subprocess.run(
+                [sys.executable, "-c",
+                 "from api.segmentation_service import load, summary; "
+                 "import sys; result=load(sys.argv[1],sys.argv[2]); "
+                 "assert result is not None; "
+                 "assert summary(result,'kmeans')['customer_count'] == 72; "
+                 "assert summary(result,'hierarchical')['customer_count'] == 72",
+                 str(data), str(output)],
+                cwd=root, capture_output=True, text=True, timeout=45,
+            )
+            self.assertEqual(check.returncode, 0, check.stderr)
 
 
 if __name__ == "__main__":
