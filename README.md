@@ -12,25 +12,28 @@ The project's **source of truth** is [Full Dataset Intro2BA on Kaggle](https://w
 
 The version in `data/cleaned_bank_data.csv` is **legacy experimental data from `model/xgboost`**. It must not be used as the official dataset for the live demo.
 
-Download and aggregate the official tables into one model-ready customer feature table:
+Prepare the Module 5 customer table and the simpler segmentation snapshot:
 
 ```bash
 pip install -r requirements.txt
+python -m api.prepare_module5 --download
 python -m api.official_data --download
 ```
 
-The output is `data/official/customer_features.csv`; local materialized Kaggle data is generated at runtime and must not be committed. If the Kaggle API is inaccessible or a file's schema differs from the documented dictionary, the preparation task should fail rather than silently use artificial records. The aggregation rules in `api/official_data.py` are **derived features**, not original columns in Kaggle. Review their appropriateness before presentation.
+Module 5 uses its original `BankDataETL` and pinned Kaggle release 3 to produce `data/official/module5_customer_features.csv`. The second command produces `data/official/customer_features.csv` for segmentation. These tables use different aggregation formulas and must not be substituted for each other. Generated data and fitted preprocessing remain untracked. Missing/incompatible sources fail the build.
 
-## Temporary XGBoost model
+## Module 5 XGBoost — default serving model
 
 ```bash
-python -m api.export_bundle
+python -m api.prepare_module5 --download
 uvicorn api.main:app --reload
 ```
 
-This trains a **temporary experimental model** using the official feature table (when available) and saves `artifacts/churn_bundle.joblib` containing the fitted preprocessing and trained XGBoost model. It is *not* the final group checkpoint. `/health` indicates if a fitted bundle is loaded; `/api/predict` returns 503 without it. Later replace the bundle via `MODEL_BUNDLE_PATH` without changing the API schema, provided the saved pipeline and expected features are compatible.
+The API loads the committed `model_development/models/saved/xgboost_churn.json` directly. Preparation fits only the Module 5 preprocessing on the original training split and writes `artifacts/module5/preprocessor.joblib` and `manifest.json`. It does not retrain XGBoost. The manifest binds checkpoint, preprocessing, config, dataset, feature order and report hashes; startup rejects mismatches. The legacy churn bundle and `MODEL_BUNDLE_PATH` are no longer used.
 
-Training currently uses the existing classification trainer's holdout for early stopping, so report its metrics as illustrative development results only, **not independent generalization performance**. Before final submission, train with separate train/validation/test partitions.
+Before publishing preprocessing, the saved checkpoint must reproduce the committed Module 5 test metrics to four decimal places: ROC-AUC 0.8372, PR-AUC 0.6060, F1 0.3389, precision 0.2040, recall 1.0000 and accuracy 0.2040. These are held-out study results, not ongoing deployment performance. `/health` exposes `model_source=module5_checkpoint`, `feature_count=133`, `checkpoint_sha256` and `study_reproduced=true`. Missing preparation returns 503 without a legacy fallback.
+
+Staff lookup resolves all raw Module 5 aggregates from the customer ID. The API supports a new customer only when the complete `raw_features` input is supplied; it returns 422 for missing aggregates. Transaction/login/complaint summaries use Module 5 formulas, including fractional recency and `No_Channel`. See [the serving guide](docs/module-5-serving.md).
 
 ## Frontend
 
@@ -45,11 +48,11 @@ Set `VITE_API_BASE_URL=http://localhost:8000` or your hosted API URL. Customer l
 
 ## Deployment
 
-A Render API Blueprint is in `render.yaml`; it downloads Kaggle data and trains the temporary model at build time. This requires outbound access to Kaggle and sufficient build resources. Deployment has **not yet been verified**. Set `CORS_ORIGINS` to the frontend origin. Frontend can be deployed as a Vite static site, with SPA rewrite fallback.
+A Render API Blueprint is in `render.yaml`; it prepares and validates Module 5 preprocessing, materializes the segmentation snapshot, and exports clustering artifacts at build time. Set `CORS_ORIGINS` to the frontend origin. For services configured manually in the Render dashboard, copy the updated `buildCommand` there as well. The API and frontend both need redeployment for this switch; confirm the Module 5 identity fields in `/health` after deployment. Frontend uses a Vite static site with SPA rewrite fallback.
 
-API docs after startup: `http://localhost:8000/docs`. Segmentation still requires the team's clustering model; `/api/segments` returns 503 until then.
+API docs after startup: `http://localhost:8000/docs`. Run `python -m api.segmentation_service` to prepare clustering; `/api/segments` returns 503 without its matching artifacts.
 
-Do not present the study data, synthetic extension, or temporary trained model as live bank operational information.
+The application uses a synthetic-extended study snapshot, not live bank operational information.
 
 ## Module 5 model code & evaluation results (merged into `demo`)
 
@@ -57,8 +60,8 @@ The upstream `maythepd/intro-to-ba` branch `model/xgboost` has been brought into
 [`model_development/`](model_development/), preserving its own `main.py`,
 `config/`, `models/` (Logistic Regression, Random Forest, XGBoost, tuning/recall utilities and saved experimental weights),
 `preprocessing/`, `visualization/`, and `results/` (CSV tables, Markdown reports, and PNG plots).
-This keeps the existing `demo` API/frontend and its official-data workflow intact rather than overwriting them
-with the model-development branch's divergent preprocessing and data assumptions.
+The serving adapter in `api/module5.py` uses that branch's preprocessing and saved XGBoost checkpoint.
+Segmentation continues to use its own documented snapshot and adapter.
 
 To reproduce experiments after obtaining the required source data:
 
@@ -80,11 +83,9 @@ and precision 0.2040. Those figures describe the research study, **not** current
 The committed comparison report's stated test count should be reconciled with the CSV's `X_test_Shape`
 before any final presentation.
 
-**Model compatibility:** files in `model_development/models/saved/` are archival checkpoints and must
-not be loaded directly as `artifacts/churn_bundle.joblib`; the demo endpoint requires a fitted
-preprocessing pipeline plus its compatible feature order. The `api/export_bundle.py` workflow remains
-separate until an explicitly validated model export is built. This merge does not claim that the
-experimental model has been deployed or that the end-to-end API has been tested on the new data.
+**Model compatibility:** serving uses the XGBoost JSON plus separately fitted Module 5 preprocessing,
+not the LR/RF pickle files or a legacy churn bundle. A build succeeds only when the exact 133-feature
+schema and the committed study metrics are reproduced. The actual serving identity is exposed by `/health`.
 
 ## KMeans + hierarchical customer segmentation
 
@@ -121,7 +122,7 @@ cd frontend && npm run build
 
 The dashboard **Customers Requiring Attention** tile and **Risk Level Distribution** now use model inference on all rows of the official snapshot, not illustrative percentages. The historical EDA KPIs and the separately labeled **Churn Risk Trend** remain historical/illustrative; batch results are not a measured time series.
 
-Workflow: download/materialize official Kaggle data, export the fitted temporary XGBoost bundle, start FastAPI, then click **Run batch scoring** on the Dashboard or call:
+Workflow: run `python -m api.prepare_module5 --download`, start FastAPI, then click **Run batch scoring** on the Dashboard or call:
 
 ```bash
 curl -X POST 'http://localhost:8000/api/predict/batch'
@@ -136,4 +137,4 @@ curl -X POST 'http://localhost:8000/api/predict/batch?force=true'
 - `GET /api/dashboard/risk-summary` returns the most recent successful batch-scoring counts and timestamp. It returns HTTP **503** before the first completed run, or when the model or official data is unavailable. The UI shows a **Run batch scoring** button rather than fabricating values.
 - Risk thresholds are **Low** p < 0.30, **Medium** 0.30 ≤ p < 0.70, **High** p ≥ 0.70. **Customers Requiring Attention = High count**, not Medium+High. These thresholds match single-customer inference and are heuristic business cutoffs, not externally validated intervention rules.
 - Both single and batch inference share `api/scoring.py`; the fitted feature list and order are preserved. True `churn` labels are never used as model features, and unexpected model outputs fail closed. If any batch fails, the previously completed snapshot remains cached; there is no partially updated distribution.
-- Batch results are stored **only in the API process's memory**, not persisted to the repository or a database. They reset upon API restart and are not shared across multiple Uvicorn workers. For scale and authenticated production use, add a scheduled worker, persistent versioned scoring table, authentication/authorization and request throttling. The current public demo is a **synthetic-extended study dataset** and the trained bundle is experimental; these are actual computations on that model, **not** bank production measurements or independently validated performance.
+- Batch results are stored **only in the API process's memory** and reset upon restart. They are computed by the saved Module 5 checkpoint on the study snapshot. Persistent versioned scoring and ongoing performance monitoring are tracked in the Module 7 plan.

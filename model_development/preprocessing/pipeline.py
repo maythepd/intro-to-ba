@@ -10,18 +10,16 @@ import copy
 from dataclasses import dataclass
 import os
 from pathlib import Path
-import sys
 from typing import Any, Callable, Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
 
-# Ensure config module is discoverable
-try:
-    from config import PipelineConfig
-except ImportError:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Keep the Module 5 config distinct from the legacy config at repository root.
+if __package__.startswith("model_development."):
+    from ..config import PipelineConfig
+else:  # Preserve ``cd model_development && python main.py``.
     from config import PipelineConfig
 
 from .base import BaseFeatureTransformer

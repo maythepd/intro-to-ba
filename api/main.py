@@ -6,19 +6,20 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Literal
 import os
-import joblib
 import pandas as pd
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from api.scoring import score_probabilities, risk_level
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
-from api import segmentation_service
+from api import module5, segmentation_service
 
-MODEL_PATH = Path(os.environ.get("MODEL_BUNDLE_PATH", "artifacts/churn_bundle.joblib"))
-DATA_PATH = Path(os.environ.get("CUSTOMERS_CSV_PATH", "data/official/customer_features.csv"))
+DATA_PATH = module5.DATA_PATH
+SEGMENTATION_DATA_PATH = Path(os.environ.get("SEGMENTATION_CUSTOMERS_CSV_PATH", "data/official/customer_features.csv"))
 
 class CustomerInput(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
     customer_id: int | None = None
     credit_score: float = Field(ge=300,le=850)
     country: Literal["France","Germany","Spain"]
@@ -30,22 +31,24 @@ class CustomerInput(BaseModel):
     credit_card: int = Field(ge=0,le=1)
     active_member: int = Field(ge=0,le=1)
     estimated_salary: float = Field(ge=0)
-    recency_days: int = Field(ge=1,le=180)
-    monthly_transactions: int = Field(ge=0)
+    recency_days: float = Field(ge=0)
+    monthly_transactions: float = Field(ge=0)
     trans_amount_3m: float = Field(ge=0)
     trans_trend_ratio: float = Field(ge=0)
     app_logins_monthly: float = Field(ge=0)
     customer_service_complaints: int = Field(ge=0)
     has_unresolved_complaint: int = Field(ge=0,le=1)
-    preferred_channel: Literal["Mobile App","Online Web","ATM","Branch"]
+    preferred_channel: Literal["Mobile App","Online Web","ATM","Branch","No_Channel"]
     primary_device: str = Field(min_length=1,max_length=60)
+    raw_features: dict[str, float | str | None] | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.bundle = joblib.load(MODEL_PATH) if MODEL_PATH.is_file() else None
-    app.state.customers = pd.read_csv(DATA_PATH) if DATA_PATH.is_file() else None
+    app.state.churn_model = module5.load()
+    app.state.customers = (app.state.churn_model.profiles(pd.read_csv(DATA_PATH))
+                           if app.state.churn_model is not None else None)
     app.state.inference_count = 0
-    app.state.segmentation = segmentation_service.load(DATA_PATH)
+    app.state.segmentation = segmentation_service.load(SEGMENTATION_DATA_PATH)
     app.state.risk_summary = None
     app.state.batch_predictions = None
     app.state.batch_lock = Lock()
@@ -59,11 +62,19 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/docs")
+
 @app.get("/health")
 def health():
-    return {"status":"ready" if app.state.bundle is not None else "model_unavailable",
-            "model_loaded":app.state.bundle is not None,"customers_loaded":app.state.customers is not None,
-            "segmentation_loaded":app.state.segmentation is not None}
+    model = app.state.churn_model
+    metadata = getattr(model, "manifest", {})
+    return {"status":"ready" if model is not None else "model_unavailable",
+            "model_loaded":model is not None,"customers_loaded":app.state.customers is not None,
+            "segmentation_loaded":app.state.segmentation is not None,
+            "model_source":"module5_checkpoint", "checkpoint_sha256":metadata.get("checkpoint_sha256"),
+            "feature_count":len(metadata.get("features", [])), "study_reproduced":metadata.get("study_reproduced", False)}
 
 def signals(p: CustomerInput) -> list[dict[str,str]]:
     result=[]
@@ -77,12 +88,12 @@ def signals(p: CustomerInput) -> list[dict[str,str]]:
     return result
 
 def require_churn_model():
-    bundle = app.state.bundle
-    if bundle is None:
-        raise HTTPException(503, "Fitted churn model unavailable. Run python -m api.export_bundle")
-    if not isinstance(bundle, dict) or not {"model", "pipeline", "features"} <= bundle.keys():
-        raise HTTPException(503, "Invalid churn model bundle")
-    return bundle
+    model = app.state.churn_model
+    if model is None:
+        raise HTTPException(503, "Module 5 checkpoint/preprocessor unavailable. Run python -m api.prepare_module5 --download")
+    if not callable(getattr(model, "predict_proba", None)):
+        raise HTTPException(503, "Invalid Module 5 prediction model")
+    return model
 
 
 @app.post("/api/predict/batch")
@@ -92,7 +103,7 @@ def predict_batch(
     batch_size: int = Query(1000, ge=1, le=5000),
 ):
     """Score the entire official customer snapshot; cache only completed runs."""
-    bundle = require_churn_model()
+    model = require_churn_model()
     customers = app.state.customers
     if customers is None:
         raise HTTPException(503, "Official customer feature table unavailable")
@@ -108,7 +119,7 @@ def predict_batch(
                 result["predictions"] = app.state.batch_predictions
             return result
 
-        required_columns = list(CustomerInput.model_fields)
+        required_columns = [name for name, field in CustomerInput.model_fields.items() if field.is_required()]
         missing = set(required_columns) - set(customers.columns)
         if missing:
             raise HTTPException(503, "Official dataset is missing columns required by the prediction API")
@@ -116,14 +127,14 @@ def predict_batch(
         scores = []
         counts = {"low": 0, "medium": 0, "high": 0}
         for start in range(0, len(customers), batch_size):
-            chunk = customers.iloc[start:start + batch_size].loc[:, required_columns]
-            records = chunk.to_dict(orient="records")
+            chunk = customers.iloc[start:start + batch_size]
+            records = chunk.loc[:, required_columns].to_dict(orient="records")
             try:
                 TypeAdapter(list[CustomerInput]).validate_python(records)
             except ValidationError as exc:
                 raise HTTPException(503, "Official customer features failed input validation") from exc
             try:
-                probabilities = score_probabilities(bundle, chunk)
+                probabilities = score_probabilities(model, chunk)
             except Exception as exc:
                 raise HTTPException(500, "Batch scoring failed: verify fitted model compatibility") from exc
             for identifier, probability in zip(chunk["customer_id"], probabilities):
@@ -140,9 +151,10 @@ def predict_batch(
             raise HTTPException(500, "Batch scoring was incomplete")
         summary = {
             "status": "scored",
-            "source": "XGBoost inference on the official customer feature table",
+            "source": "Committed Module 5 XGBoost checkpoint on the Module 5 customer feature table",
             "data_kind": "synthetic-extended study snapshot; not live bank activity",
-            "model_name": "XGBoost",
+            "model_name": "XGBoost (Module 5)",
+            "model_source": "module5_checkpoint",
             "total_customers": len(customers),
             "scored_customers": len(scores),
             "counts": counts,
@@ -173,22 +185,31 @@ def dashboard_risk_summary():
 
 @app.post("/api/predict")
 def predict(p: CustomerInput):
-    bundle = require_churn_model()
+    model = require_churn_model()
     try:
-        prob = float(score_probabilities(bundle, pd.DataFrame([p.model_dump()]))[0])
+        inputs = (module5.prediction_inputs(model, p.model_dump(), app.state.customers)
+                  if isinstance(model, module5.Module5Model) else pd.DataFrame([p.model_dump()]))
+        prob = float(score_probabilities(model, inputs)[0])
+    except module5.Module5InputError as exc:
+        raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(500, "Model inference failed: verify training artifact compatibility") from exc
     app.state.inference_count += 1
     level = risk_level(prob)
+    signal_input = p
+    if isinstance(model, module5.Module5Model):
+        profile = model.profiles(inputs).iloc[0].to_dict()
+        signal_input = CustomerInput.model_validate({**profile, "customer_id":p.customer_id})
     return {"customer_id": str(p.customer_id or ""),"churn_probability":prob,
-            "predicted_churn":prob>=.5,"risk_level":level,"model_name":"XGBoost","signals":signals(p)}
+            "predicted_churn":prob>=.5,"risk_level":level,"model_name":"XGBoost (Module 5)",
+            "model_source":"module5_checkpoint", "signals":signals(signal_input)}
 
 @app.get("/api/customers")
 def customers(search: str="",limit: int=Query(20,ge=1,le=100)):
     df=app.state.customers
     if df is None: raise HTTPException(503,"Customer dataset unavailable")
     matches=df[df.customer_id.astype(str).str.contains(search,regex=False)] if search else df
-    records=matches.head(limit).drop(columns=["churn"],errors="ignore").fillna("").to_dict("records")
+    records=matches.head(limit).loc[:, module5.PROFILE_COLUMNS].to_dict("records")
     for record in records:
         record["customer_id"]=str(record["customer_id"])
     return {"total":int(len(matches)),"items":records}
@@ -199,7 +220,7 @@ def customer(customer_id:int):
     if df is None: raise HTTPException(503,"Customer dataset unavailable")
     found=df.loc[df.customer_id==customer_id]
     if found.empty: raise HTTPException(404,"Customer not found")
-    record=found.drop(columns=["churn"],errors="ignore").iloc[0].to_dict()
+    record=found.loc[:, module5.PROFILE_COLUMNS].iloc[0].to_dict()
     record["customer_id"]=str(record["customer_id"])
     return record
 
@@ -244,11 +265,14 @@ def metrics():
         "recall": champion["recall"],
         "models": rows,
         "deployment_evaluated": False,
+        "serving_source": "module5_checkpoint",
+        "study_reproduced": getattr(app.state.churn_model, "manifest", {}).get("study_reproduced", False),
+        "checkpoint_sha256": getattr(app.state.churn_model, "manifest", {}).get("checkpoint_sha256"),
     }
 
 @app.get("/api/monitoring")
 def monitoring():
-    return {"model_loaded":app.state.bundle is not None,
+    return {"model_loaded":app.state.churn_model is not None,
             "predictions_this_process":app.state.inference_count,"drift_available":False,
             "performance_tracking_available":False}
 
