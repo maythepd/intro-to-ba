@@ -243,4 +243,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # CLI entry points run as "__main__", but pickle/joblib must reference the
+    # importable module so a separate Uvicorn process can deserialize pipelines
+    # containing BalancedFeatures and signed_log1p.
+    from api.segmentation_service import main as canonical_main
+    canonical_main()
