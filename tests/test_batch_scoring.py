@@ -7,11 +7,6 @@ from fastapi.testclient import TestClient
 from api.main import app
 
 
-class PassthroughPipeline:
-    def transform(self, frame):
-        return frame.copy()
-
-
 class ProbabilityModel:
     is_fitted = True
 
@@ -40,7 +35,7 @@ class BatchRiskTests(unittest.TestCase):
         self.client_context = TestClient(app)
         self.client = self.client_context.__enter__()
         self.model = ProbabilityModel()
-        app.state.bundle = {"model": self.model, "pipeline": PassthroughPipeline(), "features": ["age"]}
+        app.state.churn_model = self.model
         app.state.customers = pd.DataFrame([customer(1, 18), customer(2, 45), customer(3, 80), customer(4, 90)])
         app.state.risk_summary = None
         app.state.batch_predictions = None
@@ -73,10 +68,10 @@ class BatchRiskTests(unittest.TestCase):
         self.assertGreater(self.model.calls, before)
 
     def test_missing_model_and_dataset_fail_without_fake_summary(self):
-        app.state.bundle = None
+        app.state.churn_model = None
         self.assertEqual(self.client.post("/api/predict/batch").status_code, 503)
         self.assertEqual(self.client.get("/api/dashboard/risk-summary").status_code, 503)
-        app.state.bundle = {"model": self.model, "pipeline": PassthroughPipeline(), "features": ["age"]}
+        app.state.churn_model = self.model
         app.state.customers = None
         self.assertEqual(self.client.post("/api/predict/batch").status_code, 503)
 
@@ -95,7 +90,7 @@ class BatchRiskTests(unittest.TestCase):
         class BrokenModel(ProbabilityModel):
             def predict_proba(self, x):
                 return np.full(len(x), float("nan"))
-        app.state.bundle = {"model": BrokenModel(), "pipeline": PassthroughPipeline(), "features": ["age"]}
+        app.state.churn_model = BrokenModel()
         self.assertEqual(self.client.post("/api/predict/batch").status_code, 500)
         self.assertEqual(self.client.get("/api/dashboard/risk-summary").status_code, 503)
 
