@@ -1,0 +1,28 @@
+name: Batch Scoring CI
+on:
+  push:
+    branches:
+      - feature/batch-scoring-dashboard
+  pull_request:
+    paths:
+      - 'api/**'
+      - 'frontend/**'
+      - 'tests/**'
+      - '.github/workflows/batch-scoring-ci.yml'
+jobs:
+  test-api-and-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt && python -m pip install httpx2
+      - run: python -m unittest discover -s tests -p 'test_batch_scoring.py' -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend

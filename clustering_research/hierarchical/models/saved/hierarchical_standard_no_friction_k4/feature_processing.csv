@@ -1,0 +1,11 @@
+feature,group,transform,imputation,scaler,status
+recency_days,rfm,log1p,median,standard,selected
+initiated_transactions_monthly,rfm,log1p,median,standard,selected
+trans_amount_3m,rfm,log1p,median,standard,removed_correlation
+successful_logins_monthly,digital,log1p,median,standard,selected
+login_recency_days,digital,log1p,median,standard,selected
+trans_daily_trend,momentum,log1p,median,standard,selected
+login_daily_trend,momentum,log1p,median,standard,selected
+products_number,portfolio,none,median,standard,selected
+savings_share,portfolio,none,median,standard,selected
+total_accounts,portfolio,log1p,median,standard,selected
