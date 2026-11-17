@@ -29,9 +29,10 @@ features:
   enable_domain_features: true      # Tạo các đặc trưng nghiệp vụ ngân hàng
   enable_one_hot_encoding: true     # One-Hot Encoding cho các cột phân loại
   enable_target_encoding: true      # Smoothed Target Encoding (m-estimate)
-  enable_smote: true                # Cân bằng mẫu thiểu số bằng SMOTE trên tập Train
-  enable_feature_selection: false   # Lọc đặc trưng Top-K theo độ quan trọng
-  enable_temporal_embeddings: true # Biểu diễn chuỗi sự kiện thời gian (Multi-snapshot Bi-GRU Autoencoder)
+  enable_smote: false                # Cân bằng mẫu thiểu số bằng SMOTE trên tập Train
+  enable_feature_selection: true   # Lọc đặc trưng Top-K theo độ quan trọng
+  enable_temporal_embeddings: false   # Biểu diễn chuỗi sự kiện thời gian (Multi-snapshot Bi-GRU Autoencoder)
+  enable_gnn_embeddings: false        # Biểu diễn cấu trúc ngữ cảnh mạng lưới đồ thị (Self-Supervised k-NN Graph Attention Network)
 
   # Chi tiết biến đổi phân phối lệch (Skewness sub-toggles)
   skewness_transform:
@@ -100,39 +101,107 @@ features:
 
   # Chi tiết trọng số mẫu (Sample Weighting / Recency Decay / Value Weighting - Phương án 1)
   sample_weighting:
-    enabled: false                  # Bật/tắt phương án 1
+    enabled: true                  # Bật/tắt phương án 1
     decay_mode: "exponential"       # "exponential" | "linear" | "none"
     recency_col: "recency_days"     # Cột tính độ mới
-    decay_half_life_days: 60.0      # Chu kỳ bán rã (ngày)
+    decay_half_life_days: 30.0     # Chu kỳ bán rã (ngày)
     enable_value_weighting: true    # Ưu tiên tài khoản số dư cao
     balance_col: "balance"          # Cột số dư
     value_weight_alpha: 0.5         # Hệ số logarithmic alpha cho số dư
-    churn_weight_multiplier: 1.5    # Phạt nặng hơn khi bỏ sót khách hàng churn (FN)
+    churn_weight_multiplier: 1.0    # Phạt nặng hơn khi bỏ sót khách hàng churn (FN)
     normalize: true                 # Chuẩn hóa để giữ nguyên thang đo gradient
 
   # Chi tiết lựa chọn đặc trưng (Feature selection: MI, Pearson, hoặc Hybrid)
   feature_selection:
     top_k_features: null
-    feature_selection_metric: "MI_Score"  # "MI_Score" | "Pearson" | "MI_Pearson_Hybrid" | "RF_Importance"
+    feature_selection_metric: "MI_Pearson_Hybrid"  # "MI_Score" | "Pearson" | "MI_Pearson_Hybrid" | "RF_Importance"
     hybrid_pearson_weight: 0.50          # Trọng số cho Pearson trong MI_Pearson_Hybrid (0.0 đến 1.0)
-    compute_feature_importance: false
+    compute_feature_importance: true
 
   # Chi tiết biểu diễn chuỗi hành vi thời gian (Temporal Multi-Snapshot Sequence Embeddings)
   temporal_embeddings:
-    enabled: true                      # Bật/tắt khai thác chuỗi sự kiện thô từ transactions, logins, complaints
+    enabled: false                      # Bật/tắt khai thác chuỗi sự kiện thô từ transactions, logins, complaints
+    temporal_input_mode: "raw_events"   # Chế độ đầu vào: "extractors" (37 kênh gom cụm 6 snapshot) | "raw_events" (chuỗi log thô 26 kênh End-to-End DL)
+    raw_sequence_length: 50             # Độ dài chuỗi sự kiện thô gần nhất (Tokens L=50) khi bật temporal_input_mode: "raw_events"
+    manifold_strategy: "hyperbolic_poincare"  # "unsupervised" | "asymmetric_arcface" | "hyperbolic_poincare" | "optimal_transport" | "neyman_pearson" | "temporal_attention"
     latent_dim: 16                      # Kích thước vector ẩn nén hành vi z (nối vào bảng đặc trưng)
     hidden_dim: 64                      # Số nơ-ron hidden trong Bi-GRU Encoder & Decoder
     num_layers: 2                       # Số lớp Bi-GRU
-    epochs: 30                          # Số epoch huấn luyện Self-Supervised Sequence Autoencoder
+    epochs: 30                          # Số epoch huấn luyện Sequence Autoencoder
     batch_size: 256                     # Kích thước mini-batch
-    learning_rate: 0.005                # Tốc độ học AdamW
+    learning_rate: 0.001                # Tốc độ học AdamW
     dropout: 0.20                       # Dropout chống quá khớp
     checkpoint_dir: "models/saved/temporal" # Thư mục lưu checkpoint trọng số mô hình PyTorch
-    cache_path: "data/processed/temporal_embeddings.csv" # Cache vector embeddings để load tức thì
+    cache_path: "data/processed/temporal/temporal_embeddings.csv" # Cache vector embeddings để load tức thì
+    force_retrain: false
+
+    # Tham số Chiến lược 1: Asymmetric ArcFace (Hyperspherical Margin)
+    lambda_angular: 0.50                # Trọng số lề góc bất đối xứng (cân chỉnh chống nổ gradient)
+    margin_churn: 0.45                  # Lề góc bảo vệ cho Churn (~12 độ)
+    margin_loyal: 0.03                 # Lề góc cho Loyal
+    angular_scale: 6.0                 # Bán kính siêu cầu s (cân chỉnh phân phối logit)
+
+    # Tham số Chiến lược 2: Hyperbolic Poincaré Ball (Phân cấp phi Euclid)
+    curvature: 1.0                      # Độ cong không gian hyperbolic
+    lambda_poincare: 0.5               # Trọng số mất mát phân cấp hyperbolic
+
+    # Tham số Chiến lược 3: Optimal Transport & Drift Velocity Field (Trường động lực học)
+    lambda_drift: 0.5                  # Trọng số căn chỉnh trường vận tốc trôi
+
+    # Tham số Chiến lược 4: Neyman-Pearson Risk Control (Kiểm soát trần báo động giả)
+    alpha_fpr: 0.10                     # Ngân sách trần False Positive Rate (FPR <= 10%)
+    lambda_np: 0.30                     # Hệ số phạt vượt ngân sách FP
+    tau: 0.50                           # Ngưỡng phân tách xác suất rủi ro
+
+    # Tham số Chiến lược 5: Temporal Attention Autoencoder
+    use_feature_attention: true         # Trụ cột 1: Feature Attention Layer (Mặt nạ mềm 37 kênh)
+    use_temporal_attention: true        # Trụ cột 1: Temporal Attention Pooling (Trọng số 6 snapshot)
+    use_multiscale_conv: true           # Trụ cột 2: 1D-CNN Multi-Scale (k=2,3) + Residual Skip
+    conv_kernels: [2, 3]                # Kích thước kernel Conv1D
+    noise_std: 0.02                     # Trụ cột 3: Nhiễu Gauss suy giảm theo epoch
+    noise_decay: 0.95                   # Hệ số suy giảm nhiễu
+    lambda_direction: 0.10              # Trụ cột 4: Trọng số Direction-aware trend loss
+    lambda_correlation: 0.05            # Trụ cột 4: Trọng số Pearson correlation loss
+    huber_delta: 1.0                    # Trụ cột 4: Ngưỡng Huber Loss chống ngoại lai giao dịch
+
+  # Chi tiết biểu diễn đồ thị mạng lưới khách hàng (Self-Supervised GNN Embeddings)
+  gnn_embeddings:
+    enabled: false                      # Bật/tắt khai thác cấu trúc quan hệ đồ thị k-NN
+    k_neighbors: 5                      # Số láng giềng k kết nối trên mỗi khách hàng
+    latent_dim: 16                      # Kích thước vector ẩn z_gnn (nối vào bảng đặc trưng)
+    hidden_dim: 32                      # Số nơ-ron hidden trong các tầng GAT
+    heads: 2                            # Số attention heads trong Multi-head GAT
+    epochs: 20                          # Số epoch huấn luyện Self-Supervised Graph Autoencoder
+    learning_rate: 0.005                # Tốc độ học AdamW
+    dropout: 0.20                       # Dropout chống quá khớp
+    checkpoint_dir: "models/saved/gnn"  # Thư mục lưu checkpoint trọng số mô hình PyTorch GNN
+    cache_path: "data/processed/gnn/gnn_embeddings.csv" # Cache vector embeddings để load tức thì
+    force_retrain: false
+
+  # Đặc trưng Định lượng & Xử lý Tín hiệu Chuỗi Thời gian (Pure Classical ML - Không dùng Deep Learning)
+  quant_signals:
+    enabled: true                       # Bật/tắt khai thác đặc trưng Momentum, MACD, Volatility, Fourier, Exogenous
+    enable_momentum: true               # Chỉ số động lượng: Velocity, Acceleration, ROC, RSI-like Cash Flow, Negative Streaks
+    enable_macd: true                   # Chỉ số MACD: MACD Line, Signal Line, Histogram trên Net Flow & Login
+    enable_volatility: true             # Chỉ số biến động: Độ lệch chuẩn, CV, Downside semi-variance, Inter-event jitter
+    enable_fourier: true                # Chỉ số tần số Fourier (FFT): Spectral Energy, Spectral Entropy, Low/High Freq ratio
+    enable_exogenous: true              # Tín hiệu ngoại sinh: Chu kỳ trả lương (Payday 25-31), Weekend ratio, Lệch lãi suất, Phí phạt
+    enable_lags: true                   # Đặc trưng trễ (Lags): m6-m5, m5-m4, gia tốc dòng tiền
+    enable_rolling: true                # Thống kê rolling cửa sổ 3 tháng: Mean, Std, Slope, Min
+    enable_cyclic_time: true            # Sin/Cos embeddings tuần hoàn ngày trong tháng & độ phân tán (Dispersion)
+    enable_interactions: true           # Tương tác đa biến dạng tích (Multiplicative Interactions): Age x Products, Germany x Balance,...
+    enable_multiscale_rolling: true     # Thống kê rolling đa độ phân giải ngắn hạn (7d, 14d, 30d, 60d, 90d) & Cross-scale ratios
+    prune_sparse_features: false         # Tự động loại bỏ đặc trưng suy biến (phương sai ~ 0 hoặc >98% giá trị 0)
+    max_sparsity_threshold: 0.98        # Ngưỡng tỉ lệ phần trăm số 0 tối đa cho phép
+    min_variance_threshold: 0.000001    # Ngưỡng phương sai tối thiểu (1e-6)
+    outlier_clip_quantile: 0.995        # Winsorization nén giá trị cực đoan tại phân vị 0.5% - 99.5%
+    cache_path: "data/processed/quant_signal_features.csv" # Đường dẫn lưu cache để load tức thì
+    force_recompute: false              # Buộc tính toán lại từ đầu từ log thô
 
 # 3. CẤU HÌNH MÔ HÌNH (Model Configuration: xgboost | lr | rf)
 model:
   name: "xgboost"                   # Mô hình mặc định khi train đơn lẻ: "xgboost" | "lr" | "rf"
+  decision_threshold: 0.35          # Ngưỡng ra quyết định phân loại Churn (0.50: đối xứng | 0.35: tối ưu F1 & cân bằng Recall ~65-70% | 0.20: High Recall ~85%)
 
   # Cấu hình Focal Loss (Phương án 2: Tập trung gradient vào các ca khó)
   focal_loss:
@@ -143,24 +212,24 @@ model:
   # Cấu hình XGBoost (Gradient Boosting)
   xgboost_params:
     n_estimators: 300
-    max_depth: 30
-    learning_rate: 0.001
+    max_depth: 5
+    learning_rate: 0.05
     subsample: 0.8
     colsample_bytree: 0.8
     gamma: 0.1
     min_child_weight: 1
-    scale_pos_weight: 1.0           # 1.0 nếu dùng SMOTE; nếu không SMOTE có thể set 3.9
+    scale_pos_weight: 2.0           # 1.0 nếu dùng SMOTE; nếu không SMOTE có thể set 3.9
     eval_metric: "auc"
     random_state: 42
     n_jobs: -1
-  early_stopping_rounds: 30
+    early_stopping_rounds: 30
 
   # Cấu hình Logistic Regression (Linear Model — ghi đè DEFAULT_PARAMS)
   lr_params:
     C: 0.05                         # Tăng regularization (C nhỏ hơn) để giảm variance
     solver: "saga"                  # saga hỗ trợ L1/ElasticNet, phù hợp khi cần sparsity
     penalty: "l1"                   # L1: tự động zero-out các feature ít quan trọng
-    max_iter: 3000                  # Tăng max_iter để đảm bảo hội tụ đầy đủ
+    max_iter: 6000                  # Tăng max_iter để đảm bảo hội tụ đầy đủ
     tol: 0.001                      # Ngưỡng hội tụ tối ưu cho SAGA (giảm warning, tăng tốc độ)
     class_weight: "balanced"
     random_state: 42
@@ -176,6 +245,17 @@ model:
     oob_score: true
     random_state: 42
     n_jobs: -1
+
+  # Cấu hình Linear SVM (Max-Margin Linear Hyperplane)
+  svm_params:
+    C: 0.1                          # Hệ số phạt soft-margin
+    penalty: "l2"                   # Chuẩn hóa L2
+    loss: "squared_hinge"           # Squared Hinge loss
+    dual: "auto"                    # Tự động chọn primal/dual theo n_samples vs n_features
+    tol: 0.0001                     # Ngưỡng hội tụ dừng
+    max_iter: 5000                  # Giới hạn số vòng lặp tối đa
+    class_weight: "balanced"        # Cân bằng trọng số lớp thiểu số
+    random_state: 42
 
 # 4. CẤU HÌNH THÍ NGHIỆM & KẾT QUẢ (Experiment & Reporting Settings)
 experiment:

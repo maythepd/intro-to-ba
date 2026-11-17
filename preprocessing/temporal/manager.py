@@ -2,6 +2,12 @@
 Temporal Embedding Manager.
 Coordinates raw multi-table event ingestion, multi-snapshot sequence tensor construction,
 deep recurrent sequence autoencoding, artifact caching, and feature augmentation.
+Supports pluggable representation learning strategies:
+  - unsupervised (pure self-supervised baseline)
+  - asymmetric_arcface (hyperspherical margin)
+  - hyperbolic_poincare (Poincaré ball)
+  - optimal_transport (drift velocity field)
+  - neyman_pearson (bounded FPR risk control)
 """
 
 from pathlib import Path
@@ -12,7 +18,9 @@ import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 
 from .extractor import TemporalSnapshotExtractor
+from .raw_extractor import RawEventSequenceExtractor
 from .model import TemporalAutoencoderTrainer
+from .strategies import get_temporal_strategy, BaseTemporalStrategy
 
 
 class TemporalEmbeddingManager(BaseEstimator, TransformerMixin):
@@ -22,7 +30,7 @@ class TemporalEmbeddingManager(BaseEstimator, TransformerMixin):
     
     Pipeline integration:
       - fit(df): Extracts raw event tensor, trains BiGRUTemporalAutoencoder strictly on df, caches train embeddings.
-      - transform(df): Merges dense temporal embedding columns [temporal_z0, ..., temporal_zK] via customer_id.
+      - transform(df): Merges dense temporal embedding columns via customer_id.
                        If unseen customers are encountered (val/test sets), runs forward-pass inference in eval mode!
     """
 
@@ -30,6 +38,8 @@ class TemporalEmbeddingManager(BaseEstimator, TransformerMixin):
         self,
         enabled: bool = False,
         raw_data_dir: Union[str, Path] = "data/full_dataset",
+        temporal_input_mode: str = "extractors",
+        raw_sequence_length: int = 50,
         latent_dim: int = 16,
         hidden_dim: int = 64,
         num_layers: int = 2,
@@ -43,9 +53,18 @@ class TemporalEmbeddingManager(BaseEstimator, TransformerMixin):
         verbose: bool = True,
         fold_id: Optional[Union[int, str]] = None,
         force_retrain: bool = False,
+        manifold_strategy: str = "unsupervised",
+        strategy_kwargs: Optional[Dict[str, Any]] = None,
+        # Direct keyword args for backwards compatibility:
+        lambda_angular: float = 0.30,
+        margin_churn: float = 0.20,
+        margin_loyal: float = 0.00,
+        angular_scale: float = 4.0,
     ):
         self.enabled = enabled
         self.raw_data_dir = Path(raw_data_dir)
+        self.temporal_input_mode = str(temporal_input_mode).lower()
+        self.raw_sequence_length = int(raw_sequence_length)
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
@@ -60,25 +79,62 @@ class TemporalEmbeddingManager(BaseEstimator, TransformerMixin):
         self.fold_id = fold_id
         self.force_retrain = force_retrain
 
+        self.manifold_strategy = str(manifold_strategy).lower()
+        self.strategy_kwargs = dict(strategy_kwargs or {})
+        self.lambda_angular = lambda_angular
+        self.margin_churn = margin_churn
+        self.margin_loyal = margin_loyal
+        self.angular_scale = angular_scale
+
+        if self.manifold_strategy == "asymmetric_arcface":
+            self.strategy_kwargs.setdefault("scale", self.angular_scale)
+            self.strategy_kwargs.setdefault("margin_churn", self.margin_churn)
+            self.strategy_kwargs.setdefault("margin_loyal", self.margin_loyal)
+            self.strategy_kwargs.setdefault("lambda_angular", self.lambda_angular)
+
+        self.strategy: BaseTemporalStrategy = get_temporal_strategy(self.manifold_strategy, **self.strategy_kwargs)
+
         # Route fold-specific paths if fold_id is provided
+        mode_prefix = "raw_" if self.temporal_input_mode in ("raw_events", "raw", "raw_logs") else ""
+        strat_prefix = f"{self.manifold_strategy}_" if self.manifold_strategy != "unsupervised" else ""
+        prefix = f"{mode_prefix}{strat_prefix}"
         if self.fold_id is not None:
             self.checkpoint_dir = self.checkpoint_dir / "folds"
-            self.cache_path = Path("data/processed/temporal") / f"temporal_embeddings_fold{self.fold_id}.csv"
+            self.cache_path = Path("data/processed/temporal") / f"temporal_embeddings_{prefix}fold{self.fold_id}.csv"
+        else:
+            self.cache_path = Path("data/processed/temporal") / f"temporal_embeddings_{prefix}full.csv"
 
         self.trainer: Optional[TemporalAutoencoderTrainer] = None
         self.embeddings_df_: Optional[pd.DataFrame] = None
-        self.embedding_cols_: List[str] = [f"temporal_z{i}" for i in range(self.latent_dim)]
+
+        self.latent_cols_: List[str] = [f"temporal_z{i}" for i in range(self.latent_dim)]
+        all_feature_cols = self.strategy.get_feature_names(self.latent_dim)
+        self.geom_cols_: List[str] = [c for c in all_feature_cols if not c.startswith("temporal_z")]
+        self.embedding_cols_: List[str] = self.latent_cols_ + self.geom_cols_
+
+    def _get_extractor(self):
+        if self.temporal_input_mode in ("raw_events", "raw", "raw_logs"):
+            return RawEventSequenceExtractor(
+                raw_data_dir=self.raw_data_dir,
+                max_seq_len=self.raw_sequence_length,
+            )
+        return TemporalSnapshotExtractor(
+            raw_data_dir=self.raw_data_dir,
+        )
 
     def _resolve_checkpoint_path(self) -> Path:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        mode_prefix = "raw_" if self.temporal_input_mode in ("raw_events", "raw", "raw_logs") else ""
+        strat_prefix = f"{self.manifold_strategy}_" if self.manifold_strategy != "unsupervised" else ""
+        prefix = f"{mode_prefix}{strat_prefix}"
         if self.fold_id is not None:
-            return self.checkpoint_dir / f"temporal_encoder_fold{self.fold_id}.pt"
-        return self.checkpoint_dir / "temporal_encoder.pt"
+            return self.checkpoint_dir / f"temporal_encoder_{prefix}fold{self.fold_id}.pt"
+        return self.checkpoint_dir / f"temporal_encoder_{prefix}full.pt"
 
     def fit(self, df: pd.DataFrame, y: Optional[Any] = None) -> "TemporalEmbeddingManager":
         """
         Fits temporal sequence autoencoder strictly on the training partition.
-        Note: Entirely self-supervised and unsupervised — ignores y, guaranteeing Zero Target Leakage!
+        Leverages training labels if the active strategy requires metric supervision.
         """
         if not self.enabled:
             return self
@@ -99,18 +155,28 @@ class TemporalEmbeddingManager(BaseEstimator, TransformerMixin):
                         self.embeddings_df_ = cached_df[expected_cols].copy()
                         if self.verbose:
                             fold_tag = f" [Fold {self.fold_id}]" if self.fold_id is not None else ""
-                            print(f"[INFO] Loaded pre-cached temporal embeddings{fold_tag} from: {self.cache_path} ({len(self.embeddings_df_)} customers)")
+                            print(
+                                f"[INFO] Loaded pre-cached temporal embeddings{fold_tag} from: "
+                                f"{self.cache_path} ({len(self.embeddings_df_)} customers)"
+                            )
                         return self
             except Exception as e:
                 if self.verbose:
                     print(f"[WARN] Failed to read cache ({e}). Re-extracting from raw event logs...")
 
-        # 2. Extract multi-period snapshot tensor strictly for training customers
+        # 2. Extract sequence tensor strictly for training customers
         cust_ids = df["customer_id"].values
-        extractor = TemporalSnapshotExtractor(raw_data_dir=self.raw_data_dir)
+        extractor = self._get_extractor()
         tensor, extracted_ids = extractor.extract(cust_ids, verbose=self.verbose)
 
-        # 3. Fit Temporal Sequence Autoencoder strictly on this partition
+        # Extract training labels aligned by customer_id if available
+        labels = None
+        if y is not None:
+            labels = np.asarray(y)
+        elif "churn" in df.columns:
+            labels = df["churn"].values.astype(int)
+
+        # 3. Fit Temporal Sequence Representation strictly on this partition
         ckpt_path = self._resolve_checkpoint_path()
         self.trainer = TemporalAutoencoderTrainer(
             in_features=tensor.shape[2],
@@ -126,14 +192,25 @@ class TemporalEmbeddingManager(BaseEstimator, TransformerMixin):
             random_state=self.random_state,
             verbose=self.verbose,
             force_retrain=self.force_retrain,
+            manifold_strategy=self.manifold_strategy,
+            strategy_kwargs=self.strategy_kwargs,
+            lambda_angular=self.lambda_angular,
+            margin_churn=self.margin_churn,
+            margin_loyal=self.margin_loyal,
+            angular_scale=self.angular_scale,
         )
-        self.trainer.fit(tensor)
+        self.trainer.fit(tensor, labels=labels)
 
-        # 4. Generate Latent Embeddings z for Train customers
-        latents = self.trainer.transform(tensor)
+        # 4. Generate Latent Embeddings z & Geometric features for Train customers
+        latents, geom_dict = self.trainer.transform_with_geometry(tensor)
         emb_data = {"customer_id": extracted_ids}
-        for i, col in enumerate(self.embedding_cols_):
+        for i, col in enumerate(self.latent_cols_):
             emb_data[col] = latents[:, i]
+        for col in self.geom_cols_:
+            if col in geom_dict:
+                emb_data[col] = geom_dict[col]
+            else:
+                emb_data[col] = np.zeros(len(extracted_ids), dtype=np.float32)
 
         self.embeddings_df_ = pd.DataFrame(emb_data)
 
@@ -172,29 +249,53 @@ class TemporalEmbeddingManager(BaseEstimator, TransformerMixin):
             if self.trainer is None:
                 ckpt_path = self._resolve_checkpoint_path()
                 if ckpt_path.exists():
+                    in_feat = 26 if self.temporal_input_mode in ("raw_events", "raw", "raw_logs") else 37
+                    seq_l = self.raw_sequence_length if self.temporal_input_mode in ("raw_events", "raw", "raw_logs") else 6
+                    try:
+                        ckpt_dict = torch.load(ckpt_path, map_location="cpu")
+                        in_feat = ckpt_dict.get("metadata", {}).get("in_features", in_feat)
+                        seq_l = ckpt_dict.get("metadata", {}).get("seq_len", seq_l)
+                    except Exception:
+                        pass
+
                     self.trainer = TemporalAutoencoderTrainer(
-                        in_features=10,
-                        seq_len=6,
+                        in_features=in_feat,
+                        seq_len=seq_l,
                         hidden_dim=self.hidden_dim,
                         num_layers=self.num_layers,
                         latent_dim=self.latent_dim,
                         checkpoint_path=ckpt_path,
                         verbose=False,
+                        manifold_strategy=self.manifold_strategy,
+                        strategy_kwargs=self.strategy_kwargs,
+                        lambda_angular=self.lambda_angular,
+                        margin_churn=self.margin_churn,
+                        margin_loyal=self.margin_loyal,
+                        angular_scale=self.angular_scale,
                     )
                     # Loads existing checkpoint
-                    self.trainer.fit(np.zeros((1, 6, 10), dtype=np.float32))
+                    self.trainer.fit(np.zeros((1, seq_l, in_feat), dtype=np.float32))
 
             if self.trainer is not None:
                 if self.verbose:
                     fold_tag = f" [Fold {self.fold_id}]" if self.fold_id is not None else ""
-                    print(f"[INFO] Inferring temporal embeddings{fold_tag} for {len(missing_ids)} unseen customers (eval mode)...")
-                extractor = TemporalSnapshotExtractor(raw_data_dir=self.raw_data_dir)
+                    print(
+                        f"[INFO] Inferring temporal embeddings{fold_tag} for {len(missing_ids)} "
+                        f"unseen customers (eval mode)..."
+                    )
+                extractor = self._get_extractor()
                 missing_tensor, actual_ids = extractor.extract(missing_ids, verbose=False)
-                missing_latents = self.trainer.transform(missing_tensor)
+                missing_latents, missing_geom = self.trainer.transform_with_geometry(missing_tensor)
 
                 new_emb_data = {"customer_id": actual_ids}
-                for i, col in enumerate(self.embedding_cols_):
+                for i, col in enumerate(self.latent_cols_):
                     new_emb_data[col] = missing_latents[:, i]
+                for col in self.geom_cols_:
+                    if col in missing_geom:
+                        new_emb_data[col] = missing_geom[col]
+                    else:
+                        new_emb_data[col] = np.zeros(len(actual_ids), dtype=np.float32)
+
                 df_new = pd.DataFrame(new_emb_data)
 
                 if self.embeddings_df_ is None:
@@ -212,7 +313,8 @@ class TemporalEmbeddingManager(BaseEstimator, TransformerMixin):
         if self.embeddings_df_ is not None:
             df_out = df_out.merge(self.embeddings_df_, on="customer_id", how="left")
             for col in self.embedding_cols_:
-                df_out[col] = df_out[col].fillna(0.0)
+                if col in df_out.columns:
+                    df_out[col] = df_out[col].fillna(0.0)
 
         return df_out
 

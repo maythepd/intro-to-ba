@@ -1,80 +1,86 @@
 """
-Temporal Snapshot Extractor for Digital Bank Event Logs.
-Ingests raw transactional, login, and complaint event streams from data/full_dataset/
-and constructs a 3D temporal sequence tensor (N_customers, T_months, D_metrics)
-capturing longitudinal customer dynamics across monthly snapshots.
+Temporal Snapshot Extractor Coordinator for Digital Bank Event Logs.
+Coordinates domain sub-extractors across transactional, login, complaint,
+account, and cross-channel event streams to construct a 3D temporal sequence
+tensor (N_customers, T_months, D_metrics) for longitudinal representation learning.
 """
 
 from pathlib import Path
 import time
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 import numpy as np
 import pandas as pd
+
+from .extractors import (
+    TransactionSnapshotExtractor,
+    LoginSnapshotExtractor,
+    ComplaintSnapshotExtractor,
+    AccountSnapshotExtractor,
+    CrossChannelSnapshotExtractor,
+    ALL_FEATURE_NAMES_37,
+)
 
 
 class TemporalSnapshotExtractor:
     """
-    Constructs multi-period monthly behavioral snapshots per customer from raw event logs.
-    
+    Coordinates multi-period monthly behavioral snapshots per customer.
+
     Snapshot Months: April (4), May (5), June (6), July (7), August (8), September (9) 2026.
-    
-    Engineered Monthly Behavioral Channels (D=10):
-      1. tx_in_vol_log:       log1p(total inward deposit/transfer volume in month)
-      2. tx_out_vol_log:      log1p(total outward payment/withdrawal volume in month)
-      3. tx_net_flow_log:     signed log1p of net flow (in - out)
-      4. tx_count_log:        log1p(number of transactions in month)
-      5. tx_cancel_rate:      cancellation/failure rate in month
-      6. tx_avg_ticket_log:   log1p(average transaction ticket size)
-      7. login_count_log:     log1p(digital banking logins in month)
-      8. login_fail_rate:     fraction of failed login attempts
-      9. login_mobile_share:  fraction of logins performed via mobile (iOS/Android)
-     10. complaints_count:    customer complaints filed in month
+
+    Modular Sub-Extractors:
+      - TransactionSnapshotExtractor: 11 channels (T1 - T11)
+      - LoginSnapshotExtractor: 15 channels (L1 - L15)
+      - ComplaintSnapshotExtractor: 5 channels (C1 - C5)
+      - AccountSnapshotExtractor: 4 channels (A1 - A4)
+      - CrossChannelSnapshotExtractor: 2 channels (X1 - X2)
+      Total: 37 dynamic behavioral channels (D=37).
     """
 
     DEFAULT_MONTHS: List[int] = [4, 5, 6, 7, 8, 9]
 
-    FEATURE_NAMES: List[str] = [
-        "tx_in_vol_log",
-        "tx_out_vol_log",
-        "tx_net_flow_log",
-        "tx_count_log",
-        "tx_cancel_rate",
-        "tx_avg_ticket_log",
-        "login_count_log",
-        "login_fail_rate",
-        "login_mobile_share",
-        "complaints_count",
-    ]
+    LEGACY_FEATURE_NAMES_10: List[str] = (
+        TransactionSnapshotExtractor.LEGACY_FEATURE_NAMES
+        + LoginSnapshotExtractor.LEGACY_FEATURE_NAMES
+        + ComplaintSnapshotExtractor.LEGACY_FEATURE_NAMES
+    )
+
+    FEATURE_NAMES: List[str] = ALL_FEATURE_NAMES_37
 
     def __init__(
         self,
         raw_data_dir: Union[str, Path] = "data/full_dataset",
         months: Optional[List[int]] = None,
-        tensor_cache_path: Union[str, Path] = "data/processed/temporal/raw_snapshot_tensor.npz",
+        tensor_cache_path: Union[str, Path] = "data/processed/temporal/raw_snapshot_tensor_37d.npz",
+        use_extended: bool = True,
     ):
         self.raw_data_dir = Path(raw_data_dir)
         self.months = months or self.DEFAULT_MONTHS
         self.tensor_cache_path = Path(tensor_cache_path)
+        self.use_extended = use_extended
 
-    def _resolve_file(self, filename: str) -> Path:
-        cand = self.raw_data_dir / filename
-        if cand.exists():
-            return cand
-        cand_alt = Path(__file__).resolve().parent.parent.parent / "data" / "full_dataset" / filename
-        if cand_alt.exists():
-            return cand_alt
-        raise FileNotFoundError(f"Raw table '{filename}' not found in '{self.raw_data_dir}'.")
+        self.feature_names = (
+            ALL_FEATURE_NAMES_37 if self.use_extended else self.LEGACY_FEATURE_NAMES_10
+        )
+
+        # Modular domain sub-extractors
+        self.tx_extractor = TransactionSnapshotExtractor(self.raw_data_dir)
+        self.login_extractor = LoginSnapshotExtractor(self.raw_data_dir)
+        self.complaint_extractor = ComplaintSnapshotExtractor(self.raw_data_dir)
+        self.account_extractor = AccountSnapshotExtractor(self.raw_data_dir)
+        self.cross_extractor = CrossChannelSnapshotExtractor(self.raw_data_dir)
 
     def extract(
         self,
         customer_ids: Union[List[int], np.ndarray, pd.Series],
         verbose: bool = True,
+        save_cache: Optional[bool] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Extracts temporal sequence tensor for target customer IDs.
-        
+        Extracts standardized temporal sequence tensor for target customer IDs.
+
         Returns:
-          tensor: np.ndarray of shape (N_customers, len(months), 10), standardized per channel.
+          tensor: np.ndarray of shape (N_customers, len(months), D_channels),
+                  standardized per channel with bounded outlier clipping [-5.0, 5.0].
           cust_ids_arr: np.ndarray of shape (N_customers,).
         """
         t0 = time.time()
@@ -83,182 +89,114 @@ class TemporalSnapshotExtractor:
         # 0. Check pre-computed tensor cache
         if self.tensor_cache_path.exists():
             try:
-                cached_data = np.load(self.tensor_cache_path)
+                cached_data = np.load(self.tensor_cache_path, allow_pickle=True)
                 cached_ids = cached_data["customer_ids"]
                 cached_tensor = cached_data["tensor"]
 
-                cached_id_map = {cid: idx for idx, cid in enumerate(cached_ids)}
-                if all(cid in cached_id_map for cid in cust_ids_arr):
-                    indices = [cached_id_map[cid] for cid in cust_ids_arr]
-                    sliced_tensor = cached_tensor[indices]
-                    if verbose:
-                        print(f"[INFO] Loaded pre-cached raw snapshot tensor for {len(cust_ids_arr)} customers in {time.time() - t0:.3f}s")
-                    return sliced_tensor, cust_ids_arr
+                # Ensure cached dimension matches current configuration
+                if cached_tensor.shape[-1] == len(self.feature_names):
+                    cached_id_map = {cid: idx for idx, cid in enumerate(cached_ids)}
+                    if all(cid in cached_id_map for cid in cust_ids_arr):
+                        indices = [cached_id_map[cid] for cid in cust_ids_arr]
+                        sliced_tensor = cached_tensor[indices]
+                        if verbose:
+                            print(
+                                f"[INFO] Loaded pre-cached snapshot tensor "
+                                f"({sliced_tensor.shape}) for {len(cust_ids_arr)} customers in {time.time() - t0:.3f}s"
+                            )
+                        return sliced_tensor, cust_ids_arr
             except Exception:
                 pass
 
         if verbose:
-            print(f"[INFO] Extracting temporal event snapshots across {len(self.months)} months for {len(cust_ids_arr)} customers...")
+            print(
+                f"[INFO] Extracting {len(self.feature_names)}-dim temporal event snapshots "
+                f"across {len(self.months)} months for {len(cust_ids_arr)} customers..."
+            )
 
-        # 1. Accounts mapping (account_id -> customer_id)
-        acc_path = self._resolve_file("accounts.csv")
-        acc_df = pd.read_csv(acc_path, usecols=["account_id", "customer_id"])
-        acct_map = dict(zip(acc_df["account_id"], acc_df["customer_id"]))
+        if not self.use_extended:
+            # Delegate to sub-extractors for legacy 10-dimensional extraction
+            return self._extract_legacy(cust_ids_arr, verbose)
 
-        # 2. Transactions
-        tx_path = self._resolve_file("transactions.csv")
-        tx_df = pd.read_csv(
-            tx_path,
-            usecols=["account_id", "transaction_datetime", "amount", "direction", "transaction_status"],
-        )
-        tx_df["customer_id"] = tx_df["account_id"].map(acct_map)
-        try:
-            tx_df["month"] = pd.to_numeric(tx_df["transaction_datetime"].str.slice(5, 7), errors="coerce").fillna(0).astype(int)
-        except Exception:
-            tx_df["month"] = pd.to_datetime(tx_df["transaction_datetime"], format="ISO8601").dt.month
+        # Shared execution context across sub-extractors to avoid redundant I/O
+        context: Dict[str, Any] = {}
 
-        # 3. Logins
-        log_path = self._resolve_file("login.csv")
-        log_df = pd.read_csv(
-            log_path,
-            usecols=["customer_id", "sign_in_datetime", "login_status", "device_type"],
-        )
-        try:
-            log_df["month"] = pd.to_numeric(log_df["sign_in_datetime"].str.slice(5, 7), errors="coerce").fillna(0).astype(int)
-        except Exception:
-            log_df["month"] = pd.to_datetime(log_df["sign_in_datetime"], format="ISO8601").dt.month
+        # 1. Accounts & Portfolios (A1 - A4)
+        acc_slice, _ = self.account_extractor.extract(cust_ids_arr, self.months, context)
 
-        # 4. Complaints
-        cmp_path = self._resolve_file("complaints.csv")
-        cmp_df = pd.read_csv(cmp_path, usecols=["customer_id", "complaint_datetime"])
-        try:
-            cmp_df["month"] = pd.to_numeric(cmp_df["complaint_datetime"].str.slice(5, 7), errors="coerce").fillna(0).astype(int)
-        except Exception:
-            cmp_df["month"] = pd.to_datetime(cmp_df["complaint_datetime"], format="ISO8601").dt.month
+        # 2. Financial Transactions (T1 - T11)
+        tx_slice, _ = self.tx_extractor.extract(cust_ids_arr, self.months, context)
 
-        # Grouped pivots aligned to cust_ids_arr and months
-        months = self.months
-        idx = cust_ids_arr
+        # 3. Customer Service Complaints (C1 - C5)
+        cmp_slice, _ = self.complaint_extractor.extract(cust_ids_arr, self.months, context)
 
-        # Transaction metrics
-        tx_in = (
-            tx_df[tx_df["direction"] == "in"]
-            .groupby(["customer_id", "month"])["amount"]
-            .sum()
-            .unstack(fill_value=0.0)
-            .reindex(index=idx, columns=months, fill_value=0.0)
-        )
-        tx_out = (
-            tx_df[tx_df["direction"] == "out"]
-            .groupby(["customer_id", "month"])["amount"]
-            .sum()
-            .unstack(fill_value=0.0)
-            .reindex(index=idx, columns=months, fill_value=0.0)
-        )
-        tx_cnt = (
-            tx_df.groupby(["customer_id", "month"])
-            .size()
-            .unstack(fill_value=0.0)
-            .reindex(index=idx, columns=months, fill_value=0.0)
-        )
-        tx_cancel = (
-            tx_df[tx_df["transaction_status"] != "success"]
-            .groupby(["customer_id", "month"])
-            .size()
-            .unstack(fill_value=0.0)
-            .reindex(index=idx, columns=months, fill_value=0.0)
-        )
+        # 4. Digital Logins (L1 - L15)
+        log_slice, _ = self.login_extractor.extract(cust_ids_arr, self.months, context)
 
-        # Login metrics
-        log_cnt = (
-            log_df.groupby(["customer_id", "month"])
-            .size()
-            .unstack(fill_value=0.0)
-            .reindex(index=idx, columns=months, fill_value=0.0)
-        )
-        log_fail = (
-            log_df[log_df["login_status"] != "success"]
-            .groupby(["customer_id", "month"])
-            .size()
-            .unstack(fill_value=0.0)
-            .reindex(index=idx, columns=months, fill_value=0.0)
-        )
-        log_mob = (
-            log_df[log_df["device_type"].isin(["ios", "android"])]
-            .groupby(["customer_id", "month"])
-            .size()
-            .unstack(fill_value=0.0)
-            .reindex(index=idx, columns=months, fill_value=0.0)
-        )
+        # 5. Cross-Channel Dynamics (X1 - X2)
+        cross_slice, _ = self.cross_extractor.extract(cust_ids_arr, self.months, context)
 
-        # Complaints metrics
-        cmp_cnt = (
-            cmp_df.groupby(["customer_id", "month"])
-            .size()
-            .unstack(fill_value=0.0)
-            .reindex(index=idx, columns=months, fill_value=0.0)
-        )
+        # Concatenate all slices along channel axis (axis=-1)
+        raw_tensor = np.concatenate(
+            [tx_slice, log_slice, cmp_slice, acc_slice, cross_slice],
+            axis=-1,
+        ).astype(np.float32)
 
-        # Derived logarithmic and ratio transformations
-        tx_in_log = np.log1p(np.maximum(tx_in.values, 0.0))
-        tx_out_log = np.log1p(np.maximum(tx_out.values, 0.0))
-        net_flow = tx_in.values - tx_out.values
-        tx_net_flow_log = np.sign(net_flow) * np.log1p(np.abs(net_flow))
+        # Numerical safety: replace any unhandled NaNs/Infs before normalization
+        raw_tensor = np.nan_to_num(raw_tensor, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
-        tx_cnt_v = tx_cnt.values
-        tx_cnt_log = np.log1p(tx_cnt_v)
-        tx_cancel_rate = tx_cancel.values / np.maximum(tx_cnt_v, 1.0)
-        tx_avg_ticket_log = np.log1p((tx_in.values + tx_out.values) / np.maximum(tx_cnt_v, 1.0))
-
-        log_cnt_v = log_cnt.values
-        log_cnt_log = np.log1p(log_cnt_v)
-        log_fail_rate = log_fail.values / np.maximum(log_cnt_v, 1.0)
-        log_mobile_share = log_mob.values / np.maximum(log_cnt_v, 1.0)
-        complaints_cnt = cmp_cnt.values.astype(np.float32)
-
-        # Stack into 3D array: (N, T, D)
-        channels = [
-            tx_in_log,
-            tx_out_log,
-            tx_net_flow_log,
-            tx_cnt_log,
-            tx_cancel_rate,
-            tx_avg_ticket_log,
-            log_cnt_log,
-            log_fail_rate,
-            log_mobile_share,
-            complaints_cnt,
-        ]
-        raw_tensor = np.stack(channels, axis=-1).astype(np.float32)
-
-        # Normalize across samples per channel for numerical stability
+        # Channel-wise Z-score normalization across samples and time snapshots
         mean = np.mean(raw_tensor, axis=(0, 1), keepdims=True)
         std = np.std(raw_tensor, axis=(0, 1), keepdims=True) + 1e-6
         norm_tensor = (raw_tensor - mean) / std
 
-        # Save to tensor cache if large batch and larger or equal to existing cache
-        if len(cust_ids_arr) >= 1000:
-            should_save = True
-            if self.tensor_cache_path.exists():
-                try:
-                    existing = np.load(self.tensor_cache_path, allow_pickle=True)
-                    if len(existing.get("customer_ids", [])) > len(cust_ids_arr):
-                        should_save = False
-                except Exception:
-                    pass
-            if should_save:
-                try:
-                    self.tensor_cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    np.savez_compressed(
-                        self.tensor_cache_path,
-                        tensor=norm_tensor,
-                        customer_ids=cust_ids_arr,
-                    )
-                except Exception:
-                    pass
+        # Clamping extreme outliers to [-5.0, 5.0] to safeguard BiGRU gates from exploding gradients
+        norm_tensor = np.clip(norm_tensor, -5.0, 5.0).astype(np.float32)
+        norm_tensor = np.nan_to_num(norm_tensor, nan=0.0, posinf=5.0, neginf=-5.0).astype(np.float32)
+
+        # Cache tensor if requested or sufficiently large batch
+        should_cache = save_cache if save_cache is not None else (len(cust_ids_arr) >= 1000)
+        if should_cache:
+            try:
+                self.tensor_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(
+                    self.tensor_cache_path,
+                    tensor=norm_tensor,
+                    customer_ids=cust_ids_arr,
+                )
+            except Exception:
+                pass
 
         if verbose:
             t1 = time.time()
-            print(f"[OK] Temporal sequence tensor constructed: shape={norm_tensor.shape} in {t1 - t0:.2f}s")
+            print(
+                f"[OK] Multi-snapshot tensor constructed: shape={norm_tensor.shape} "
+                f"(D={norm_tensor.shape[2]}) in {t1 - t0:.2f}s"
+            )
+
+        return norm_tensor, cust_ids_arr
+
+    def _extract_legacy(
+        self,
+        cust_ids_arr: np.ndarray,
+        verbose: bool,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Legacy 10-channel extraction path delegating cleanly to sub-extractors:
+          - tx_extractor: 6 channels (tx_in, tx_out, net_flow, tx_count, cancel_rate, avg_ticket)
+          - login_extractor: 3 channels (login_count, fail_rate, mobile_share)
+          - complaint_extractor: 1 channel (complaints_count)
+        """
+        context: Dict[str, Any] = {}
+        tx_slice, _ = self.tx_extractor.extract_legacy(cust_ids_arr, self.months, context)
+        log_slice, _ = self.login_extractor.extract_legacy(cust_ids_arr, self.months, context)
+        cmp_slice, _ = self.complaint_extractor.extract_legacy(cust_ids_arr, self.months, context)
+
+        raw_tensor = np.concatenate([tx_slice, log_slice, cmp_slice], axis=-1).astype(np.float32)
+        mean = np.mean(raw_tensor, axis=(0, 1), keepdims=True)
+        std = np.std(raw_tensor, axis=(0, 1), keepdims=True) + 1e-6
+        norm_tensor = (raw_tensor - mean) / std
+        norm_tensor = np.clip(norm_tensor, -5.0, 5.0).astype(np.float32)
+        norm_tensor = np.nan_to_num(norm_tensor, nan=0.0, posinf=5.0, neginf=-5.0).astype(np.float32)
 
         return norm_tensor, cust_ids_arr

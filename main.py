@@ -69,7 +69,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--model-type",
         type=str,
         default="xgboost",
-        choices=["xgboost", "lr", "rf"],
+        choices=["xgboost", "lr", "rf", "svm", "linear_svm"],
         help="Model to use in 'ablation', 'train', 'tune', or 'recall' mode (ignored in 'compare' mode)",
     )
     parser.add_argument(
@@ -403,7 +403,8 @@ def main() -> None:
 
     elif args.mode == "train":
         model_type = args.model_type
-        manual_th = args.threshold if hasattr(args, "threshold") and args.threshold is not None else 0.5
+        default_th = getattr(cfg.model, "decision_threshold", 0.5)
+        manual_th = args.threshold if hasattr(args, "threshold") and args.threshold is not None else default_th
         print("\n=======================================================")
         print(f"TRAINING SINGLE [{model_type.upper()}] MODEL ACCORDING TO CONFIG")
         if manual_th != 0.5:
@@ -462,7 +463,8 @@ def main() -> None:
         tune_metric = args.tuning_metric or getattr(cfg.tuning, "metric", "PR_AUC")
         cv_folds = getattr(cfg.tuning, "cv_folds", 5)
         timeout = getattr(cfg.tuning, "timeout", None)
-        manual_th = args.threshold if hasattr(args, "threshold") and args.threshold is not None else None
+        default_th = getattr(cfg.model, "decision_threshold", None)
+        manual_th = args.threshold if (hasattr(args, "threshold") and args.threshold is not None) else default_th
 
         print("\n=======================================================")
         print(f"HYPERPARAMETER OPTIMIZATION (OPTUNA): [{model_type.upper()}]")
@@ -494,7 +496,8 @@ def main() -> None:
 
         model_type = args.model_type
         target_rec = args.target_recall if hasattr(args, "target_recall") and args.target_recall is not None else 0.75
-        manual_th = args.threshold if hasattr(args, "threshold") else None
+        default_th = getattr(cfg.model, "decision_threshold", None)
+        manual_th = args.threshold if (hasattr(args, "threshold") and args.threshold is not None) else default_th
 
         run_recall_optimization(
             df=df,

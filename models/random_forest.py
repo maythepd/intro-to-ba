@@ -63,6 +63,7 @@ class RandomForestChurnModel:
 
         self.feature_names_: List[str] = []
         self.is_fitted: bool = False
+        self.decision_threshold = float(self.params.pop("decision_threshold", kwargs.get("decision_threshold", 0.50)))
         self.model = RandomForestClassifier(**self.params)
 
     def fit(
@@ -83,12 +84,13 @@ class RandomForestChurnModel:
         self.is_fitted = True
         return self
 
-    def predict(self, X: pd.DataFrame, threshold: float = 0.5) -> np.ndarray:
+    def predict(self, X: pd.DataFrame, threshold: Optional[float] = None) -> np.ndarray:
         """Predict binary churn labels using decision threshold."""
         if not self.is_fitted:
             raise RuntimeError("Model is not fitted yet. Call fit() before predict().")
         probs = self.predict_proba(X)
-        return (probs >= threshold).astype(int)
+        th = self.decision_threshold if threshold is None else float(threshold)
+        return (probs >= th).astype(int)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """Predict probability of churn (class 1)."""
@@ -100,11 +102,12 @@ class RandomForestChurnModel:
         self,
         X_test: pd.DataFrame,
         y_test: pd.Series,
-        threshold: float = 0.5,
+        threshold: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Computes a comprehensive suite of classification metrics on test data."""
+        th = self.decision_threshold if threshold is None else float(threshold)
         y_prob = self.predict_proba(X_test)
-        y_pred = (y_prob >= threshold).astype(int)
+        y_pred = (y_prob >= th).astype(int)
 
         cm = confusion_matrix(y_test, y_pred)
         tn, fp, fn, tp = cm.ravel()

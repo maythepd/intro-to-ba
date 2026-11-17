@@ -25,16 +25,18 @@ except ImportError:
     from config import PipelineConfig
 
 from .base import BaseFeatureTransformer
-from .etl import BankDataETL, load_or_build_dataset
-from .skewness_transform import SkewnessTransformer
-from .scaling import FeatureScaler
-from .domain_features import DomainFeatureEngineer
-from .categorical_encoding import CategoricalEncoder
-from .balancing import ClassBalancer
-from .feature_selector import FeatureSelector
-from .sample_weighting import SampleWeightConfig, SampleWeightGenerator
-from .splitting import DataSplitter, DatasetSplit, CVFold, CVResult
-from .temporal import TemporalEmbeddingManager
+from .ingestion.etl import BankDataETL, load_or_build_dataset
+from .ingestion.splitting import DataSplitter, DatasetSplit, CVFold, CVResult
+from .transforms.skewness_transform import SkewnessTransformer
+from .transforms.scaling import FeatureScaler
+from .transforms.categorical_encoding import CategoricalEncoder
+from .domain.domain_features import DomainFeatureEngineer
+from .selection.balancing import ClassBalancer
+from .selection.feature_selector import FeatureSelector
+from .selection.sample_weighting import SampleWeightConfig, SampleWeightGenerator
+from .temporal.manager import TemporalEmbeddingManager
+from .gnn.manager import GNNEmbeddingManager
+from .quant_signals.extractor import QuantSignalFeatureExtractor
 
 
 def load_dataset(
@@ -122,7 +124,9 @@ class FeatureEngineeringPipeline:
         self,
         config: Optional[Union[PipelineConfig, Dict[str, Any], str, Path]] = None,
         fold_id: Optional[Union[int, str]] = None,
+        verbose: bool = True,
     ):
+        self.verbose = verbose
         if config is None:
             self.config = PipelineConfig.from_yaml()
         elif isinstance(config, (str, Path)):
@@ -131,8 +135,10 @@ class FeatureEngineeringPipeline:
             self.config = PipelineConfig.from_dict(config)
         elif isinstance(config, PipelineConfig):
             self.config = config
+        elif hasattr(config, "features") and isinstance(config.features, PipelineConfig):
+            self.config = config.features
         else:
-            raise TypeError(f"Invalid config type: {type(config)}. Expected PipelineConfig, dict, str, or Path.")
+            raise TypeError(f"Invalid config type: {type(config)}. Expected PipelineConfig, UnifiedConfig, dict, str, or Path.")
 
         self.fold_id = fold_id or getattr(self.config, "fold_id", None)
         self._init_modules()
@@ -215,6 +221,7 @@ class FeatureEngineeringPipeline:
             ranking_metric=getattr(cfg, "feature_selection_metric", "MI_Score"),
             hybrid_pearson_weight=getattr(cfg, "hybrid_pearson_weight", 0.50),
             random_state=cfg.random_state,
+            verbose=getattr(self, "verbose", True),
         )
 
         # 7. Sample Weighting
@@ -235,9 +242,28 @@ class FeatureEngineeringPipeline:
             self.sample_weighter = SampleWeightGenerator(sw_cfg)
 
         # 8. Temporal Multi-Snapshot Sequence Embedding Manager
+        strat_kwargs = dict(getattr(cfg, "temporal_strategy_kwargs", {}) or {})
+        strat_kwargs.setdefault("curvature", getattr(cfg, "temporal_curvature", 1.0))
+        strat_kwargs.setdefault("lambda_poincare", getattr(cfg, "temporal_lambda_poincare", 0.25))
+        strat_kwargs.setdefault("lambda_drift", getattr(cfg, "temporal_lambda_drift", 0.20))
+        strat_kwargs.setdefault("alpha_fpr", getattr(cfg, "temporal_alpha_fpr", 0.10))
+        strat_kwargs.setdefault("lambda_np", getattr(cfg, "temporal_lambda_np", 0.30))
+        strat_kwargs.setdefault("tau", getattr(cfg, "temporal_tau", 0.50))
+        strat_kwargs.setdefault("use_feature_attention", getattr(cfg, "temporal_use_feature_attention", True))
+        strat_kwargs.setdefault("use_temporal_attention", getattr(cfg, "temporal_use_temporal_attention", True))
+        strat_kwargs.setdefault("use_multiscale_conv", getattr(cfg, "temporal_use_multiscale_conv", True))
+        strat_kwargs.setdefault("conv_kernels", getattr(cfg, "temporal_conv_kernels", [2, 3]))
+        strat_kwargs.setdefault("noise_std", getattr(cfg, "temporal_noise_std", 0.02))
+        strat_kwargs.setdefault("noise_decay", getattr(cfg, "temporal_noise_decay", 0.95))
+        strat_kwargs.setdefault("lambda_direction", getattr(cfg, "temporal_lambda_direction", 0.10))
+        strat_kwargs.setdefault("lambda_correlation", getattr(cfg, "temporal_lambda_correlation", 0.05))
+        strat_kwargs.setdefault("delta", getattr(cfg, "temporal_huber_delta", 1.0))
+
         self.temporal_manager = TemporalEmbeddingManager(
             enabled=getattr(cfg, "enable_temporal_embeddings", False),
             raw_data_dir=getattr(cfg, "raw_full_dataset_dir", "data/full_dataset"),
+            temporal_input_mode=getattr(cfg, "temporal_input_mode", "extractors"),
+            raw_sequence_length=getattr(cfg, "raw_sequence_length", 50),
             latent_dim=getattr(cfg, "temporal_latent_dim", 16),
             hidden_dim=getattr(cfg, "temporal_hidden_dim", 64),
             num_layers=getattr(cfg, "temporal_num_layers", 2),
@@ -248,8 +274,55 @@ class FeatureEngineeringPipeline:
             checkpoint_dir=getattr(cfg, "temporal_checkpoint_dir", "models/saved/temporal"),
             cache_path=getattr(cfg, "temporal_cache_path", "data/processed/temporal_embeddings.csv"),
             random_state=cfg.random_state,
+            verbose=self.verbose,
             fold_id=self.fold_id,
             force_retrain=getattr(cfg, "temporal_force_retrain", False),
+            manifold_strategy=getattr(cfg, "temporal_manifold_strategy", "unsupervised"),
+            strategy_kwargs=strat_kwargs,
+            lambda_angular=getattr(cfg, "temporal_lambda_angular", 0.30),
+            margin_churn=getattr(cfg, "temporal_margin_churn", 0.20),
+            margin_loyal=getattr(cfg, "temporal_margin_loyal", 0.00),
+            angular_scale=getattr(cfg, "temporal_angular_scale", 4.0),
+        )
+
+        self.gnn_manager = GNNEmbeddingManager(
+            enabled=getattr(cfg, "enable_gnn_embeddings", False),
+            k_neighbors=getattr(cfg, "gnn_k_neighbors", 5),
+            latent_dim=getattr(cfg, "gnn_latent_dim", 16),
+            hidden_dim=getattr(cfg, "gnn_hidden_dim", 32),
+            heads=getattr(cfg, "gnn_heads", 2),
+            epochs=getattr(cfg, "gnn_epochs", 20),
+            lr=getattr(cfg, "gnn_learning_rate", 0.005),
+            dropout=getattr(cfg, "gnn_dropout", 0.20),
+            checkpoint_dir=getattr(cfg, "gnn_checkpoint_dir", "models/saved/gnn"),
+            cache_path=getattr(cfg, "gnn_cache_path", "data/processed/gnn/gnn_embeddings.csv"),
+            random_state=cfg.random_state,
+            verbose=self.verbose,
+            fold_id=self.fold_id,
+            force_retrain=getattr(cfg, "gnn_force_retrain", False),
+        )
+
+        # 8. Classical Quantitative & Signal Processing Feature Extractor
+        from .quant_signals import QuantSignalFeatureExtractor
+        self.quant_engineer = QuantSignalFeatureExtractor(
+            enabled=getattr(cfg, "enable_quant_signal_features", False),
+            enable_momentum=getattr(cfg, "quant_enable_momentum", True),
+            enable_macd=getattr(cfg, "quant_enable_macd", True),
+            enable_volatility=getattr(cfg, "quant_enable_volatility", True),
+            enable_fourier=getattr(cfg, "quant_enable_fourier", True),
+            enable_exogenous=getattr(cfg, "quant_enable_exogenous", True),
+            enable_lags=getattr(cfg, "quant_enable_lags", True),
+            enable_rolling=getattr(cfg, "quant_enable_rolling", True),
+            enable_cyclic_time=getattr(cfg, "quant_enable_cyclic_time", True),
+            enable_interactions=getattr(cfg, "quant_enable_interactions", True),
+            enable_multiscale_rolling=getattr(cfg, "quant_enable_multiscale_rolling", True),
+            prune_sparse=getattr(cfg, "quant_prune_sparse", True),
+            max_sparsity_threshold=getattr(cfg, "quant_max_sparsity_threshold", 0.98),
+            min_variance_threshold=getattr(cfg, "quant_min_variance_threshold", 1e-6),
+            outlier_clip_quantile=getattr(cfg, "quant_outlier_clip_quantile", 0.995),
+            cache_path=getattr(cfg, "quant_cache_path", "data/processed/quant_signal_features.csv"),
+            force_recompute=getattr(cfg, "quant_force_recompute", False),
+            verbose=self.verbose,
         )
 
     def fit(self, df: pd.DataFrame, target_col: Optional[str] = None) -> "FeatureEngineeringPipeline":
@@ -282,9 +355,20 @@ class FeatureEngineeringPipeline:
         self.imputer = SimpleImputer(strategy="median")
         current[feature_cols] = self.imputer.fit_transform(current[feature_cols])
 
-        # Step 6: Temporal Behavioral Sequence Embeddings (Self-Supervised Bi-GRU)
+        # Step 6: Temporal Behavioral Sequence Embeddings (Self-Supervised Bi-GRU + Manifold Metric Learning)
         if getattr(self.config, "enable_temporal_embeddings", False):
-            self.temporal_manager.fit(df)
+            self.temporal_manager.fit(df, y=y)
+            current = self.temporal_manager.transform(current)
+
+        # Step 7: GNN Topological Network Embeddings (Self-Supervised k-NN Graph Attention Network)
+        if getattr(self.config, "enable_gnn_embeddings", False):
+            self.gnn_manager.fit(current, y=None)
+            current = self.gnn_manager.transform(current)
+
+        # Step 8: Classical Quantitative & Signal Processing Features (Pure Classical ML)
+        if getattr(self.config, "enable_quant_signal_features", False):
+            self.quant_engineer.fit(current, y=y)
+            current = self.quant_engineer.transform(current)
 
         return self
 
@@ -314,6 +398,14 @@ class FeatureEngineeringPipeline:
         # Step 6: Temporal Behavioral Sequence Embeddings (Augment with dense z embeddings)
         if getattr(self.config, "enable_temporal_embeddings", False):
             out = self.temporal_manager.transform(out)
+
+        # Step 7: GNN Topological Network Embeddings
+        if getattr(self.config, "enable_gnn_embeddings", False):
+            out = self.gnn_manager.transform(out)
+
+        # Step 8: Classical Quantitative & Signal Processing Features (Pure Classical ML)
+        if getattr(self.config, "enable_quant_signal_features", False):
+            out = self.quant_engineer.transform(out)
 
         return out
 
@@ -387,6 +479,7 @@ class FeatureEngineeringPipeline:
 
         # 4. Extract numeric feature matrices
         feature_cols = self.extract_model_features(train_tr)
+        initial_features_count = len(feature_cols)
         X_train = train_tr[feature_cols].copy()
         y_train = train_tr[target].copy()
         X_test = test_tr[feature_cols].copy()
@@ -423,12 +516,33 @@ class FeatureEngineeringPipeline:
         df_importance = self.feature_selector.get_importance_ranking()
 
         if self.config.enable_feature_selection and self.config.top_k_features:
+            n_before = len(feature_cols)
             X_train = self.feature_selector.transform(X_train)
             X_test = self.feature_selector.transform(X_test)
             X_train_res = self.feature_selector.transform(X_train_res)
             if X_val is not None:
                 X_val = self.feature_selector.transform(X_val)
             feature_cols = list(X_train.columns)
+            if self.verbose:
+                print(
+                    f"[INFO] Pipeline Feature Selection: Filtered {n_before} -> {len(feature_cols)} features "
+                    f"(Top-{self.config.top_k_features} via {self.config.feature_selection_metric})"
+                )
+
+        if self.verbose:
+            print("\n" + "=" * 65)
+            print("PIPELINE DATA MATRICES SUMMARY:")
+            print(f"  • Extracted Candidate Features: {initial_features_count} columns")
+            print(f"  • Initial Train Partition:     ({X_train.shape[0]} samples x {initial_features_count} features)")
+            if X_val is not None:
+                print(f"  • Initial Val Partition:       ({X_val.shape[0]} samples x {initial_features_count} features)")
+            print(f"  • Initial Test Holdout:        ({X_test.shape[0]} samples x {initial_features_count} features)")
+            if self.config.enable_smote:
+                print(f"  • SMOTE Balanced Train:        ({X_train_res.shape[0]} samples x {initial_features_count} features) [Ratio 1:1]")
+            if self.config.enable_feature_selection and self.config.top_k_features:
+                print(f"  • Feature Selection Applied:   Filtered {initial_features_count} -> {len(feature_cols)} features (Top-{self.config.top_k_features} via {self.config.feature_selection_metric})")
+            print(f"  -> FINAL MATRIX PASSED TO MODEL: ({X_train_res.shape[0]} samples x {len(feature_cols)} features)")
+            print("=" * 65 + "\n")
 
         # Full transformed df (fit_transform on whole dataset for exploratory export)
         full_transformed = self.transform(df)

@@ -43,19 +43,22 @@ This project delivers **Module 5 (Model Development)** of the Business Analytics
 intro-to-ba/
 ├── requirements.txt                 # Project dependencies with version bounds
 ├── main.py                          # Unified CLI entrypoint (compare, ablation, tune, train, recall)
-├── test_pipeline.py                 # Smoke & regression test suite
 ├── README.md                        # Project documentation & configuration guide
 │
 ├── config/
 │   ├── config.yaml                  # Master YAML configuration file
 │   └── pipeline_config.py           # Dataclass loaders, schemas, and path routers
 │
+├── docs/                            # Deep Architectural & Feature Engineering Documentation
+│   ├── manifold_representation_learning_strategies.md # Detailed specification of 4 manifold learning strategies
+│   └── new_temporal_feats.md        # Comprehensive catalog of 37 dynamic temporal sequence channels
+│
 ├── data/
-│   ├── full_bank_data.csv           # Consolidated customer-level dataset (82 columns)
+│   ├── full_bank_data.csv           # Consolidated customer-level dataset (70+ columns)
 │   ├── cleaned_bank_data.csv        # Legacy simplified dataset (backward compatibility)
 │   └── full_dataset/                # 7 raw relational tables (accounts, transactions, logins, etc.)
 │
-├── utils/                          # Common Utilities, Experiment Runners & Reporting
+├── utils/                           # Common Utilities, Experiment Runners & Reporting
 │   ├── __init__.py                  # Exports all utilities, experiment runners & report generators
 │   ├── common.py                    # Path resolution and environment setup
 │   ├── experiments.py               # Model factory (build_model), experiment runners & ablation
@@ -74,10 +77,26 @@ intro-to-ba/
 │   ├── feature_selection.py         # Mutual Information (`MI_Score`) & ranking
 │   └── temporal/                    # Temporal Behavioral Sequence Representation Package
 │       ├── __init__.py              # Clean exports
-│       ├── extractor.py             # Multi-period monthly event snapshot extractor (T=6, D=10)
-│       ├── model.py                 # Bi-GRU Sequence Autoencoder (Self-supervised MSE loss)
+│       ├── extractor.py             # TemporalSnapshotExtractor Coordinator (T=6, D=37)
+│       ├── model.py                 # Bi-GRU Sequence Autoencoder & Loss Head Trainer
 │       ├── manager.py               # TemporalEmbeddingManager (extraction, caching, merging)
-│       └── benchmark.py             # Representation benchmark comparison suite
+│       ├── benchmark.py             # Representation benchmark comparison suite
+│       ├── extractors/              # Domain-specific multi-snapshot Sub-Extractors (D=37)
+│       │   ├── __init__.py          # Exports ALL_FEATURE_NAMES_37
+│       │   ├── base.py              # BaseSubExtractor ABC with numerical safety helpers
+│       │   ├── transaction_extractor.py # 11 Financial & cash flow channels (T1 - T11)
+│       │   ├── login_extractor.py   # 15 Digital habits & authentication friction channels (L1 - L15)
+│       │   ├── complaint_extractor.py # 5 Service dispute & SLA breach channels (C1 - C5)
+│       │   ├── account_extractor.py # 4 Portfolio stock & account closure channels (A1 - A4)
+│       │   └── cross_channel_extractor.py # 2 Cross-table interaction coupling channels (X1 - X2)
+│       └── strategies/              # Pluggable Manifold Representation Learning Strategies
+│           ├── __init__.py          # Strategy Registry & Factory (get_temporal_strategy)
+│           ├── base.py              # BaseTemporalStrategy ABC
+│           ├── unsupervised.py      # S0: Unsupervised Bi-GRU Reconstruction Baseline (MSE)
+│           ├── asymmetric_arcface.py # S1: Asymmetric Angular Margin Contrastive Metric (ArcFace)
+│           ├── hyperbolic_poincare.py # S2: Hyperbolic Poincaré Ball Geometry
+│           ├── optimal_transport.py # S3: Optimal Transport & Wasserstein Drift Regularization
+│           └── neyman_pearson.py    # S4: Constrained Neyman-Pearson False Positive Minimization
 │
 ├── models/                          # Classifier Architectures & Tuner
 │   ├── __init__.py                  # Exports LR, RF, XGBoost, and OptunaTuner
@@ -90,6 +109,13 @@ intro-to-ba/
 │   └── saved/                       # Serialized model artifacts (.json, .pkl)
 │       └── temporal/                # PyTorch recurrent checkpoints (temporal_encoder.pt)
 │
+├── test/                            # Comprehensive Automated Test Suite
+│   ├── test_config_loading.py       # Config validation and YAML serialization tests
+│   ├── test_latent_importance.py    # Temporal latent feature importance & gain verification
+│   ├── test_modular_temporal_extractors.py # Sub-extractors (D=37), variance & safety tests
+│   ├── test_pipeline.py             # Full end-to-end preprocessing, Optuna, & model smoke tests
+│   └── test_temporal_strategies.py  # Pluggable representation strategies & loss head tests
+│
 ├── visualization/                   # Plotting Engine (300 DPI Figures)
 │   ├── __init__.py                  # Exports plotting utilities
 │   └── plots.py                     # Feature importance, model comparison, Optuna history
@@ -98,6 +124,7 @@ intro-to-ba/
     ├── comparison/                  # Head-to-head comparison reports & comparison charts
     ├── lr/                          # Logistic Regression metrics, plots & ablation reports
     ├── rf/                          # Random Forest metrics, plots & ablation reports
+    ├── temporal/                    # Representation benchmark logs & strategy comparisons
     └── xgboost/                     # XGBoost metrics, plots & ablation reports
 ```
 
@@ -130,9 +157,13 @@ pip install -r requirements.txt
 | `seaborn` | `>=0.12.0` | Statistical visualization palettes and chart styling |
 
 ### 3. Verify Setup
-Run the end-to-end smoke test to verify dependencies, config loading, and pipeline integrity:
+Run the comprehensive test suite to verify dependencies, config loading, modular extractors, and end-to-end pipeline integrity:
 ```bash
-python test_pipeline.py
+# Run all unit and integration tests across test/
+python -m unittest discover -s test -p "test_*.py"
+
+# Or run the full end-to-end pipeline smoke test
+python test/test_pipeline.py
 ```
 
 ---
@@ -328,14 +359,24 @@ python -m visualization.separability --output-dir results/visualizations --sampl
 ---
 
 #### 7. Temporal Behavioral Sequence Representation & Embeddings (`--mode representation`)
-Extracts rich longitudinal customer behavioral dynamics directly from raw event streams (`data/full_dataset/` with ~500k transactions, 1.3M logins, and 13k complaints) modularized under [`preprocessing/temporal/`](file:///d:/Introduction%20to%20BA/intro-to-ba/preprocessing/temporal/):
+Extracts rich longitudinal customer behavioral dynamics directly from raw event streams (`data/full_dataset/` with ~500k transactions, 1.3M logins, 13k complaints, and 17k accounts) modularized under [`preprocessing/temporal/`](file:///d:/Introduction%20to%20BA/intro-to-ba/preprocessing/temporal/):
 
-1. **Multi-Period Monthly Snapshot Extractor (`extractor.py`):**
-   Aggregates raw event streams across 6 monthly snapshots ($T=6$, April–September 2026) along 10 longitudinal behavioral channels (inward/outward transaction volumes, net flow, transaction count, cancellation rate, average ticket size, login frequency, login failure rate, mobile device share, complaint count), constructing a normalized 3D tensor $(N, T=6, D=10)$.
-2. **Self-Supervised Bi-GRU Sequence Autoencoder (`model.py`):**
-   Encodes the 6-month temporal sequence into a dense latent behavioral embedding $z \in \mathbb{R}^{16}$ using a Bidirectional GRU encoder, reconstructed by a GRU decoder trained with Mean Squared Error (MSE) loss. **Completely unsupervised and self-supervised ($y$ is never used) $\to$ guarantees Zero Target Leakage!**
+1. **Modular Sub-Extractors & Multi-Period Coordinator (`extractor.py` & `extractors/`):**
+   Aggregates raw event streams across 6 monthly snapshots ($T=6$, April–September 2026) along **37 longitudinal behavioral channels** ($D=37$), constructing a standardized 3D tensor $(N, T=6, D=37)$ with bounded outlier clamping $[-5.0, 5.0]$:
+   * **`TransactionSnapshotExtractor` (11 channels):** Inward/outward volume, net flow, transaction count, cancellation rate, ticket size, external transfer volume/ratio, ATM cash withdrawals, fee deductions, branch visits.
+   * **`LoginSnapshotExtractor` (15 channels):** Login count, active days, daily session intensity, habit breadth, inactivity drought, weekend share, circadian night share, business hours share, intra-month decay, desktop share, device diversity, Shannon device entropy, failed logins, fail rate, lockout burst alarm.
+   * **`ComplaintSnapshotExtractor` (5 channels):** Complaint count, average resolution delay, service SLA breach count, cumulative unresolved stock, escalation velocity ($\Delta$).
+   * **`AccountSnapshotExtractor` (4 channels):** Active account stock, premature savings account liquidation, everyday account closure, manual renewal ratio.
+   * **`CrossChannelSnapshotExtractor` (2 channels):** Login-to-transaction ratio (passive anxiety monitoring), failed login to complaint coupling.
+   *(Legacy 10-channel extraction path is cleanly preserved via sub-extractor delegation).*
+2. **Pluggable Manifold Representation Learning Strategies (`model.py` & `strategies/`):**
+   * **Unsupervised Baseline (S0):** Bidirectional GRU autoencoder with reconstruction MSE loss ($\mathcal{L}_{\text{recon}}$), ensuring strict zero target leakage.
+   * **Asymmetric ArcFace (S1):** Angular margin penalty ($m_{\text{churn}} > 0, m_{\text{loyal}} = 0$) forcing high-risk churn vectors into a concentrated hyperspherical cone.
+   * **Hyperbolic Poincaré Ball (S2):** Conformal Riemannian metric modeling tree-like hierarchy from core loyal banking to peripheral churn.
+   * **Optimal Transport (S3):** Wasserstein distance drift regularization ($\vec{v} = z_{t=6} - z_{t=1}$) capturing trajectory acceleration.
+   * **Neyman-Pearson Constrained Optimization (S4):** Primal-dual Lagrangian minimizing churn risk subject to an upper bound on False Alarm Rate ($\text{FPR} \le \alpha$).
 3. **Feature Space Augmentation & High-Performance Caching (`manager.py`):**
-   Concatenates latent vectors $[z_0, \dots, z_{15}]$ to tabular customer analytical records (`temporal_z0`...`temporal_z15`). Automatically caches embeddings to `data/processed/temporal_embeddings.csv` and serializes model weights to `models/saved/temporal/temporal_encoder.pt` for sub-second downstream inference.
+   Concatenates latent vectors $[z_0, \dots, z_{15}]$ and manifold metrics (`temporal_drift_velocity`, angular margins) to tabular customer records. Automatically caches embeddings to `data/processed/temporal_embeddings.csv` and serializes model weights to `models/saved/temporal/` for sub-second downstream inference.
 4. **Hybrid Multi-Metric Feature Selection (`feature_selection.py`):**
    Offers Pearson correlation (`Pearson`), Mutual Information (`MI_Score`), and a weighted hybrid score (`MI_Pearson_Hybrid`):
    $$\text{Score}_{\text{hybrid}} = w_p \cdot \text{Pearson}_{\text{norm}} + (1 - w_p) \cdot \text{MI}_{\text{norm}}$$

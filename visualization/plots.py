@@ -343,3 +343,82 @@ def plot_lift_and_gains_curve(
     plt.close(fig)
 
     return str(output_path)
+
+
+def plot_latent_embeddings_importance(
+    df_imp: pd.DataFrame,
+    output_path: Union[str, Path],
+    model_name: str = "XGBoost",
+    prefix: str = "temporal_z",
+    metric_col: Optional[str] = None,
+    figsize: Tuple[int, int] = (10, 6),
+) -> str:
+    """
+    Renders an executive-quality horizontal bar chart of the latent sequence embedding features.
+    Displays individual gain importance alongside overall model rank.
+    """
+    if df_imp is None or df_imp.empty or "Feature" not in df_imp.columns:
+        return ""
+
+    df = df_imp[df_imp["Feature"].str.startswith(prefix)].copy()
+    if df.empty:
+        return ""
+
+    if metric_col is None:
+        numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c not in ("Rank", "Relative_Pct")]
+        metric_col = numeric_cols[0] if numeric_cols else "Importance"
+
+    full_ranks = {feat: idx + 1 for idx, feat in enumerate(df_imp["Feature"])}
+    df["Overall_Rank"] = df["Feature"].map(full_ranks)
+    df = df.sort_values(by=metric_col, ascending=True)
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=figsize)
+    colors = sns.color_palette("mako", n_colors=len(df))
+
+    bars = ax.barh(
+        df["Feature"],
+        df[metric_col],
+        color=colors,
+        edgecolor="none",
+        height=0.65,
+        alpha=0.88,
+    )
+
+    max_val = max(df[metric_col].max(), 1e-4)
+    offset = max_val * 0.015
+    for bar, (_, row) in zip(bars, df.iterrows()):
+        width = bar.get_width()
+        rank_str = f"Rank #{int(row['Overall_Rank'])}"
+        val_str = f"{width:.2f} ({rank_str})"
+        ax.text(
+            width + offset,
+            bar.get_y() + bar.get_height() / 2.0,
+            val_str,
+            ha="left",
+            va="center",
+            fontsize=9,
+            fontweight="semibold",
+            color="#2c3e50",
+        )
+
+    ax.set_xlim(0, max_val * 1.35)
+    ax.set_title(
+        f"Temporal Latent Sequence Embeddings (z0 - z15) Importance — {model_name}",
+        fontweight="bold",
+        pad=15,
+        color="#1a252f",
+    )
+    ax.set_xlabel(f"Importance ({metric_col.replace('_', ' ')})", labelpad=10)
+    ax.set_ylabel("Latent Feature", labelpad=10)
+    sns.despine(left=True, bottom=True)
+    ax.xaxis.grid(True, linestyle="--", alpha=0.6)
+    ax.yaxis.grid(False)
+
+    plt.tight_layout()
+    fig.savefig(str(output_path), dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    return str(output_path)
