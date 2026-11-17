@@ -23,8 +23,8 @@ function Models() {
   return (
     <>
       <PageHeader eyebrow="Models" title="Model Development Results" description="Comparison of Logistic Regression, Random Forest, and XGBoost for customer churn." />
-      <Notice tone="warning" title="Reported development metrics — not deployed model performance">
-        The comparison comes from the committed Module 5 study, not the demo's prediction endpoint. At the reported decision threshold, XGBoost recalled 100% of churners but had only 20.4% precision and 20.4% accuracy. Interpret threshold-based results with care and validate before use.
+      <Notice tone="warning" title="Module 5 checkpoint and study results">
+        The API serves the saved Module 5 XGBoost checkpoint. Its preprocessing must reproduce the committed held-out study metrics before it is enabled. These figures describe the study test set; ongoing deployment performance requires new labels. At the reported threshold, XGBoost recalled 100% of churners with 20.4% precision and 20.4% accuracy.
       </Notice>
       <div className="mt-6 grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
         {metrics.map(([label, value]) => (
@@ -57,7 +57,7 @@ function Models() {
       <Panel className="mt-6" title="Metrics from API" subtitle="GET /api/metrics · reads the same committed study CSV">
         {!isApiConfigured ? <p className="text-sm text-muted-foreground">API Not Connected. The source comparison above remains available.</p>
           : q.isError ? <ErrorState message={describeError(q.error)} onRetry={() => q.refetch()} retrying={q.isFetching} />
-          : q.data ? <KeyValueGrid data={{ model: q.data.model, source: q.data.source, roc_auc: q.data.roc_auc, pr_auc: q.data.pr_auc, f1: q.data.f1, precision: q.data.precision, recall: q.data.recall, deployment_evaluated: q.data.deployment_evaluated }} />
+          : q.data ? <KeyValueGrid data={{ model: q.data.model, serving_source: q.data.serving_source, study_reproduced: q.data.study_reproduced, checkpoint_sha256: q.data.checkpoint_sha256, source: q.data.source, roc_auc: q.data.roc_auc, pr_auc: q.data.pr_auc, f1: q.data.f1, precision: q.data.precision, recall: q.data.recall, deployment_evaluated: q.data.deployment_evaluated }} />
           : <div className="h-20 animate-pulse rounded-xl bg-muted" />}
       </Panel>
     </>

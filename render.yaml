@@ -2,7 +2,7 @@ services:
   - type: web
     name: babank-api
     runtime: python
-    buildCommand: pip install -r requirements.txt && python -m api.official_data --download && python -m api.segmentation_service && python -m api.export_bundle
+    buildCommand: pip install -r requirements.txt && python -m api.prepare_module5 --download && python -m api.official_data --download && python -m api.segmentation_service
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: CORS_ORIGINS

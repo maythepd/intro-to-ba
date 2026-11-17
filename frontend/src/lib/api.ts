@@ -6,9 +6,9 @@
 
 export type Country = "France" | "Germany" | "Spain";
 export type Gender = "Male" | "Female";
-export type PreferredChannel = "Mobile App" | "Online Web" | "ATM" | "Branch";
+export type PreferredChannel = "Mobile App" | "Online Web" | "ATM" | "Branch" | "No_Channel";
 
-/** Exact schema used by the model/xgboost branch. */
+/** Staff-facing profile; the API resolves the complete Module 5 raw snapshot by ID. */
 export interface CustomerFeatures {
   customer_id: string;
   credit_score: number;
@@ -30,6 +30,7 @@ export interface CustomerFeatures {
   has_unresolved_complaint: 0 | 1;
   preferred_channel: PreferredChannel;
   primary_device: string;
+  raw_features?: Record<string, number | string | null>;
 }
 
 export type RiskLevel = "low" | "medium" | "high";

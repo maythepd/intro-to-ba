@@ -27,7 +27,7 @@ const EMPTY: CustomerFeatures = {
   has_unresolved_complaint: 0, preferred_channel: "Mobile App", primary_device: "iOS",
 };
 
-const DEVICES = ["iOS", "Android", "Web/Desktop"];
+const DEVICES = ["iOS", "Android", "Desktop", "No_Device", "Web/Desktop"];
 
 function F({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
@@ -41,6 +41,7 @@ function F({ label, hint, children }: { label: string; hint?: string; children: 
 
 function PredictPage() {
   const { customer_id } = Route.useSearch();
+  const [lookupId, setLookupId] = useState(customer_id ?? "");
   const [form, setForm] = useState<CustomerFeatures>(EMPTY);
   const [customDevice, setCustomDevice] = useState(false);
   const [prefillSource, setPrefillSource] = useState<"demo" | "api" | null>(null);
@@ -49,21 +50,24 @@ function PredictPage() {
     set(k, (e.target.value === "" ? 0 : Number(e.target.value)) as never);
 
   const lookup = useQuery({
-    queryKey: ["customer", customer_id],
-    queryFn: ({ signal }) => api.getCustomer(customer_id!, signal),
-    enabled: isApiConfigured && !!customer_id,
+    queryKey: ["customer", lookupId],
+    queryFn: ({ signal }) => api.getCustomer(lookupId, signal),
+    enabled: isApiConfigured && !!lookupId,
     retry: false,
   });
 
   useEffect(() => {
-    if (!customer_id) return;
+    setLookupId(customer_id ?? "");
+  }, [customer_id]);
+
+  useEffect(() => {
     const src = lookup.data;
     if (src) {
       setForm(src);
       setCustomDevice(!DEVICES.includes(src.primary_device));
       setPrefillSource("api");
     }
-  }, [customer_id, lookup.data]);
+  }, [lookup.data]);
 
   const m = useMutation({ mutationFn: (p: CustomerFeatures) => api.predict(p) });
 
@@ -75,7 +79,12 @@ function PredictPage() {
 
   return (
     <>
-      <PageHeader eyebrow="Predict" title="Customer Churn Prediction" description="Enter customer information matching the XGBoost input schema. Results come only from the model API." />
+      <PageHeader eyebrow="Predict" title="Customer Churn Prediction" description="Load a customer snapshot to predict with the saved Module 5 XGBoost model. Behavioral summaries are calculated from the stored activity records." />
+
+      <Notice title="Module 5 customer snapshot">
+        Choose a customer from the <Link to="/customers" className="underline">customer directory</Link> or enter an ID and load the profile. Predictions use the complete activity snapshot; editable profile fields support what-if comparisons.
+      </Notice>
+      {lookup.isError && <div className="mt-3"><ErrorState message={describeError(lookup.error)} onRetry={() => lookup.refetch()} /></div>}
 
       {prefillSource === "demo" && (
         <div className="mb-5"><Notice tone="warning" title={`Prefilled from demo record ${form.customer_id}`}>Synthetic preview data, not a real customer.</Notice></div>
@@ -85,7 +94,15 @@ function PredictPage() {
         <form onSubmit={submit} className="space-y-5">
           <Panel title="1. Identity and Demographics" subtitle="Identity & demographics">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <F label="Customer ID (customer_id)"><Input required value={form.customer_id} onChange={(e) => set("customer_id", e.target.value)} placeholder="e.g. 15634602" /></F>
+              <F label="Customer ID (customer_id)">
+                <div className="flex gap-2">
+                  <Input required value={form.customer_id} onChange={(e) => set("customer_id", e.target.value)} placeholder="e.g. 15634602" />
+                  <Button type="button" variant="outline" disabled={!isApiConfigured || !/^\d+$/.test(form.customer_id.trim()) || lookup.isFetching}
+                    onClick={() => { const id = form.customer_id.trim(); if (id === lookupId) lookup.refetch(); else setLookupId(id); }}>
+                    {lookup.isFetching ? <Loader2 className="animate-spin" /> : "Load"}
+                  </Button>
+                </div>
+              </F>
               <F label="Country (country)">
                 <Select value={form.country} onValueChange={(v) => set("country", v as CustomerFeatures["country"])}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -121,15 +138,15 @@ function PredictPage() {
 
           <Panel title="3. Transactions and Digital Engagement" subtitle="Transactions & digital engagement">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <F label="Days Since Last Activity (recency_days)"><Input type="number" required min={1} max={180} value={form.recency_days} onChange={num("recency_days")} /></F>
-              <F label="Transactions per Month (monthly_transactions)"><Input type="number" required min={0} value={form.monthly_transactions} onChange={num("monthly_transactions")} /></F>
+              <F label="Days Since Last Activity (recency_days)"><Input type="number" required min={0} step="any" value={form.recency_days} onChange={num("recency_days")} /></F>
+              <F label="Transactions per Month (monthly_transactions)" hint="Calculated from the Module 5 activity snapshot"><Input type="number" disabled value={form.monthly_transactions} /></F>
               <F label="3-Month Transaction Amount (trans_amount_3m)"><Input type="number" required min={0} step="0.01" value={form.trans_amount_3m} onChange={num("trans_amount_3m")} /></F>
-              <F label="Transaction Trend Ratio (trans_trend_ratio)" hint="A value below 1 indicates declining activity"><Input type="number" required min={0} step="0.01" value={form.trans_trend_ratio} onChange={num("trans_trend_ratio")} /></F>
-              <F label="Monthly App Logins (app_logins_monthly)"><Input type="number" required min={0} value={form.app_logins_monthly} onChange={num("app_logins_monthly")} /></F>
+              <F label="Transaction Trend Ratio (trans_trend_ratio)" hint="Calculated from the Module 5 activity snapshot"><Input type="number" disabled value={form.trans_trend_ratio} /></F>
+              <F label="Monthly App Logins (app_logins_monthly)" hint="Calculated from the Module 5 activity snapshot"><Input type="number" disabled value={form.app_logins_monthly} /></F>
               <F label="Preferred Channel (preferred_channel)">
                 <Select value={form.preferred_channel} onValueChange={(v) => set("preferred_channel", v as CustomerFeatures["preferred_channel"])}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{["Mobile App", "Online Web", "ATM", "Branch"].map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}</SelectContent>
+                  <SelectContent>{["Mobile App", "Online Web", "ATM", "Branch", "No_Channel"].map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}</SelectContent>
                 </Select>
               </F>
               <F label="Primary Device (primary_device)">
@@ -156,7 +173,7 @@ function PredictPage() {
               <F label="Complaint Count (customer_service_complaints)"><Input type="number" required min={0} value={form.customer_service_complaints} onChange={num("customer_service_complaints")} /></F>
               <label className="flex items-center justify-between self-end rounded-xl border bg-muted/50 px-4 py-2.5 text-sm">
                 Unresolved Complaint (has_unresolved_complaint)
-                <Switch checked={form.has_unresolved_complaint === 1} onCheckedChange={(v) => set("has_unresolved_complaint", v ? 1 : 0)} />
+                <Switch checked={form.has_unresolved_complaint === 1} disabled />
               </label>
             </div>
           </Panel>
@@ -165,7 +182,7 @@ function PredictPage() {
             <Button type="submit" size="lg" disabled={!isApiConfigured || m.isPending}>
               {m.isPending ? <Loader2 className="animate-spin" /> : <BrainCircuit />} Predict Churn
             </Button>
-            <Button type="button" variant="outline" size="lg" onClick={() => { setForm(EMPTY); setCustomDevice(false); setPrefillSource(null); m.reset(); }}>
+            <Button type="button" variant="outline" size="lg" onClick={() => { setForm(EMPTY); setLookupId(""); setCustomDevice(false); setPrefillSource(null); m.reset(); }}>
               <RotateCcw /> Reset
             </Button>
             {!isApiConfigured && <span className="text-xs text-muted-foreground">Connect the API to run predictions.</span>}
