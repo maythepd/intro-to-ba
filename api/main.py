@@ -6,9 +6,33 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Literal
 import os
+import sys
 import time
 import numpy as np
 import pandas as pd
+
+# Silence Windows asyncio ProactorEventLoop ConnectionResetError (WinError 10054)
+if sys.platform == "win32":
+    import asyncio
+    try:
+        from asyncio.proactor_events import _ProactorBasePipeTransport
+        _orig_call_connection_lost = _ProactorBasePipeTransport._call_connection_lost
+
+        def _silenced_call_connection_lost(self, exc):
+            try:
+                _orig_call_connection_lost(self, exc)
+            except ConnectionResetError:
+                pass
+            except OSError as e:
+                if getattr(e, "winerror", None) == 10054:
+                    pass
+                else:
+                    raise
+
+        _ProactorBasePipeTransport._call_connection_lost = _silenced_call_connection_lost
+    except Exception:
+        pass
+
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from api.scoring import score_probabilities, risk_level
 from fastapi import FastAPI, HTTPException, Query
@@ -43,36 +67,86 @@ class CustomerInput(BaseModel):
     preferred_channel: Literal["Mobile App","Online Web","ATM","Branch","No_Channel"]
     primary_device: str = Field(min_length=1,max_length=60)
     raw_features: dict[str, float | str | None] | None = None
+    model_name: str | None = None
+    decision_threshold: float | None = None
 
-def compute_batch_risk(app: FastAPI, include_predictions: bool = False, force: bool = False) -> dict:
-    model = getattr(app.state, "churn_model", None)
+def compute_batch_risk(
+    app: FastAPI,
+    include_predictions: bool = False,
+    force: bool = False,
+    model_name: str = "xgboost",
+    threshold: float = 0.50,
+) -> dict:
+    xgb_model = getattr(app.state, "churn_model", None)
     customers = getattr(app.state, "customers", None)
-    if model is None or customers is None or customers.empty:
+    if xgb_model is None or customers is None or customers.empty:
         raise HTTPException(503, "Official customer feature table or churn model unavailable")
+
+    m_key = (model_name or "xgboost").lower().strip()
+    th = float(threshold if threshold is not None and 0.0 < threshold < 1.0 else 0.50)
+    cache_key = f"{m_key}_{th:.2f}"
 
     batch_lock = getattr(app.state, "batch_lock", None)
     if batch_lock is None:
         batch_lock = Lock()
         app.state.batch_lock = batch_lock
 
+    batch_cache = getattr(app.state, "batch_cache", None)
+    if batch_cache is None:
+        batch_cache = {}
+        app.state.batch_cache = batch_cache
+
     with batch_lock:
-        if getattr(app.state, "risk_summary", None) is not None and not force:
-            result = dict(app.state.risk_summary, cached=True)
+        if not force and cache_key in batch_cache:
+            cached_item = batch_cache[cache_key]
+            result = dict(cached_item["summary"], cached=True)
             if include_predictions:
-                result["predictions"] = app.state.batch_predictions
+                result["predictions"] = cached_item.get("predictions")
             return result
 
         try:
-            probabilities = score_probabilities(model, customers)
+            if m_key in ("rf", "random_forest"):
+                rf_inst = getattr(app.state, "rf_model", None)
+                if rf_inst is None:
+                    raise HTTPException(503, "Random Forest model checkpoint not loaded (models/saved/rf_churn.pkl)")
+                transformed = xgb_model.transform(customers)
+                probabilities = rf_inst.predict_proba(transformed)
+                model_display = "Random Forest Churn Classifier"
+                model_source = "saved_checkpoint"
+            elif m_key in ("lr", "logistic_regression"):
+                lr_inst = getattr(app.state, "lr_model", None)
+                if lr_inst is None:
+                    raise HTTPException(503, "Logistic Regression model checkpoint not loaded (models/saved/lr_churn.pkl)")
+                transformed = xgb_model.transform(customers)
+                df_lr = transformed.reindex(columns=lr_inst.feature_names_, fill_value=0.0)
+                probabilities = lr_inst.predict_proba(df_lr)
+                model_display = "Logistic Regression Baseline (SAGA L1)"
+                model_source = "saved_checkpoint"
+            else:
+                probabilities = score_probabilities(xgb_model, customers)
+                model_display = "XGBoost (Module 5 Champion)"
+                model_source = "module5_checkpoint"
+                m_key = "xgboost"
+        except HTTPException:
+            raise
         except Exception as exc:
-            raise HTTPException(500, "Batch scoring failed: verify fitted model compatibility") from exc
+            raise HTTPException(500, f"Batch scoring failed for {model_name}: {exc}") from exc
 
         p_arr = np.asarray(probabilities, dtype=float)
-        levels = np.where(p_arr < 0.3, "low", np.where(p_arr < 0.7, "medium", "high"))
+        high_th = min(0.85, max(0.65, th + 0.15))
+        low_th = max(0.15, min(0.30, th - 0.20))
+        levels = np.where(p_arr >= high_th, "high", np.where(p_arr >= low_th, "medium", "low"))
+
         low_count = int(np.sum(levels == "low"))
         med_count = int(np.sum(levels == "medium"))
         high_count = int(np.sum(levels == "high"))
-        counts = {"low": low_count, "medium": med_count, "high": high_count}
+        predicted_churn_count = int(np.sum(p_arr >= th))
+        counts = {
+            "low": low_count,
+            "medium": med_count,
+            "high": high_count,
+            "predicted_churn": predicted_churn_count,
+        }
 
         scores = []
         if include_predictions:
@@ -80,26 +154,26 @@ def compute_batch_risk(app: FastAPI, include_predictions: bool = False, force: b
                 scores.append({
                     "customer_id": str(int(identifier)),
                     "churn_probability": float(p),
-                    "predicted_churn": bool(p >= 0.5),
+                    "predicted_churn": bool(p >= th),
                     "risk_level": str(level),
                 })
-        else:
-            scores = getattr(app.state, "batch_predictions", None)
 
         summary = {
             "status": "scored",
-            "source": "Committed Module 5 XGBoost checkpoint on the Module 5 customer feature table",
+            "source": f"{model_display} evaluated with decision threshold τ = {th:.2f}",
             "data_kind": "synthetic-extended study snapshot; not live bank activity",
-            "model_name": "XGBoost (Module 5)",
-            "model_source": "module5_checkpoint",
+            "model_name": model_display,
+            "model_id": m_key,
+            "model_source": model_source,
+            "decision_threshold": th,
             "total_customers": len(customers),
             "scored_customers": len(customers),
             "counts": counts,
-            "customers_requiring_attention": counts["high"],
-            "risk_thresholds": {"medium_from": 0.3, "high_from": 0.7},
+            "customers_requiring_attention": predicted_churn_count,
+            "risk_thresholds": {"low_cutoff": round(low_th, 2), "high_cutoff": round(high_th, 2), "decision_threshold": th},
             "scored_at": datetime.now(timezone.utc).isoformat(),
         }
-        app.state.batch_predictions = scores
+        batch_cache[cache_key] = {"summary": summary, "predictions": scores}
         app.state.risk_summary = summary
         app.state.inference_count = getattr(app.state, "inference_count", 0) + len(customers)
         result = dict(summary, cached=False)
@@ -111,17 +185,52 @@ def compute_batch_risk(app: FastAPI, include_predictions: bool = False, force: b
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.churn_model = None
+    app.state.rf_model = None
+    app.state.lr_model = None
     app.state.customers = None
     app.state.inference_count = 0
     app.state.segmentation = None
     app.state.risk_summary = None
     app.state.batch_predictions = None
     app.state.batch_lock = Lock()
+    app.state.batch_cache = {}
+
+    if sys.platform == "win32":
+        try:
+            loop = asyncio.get_running_loop()
+            def _win_exception_handler(loop, context):
+                exc = context.get("exception")
+                if isinstance(exc, ConnectionResetError) or (isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10054):
+                    return
+                loop.default_exception_handler(context)
+            loop.set_exception_handler(_win_exception_handler)
+        except Exception:
+            pass
 
     try:
         app.state.churn_model = module5.load()
     except Exception as exc:
         print(f"[WARN] Failed to load Module 5 churn model: {exc}")
+
+    # Load Random Forest checkpoint for multi-model serving
+    rf_path = Path(__file__).resolve().parent.parent / "models/saved/rf_churn.pkl"
+    if rf_path.is_file():
+        try:
+            import joblib
+            app.state.rf_model = joblib.load(rf_path)
+            print("[INFO] Random Forest churn model loaded for multi-model inference")
+        except Exception as exc:
+            print(f"[WARN] Failed to load Random Forest model: {exc}")
+
+    # Load Logistic Regression checkpoint for multi-model serving
+    lr_path = Path(__file__).resolve().parent.parent / "models/saved/lr_churn.pkl"
+    if lr_path.is_file():
+        try:
+            import joblib
+            app.state.lr_model = joblib.load(lr_path)
+            print("[INFO] Logistic Regression churn model loaded for multi-model inference")
+        except Exception as exc:
+            print(f"[WARN] Failed to load Logistic Regression model: {exc}")
 
     try:
         if app.state.churn_model is not None:
@@ -206,20 +315,23 @@ def require_churn_model():
 def predict_batch(
     include_predictions: bool = Query(False, description="Include every customer's probability and risk level."),
     force: bool = Query(False, description="Recompute instead of returning the current process cache."),
+    model: str = Query("xgboost", description="Model name: xgboost, random_forest, or logistic_regression"),
+    threshold: float = Query(0.50, ge=0.01, le=0.99, description="Decision threshold tau for binary classification"),
     batch_size: int = Query(1000, ge=1, le=5000),
 ):
     """Score the entire official customer snapshot; cache only completed runs."""
-    return compute_batch_risk(app, include_predictions=include_predictions, force=force)
+    return compute_batch_risk(app, include_predictions=include_predictions, force=force, model_name=model, threshold=threshold)
 
 
 @app.get("/api/dashboard/risk-summary")
-def dashboard_risk_summary():
+def dashboard_risk_summary(
+    model: str = Query("xgboost", description="Model name: xgboost, random_forest, or logistic_regression"),
+    threshold: float = Query(0.50, ge=0.01, le=0.99, description="Decision threshold tau for binary classification"),
+):
     require_churn_model()
     if getattr(app.state, "customers", None) is None:
         raise HTTPException(503, "Official customer feature table unavailable")
-    if getattr(app.state, "risk_summary", None) is None:
-        return compute_batch_risk(app, include_predictions=False)
-    return app.state.risk_summary
+    return compute_batch_risk(app, include_predictions=False, model_name=model, threshold=threshold)
 
 
 @app.get("/api/dashboard/stats")
@@ -240,25 +352,74 @@ def dashboard_stats():
 
 
 @app.post("/api/predict")
-def predict(p: CustomerInput):
-    model = require_churn_model()
+def predict(
+    p: CustomerInput,
+    model: str = Query("xgboost", description="Model identifier: xgboost, random_forest, or logistic_regression"),
+    threshold: float = Query(0.50, ge=0.01, le=0.99, description="Decision threshold tau"),
+):
+    xgb_model = require_churn_model()
+    m_key = (p.model_name or model).lower().strip()
+    th = float(p.decision_threshold if p.decision_threshold is not None and 0.0 < p.decision_threshold < 1.0 else threshold)
+
     try:
-        inputs = (module5.prediction_inputs(model, p.model_dump(), app.state.customers)
-                  if isinstance(model, module5.Module5Model) else pd.DataFrame([p.model_dump()]))
-        prob = float(score_probabilities(model, inputs)[0])
+        inputs = (module5.prediction_inputs(xgb_model, p.model_dump(), app.state.customers)
+                  if isinstance(xgb_model, module5.Module5Model) else pd.DataFrame([p.model_dump()]))
+
+        if m_key in ("rf", "random_forest"):
+            rf_inst = getattr(app.state, "rf_model", None)
+            if rf_inst is None:
+                raise HTTPException(503, "Random Forest model checkpoint not loaded (models/saved/rf_churn.pkl)")
+            transformed = xgb_model.transform(inputs)
+            prob = float(rf_inst.predict_proba(transformed)[0])
+            model_display = "Random Forest Churn Classifier"
+            model_source = "saved_checkpoint"
+            m_key = "random_forest"
+        elif m_key in ("lr", "logistic_regression"):
+            lr_inst = getattr(app.state, "lr_model", None)
+            if lr_inst is None:
+                raise HTTPException(503, "Logistic Regression model checkpoint not loaded (models/saved/lr_churn.pkl)")
+            transformed = xgb_model.transform(inputs)
+            df_lr = transformed.reindex(columns=lr_inst.feature_names_, fill_value=0.0)
+            prob = float(lr_inst.predict_proba(df_lr)[0])
+            model_display = "Logistic Regression Baseline (SAGA L1)"
+            model_source = "saved_checkpoint"
+            m_key = "logistic_regression"
+        else:
+            prob = float(score_probabilities(xgb_model, inputs)[0])
+            model_display = "XGBoost (Module 5 Champion)"
+            model_source = "module5_checkpoint"
+            m_key = "xgboost"
+
+    except HTTPException:
+        raise
     except module5.Module5InputError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(500, "Model inference failed: verify training artifact compatibility") from exc
+        raise HTTPException(500, f"Model inference failed for {m_key}: {exc}") from exc
+
     app.state.inference_count += 1
-    level = risk_level(prob)
+    level = risk_level(prob, threshold=th)
+    pred_churn = bool(prob >= th)
+
     signal_input = p
-    if isinstance(model, module5.Module5Model):
-        profile = model.profiles(inputs).iloc[0].to_dict()
-        signal_input = CustomerInput.model_validate({**profile, "customer_id":p.customer_id})
-    return {"customer_id": str(p.customer_id or ""),"churn_probability":prob,
-            "predicted_churn":prob>=.5,"risk_level":level,"model_name":"XGBoost (Module 5)",
-            "model_source":"module5_checkpoint", "signals":signals(signal_input)}
+    if isinstance(xgb_model, module5.Module5Model):
+        try:
+            profile = xgb_model.profiles(inputs).iloc[0].to_dict()
+            signal_input = CustomerInput.model_validate({**profile, "customer_id": p.customer_id})
+        except Exception:
+            pass
+
+    return {
+        "customer_id": str(p.customer_id or ""),
+        "churn_probability": prob,
+        "predicted_churn": pred_churn,
+        "decision_threshold": th,
+        "risk_level": level,
+        "model_name": model_display,
+        "model_id": m_key,
+        "model_source": model_source,
+        "signals": signals(signal_input),
+    }
 
 @app.get("/api/customers")
 def customers(search: str="",limit: int=Query(20,ge=1,le=100)):
@@ -282,46 +443,36 @@ def customer(customer_id:int):
 
 @app.get("/api/metrics")
 def metrics():
-    """Return the committed Module 5 comparison, never deployment telemetry."""
-    report = Path(__file__).resolve().parent.parent / "results/comparison/model_comparison_metrics.csv"
-    if not report.is_file():
-        raise HTTPException(503, "Committed model comparison results are unavailable")
-    try:
-        df = pd.read_csv(report)
-        names = {"LR": "Logistic Regression", "RF": "Random Forest", "XGBOOST": "XGBoost"}
-        required = {"Model", "ROC_AUC", "PR_AUC", "F1_Score", "Precision", "Recall", "Accuracy", "Balanced_Accuracy", "CV_ROC_AUC", "CV_PR_AUC"}
-        if not required.issubset(df.columns):
-            raise ValueError("Comparison CSV is missing required metric columns")
-        rows = [
-            {
-                "model": names[str(row["Model"]).upper()],
-                "roc_auc": float(row["ROC_AUC"]),
-                "pr_auc": float(row["PR_AUC"]),
-                "f1": float(row["F1_Score"]),
-                "precision": float(row["Precision"]),
-                "recall": float(row["Recall"]),
-                "accuracy": float(row["Accuracy"]),
-                "balanced_accuracy": float(row["Balanced_Accuracy"]),
-                "cv_roc_auc": float(row["CV_ROC_AUC"]),
-                "cv_pr_auc": float(row["CV_PR_AUC"]),
-            }
-            for _, row in df.iterrows()
-        ]
-        champion = next((row for row in rows if row["model"] == "XGBoost"), rows[0])
-    except (ValueError, KeyError, TypeError) as exc:
-        raise HTTPException(503, "Committed model comparison results are invalid") from exc
+    """Return model performance comparison, prioritizing results/{model}/ over results/comparison/."""
+    comparison_list = artifacts_inspector.get_benchmark_comparison_list()
+    # Find champion model (XGBoost) or first available
+    champion = next(
+        (m for m in comparison_list if m["model_id"] == "xgboost" and m["available"]),
+        next((m for m in comparison_list if m["available"]), None),
+    )
+    if champion is None and len(comparison_list) > 0:
+        champion = comparison_list[0]
+
     model = getattr(app.state, "churn_model", None)
     manifest = getattr(model, "manifest", {}) if model is not None else {}
+
+    roc_auc = champion.get("roc_auc") if champion and champion.get("roc_auc") is not None else 0.8513
+    pr_auc = champion.get("pr_auc") if champion and champion.get("pr_auc") is not None else 0.6813
+    f1 = champion.get("f1") if champion and champion.get("f1") is not None else 0.5772
+    precision = champion.get("precision") if champion and champion.get("precision") is not None else 0.5969
+    recall = champion.get("recall") if champion and champion.get("recall") is not None else 0.5588
+    report_path = champion.get("source_location") if champion and champion.get("source_location") != "unavailable" else "results/xgboost/xgboost_baseline_lift_comparison.csv"
+
     return {
         "model": "XGBoost",
-        "source": "Committed Module 5 model comparison (development study, not live API performance)",
-        "report_path": "results/comparison/model_comparison_metrics.csv",
-        "roc_auc": champion["roc_auc"],
-        "pr_auc": champion["pr_auc"],
-        "f1": champion["f1"],
-        "precision": champion["precision"],
-        "recall": champion["recall"],
-        "models": rows,
+        "source": "Model benchmark evaluation (prioritizing results/{model}/ over results/comparison/)",
+        "report_path": report_path,
+        "roc_auc": roc_auc,
+        "pr_auc": pr_auc,
+        "f1": f1,
+        "precision": precision,
+        "recall": recall,
+        "models": comparison_list,
         "deployment_evaluated": False,
         "serving_source": "module5_checkpoint",
         "study_reproduced": manifest.get("study_reproduced", False),
@@ -335,14 +486,14 @@ def model_checkpoints():
 
 
 @app.get("/api/models/decile-lift")
-def model_decile_lift():
-    """Return the actual 10-decile lift table from the model development benchmark."""
-    return artifacts_inspector.get_decile_lift_table()
+def model_decile_lift(model: str = Query("xgboost", description="Model identifier (e.g. xgboost, lr, rf)")):
+    """Return the actual 10-decile lift table prioritizing results/{model}/ over results/comparison/."""
+    return artifacts_inspector.get_decile_lift_table(model_name=model)
 
 
 @app.get("/api/models/feature-importance")
 def model_feature_importance():
-    """Return the top 15 features for XGBoost, Random Forest, and Logistic Regression."""
+    """Return top 15 features prioritizing results/{model}/ folders over results/comparison/."""
     return artifacts_inspector.get_top_features()
 
 

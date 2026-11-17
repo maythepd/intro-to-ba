@@ -19,6 +19,8 @@
 10. [Evaluation Metrics & Business Rationale](#evaluation-metrics--business-rationale)
 11. [Continuous Deployment (CI/CD) & Public Hosting Guide](#continuous-deployment-cicd--public-hosting-guide)
 12. [System Telemetry & Monitoring Architecture](#system-telemetry--monitoring-architecture)
+13. [Model Artifacts & Priority Results Scanner](#model-artifacts--priority-results-scanner)
+14. [Multi-Model Inference & Decision Threshold Engine](#multi-model-inference--decision-threshold-engine)
 
 ---
 
@@ -970,11 +972,54 @@ between **two consecutive calls on the exact same `psutil.Process` instance**.
 - In `psutil`, the **first call on any new instance always returns 0.0% by design** because there is no prior baseline to compare against.
 - As a result, every poll was an initial baseline call, perpetually displaying `0%`.
 
-### The Resolution
+### Windows Asyncio Socket Reset (WinError 10054) Resolution
 
-1. **Persistent Singleton Process (`_PROCESS`):** A module-level persistent `_PROCESS = psutil.Process()` is instantiated once at server startup and primed immediately to establish the baseline.
-2. **Dual Process & System Telemetry:** Subsequent requests calculate the real delta of CPU activity utilized by the Python process (normalized across logical CPU cores) and compare it against the active operating system CPU load (`psutil.cpu_percent(interval=None)`).
-3. **Active Spike Capture:** While idle between requests, the server uses negligible CPU (~0.5%-2%), but during model inference (e.g. batch scoring 10,000 customers with XGBoost), the metric accurately reflects the real CPU core activity spike.
+On Windows operating systems, when a web browser, polling probe, or Vite dev proxy terminates a connection abruptly, Python's `asyncio.proactor_events._ProactorBasePipeTransport._call_connection_lost` attempts to call `socket.shutdown(SHUT_RDWR)` on an already-closed socket, triggering:
+```
+ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+```
+The platform resolves this across both `api.py` and `api/main.py`:
+1. **Graceful HTTP Probing:** `_open_browser_when_ready()` performs full HTTP pings via `urllib.request` rather than raw TCP socket aborts.
+2. **Proactor Transport Guard:** A transparent monkey-patch wraps `_call_connection_lost` to safely catch and ignore transient Windows socket resets without bubbling up unhandled traceback logs.
+
+---
+
+## 13. Model Artifacts & Priority Results Scanner
+
+When running individual model training or hyperparameter tuning (`python main.py --mode train --model {name}` or `python main.py --mode tune --model {name}`), outputs are exported directly into dedicated model subdirectories:
+- `results/xgboost/`: `xgboost_baseline_lift_comparison.csv`, `xgboost_decile_lift_table.csv`, `xgboost_feature_importance_all.csv`, `optuna_tuning_xgboost_report.md`
+- `results/lr/`: `lr_train_metrics.csv`, `lr_baseline_lift_comparison.csv`, `lr_decile_lift_table.csv`, `lr_feature_importance.csv`, `train_lr_report.md`
+- `results/rf/`: `rf_train_metrics.csv`, `rf_decile_lift_table.csv`, `rf_feature_importance.csv`
+- `results/svm/`: `svm_train_metrics.csv`
+
+### Dual-Tier Priority Scanner Logic:
+1. **Tier 1 (Highest Priority):** Scan `results/{model}/` directly for model-specific training metrics, 10-decile lift tables, and feature importances.
+2. **Tier 2 (Fallback):** If no individual directory exists, fallback to `results/comparison/model_comparison_metrics.csv`.
+3. **Availability Classification on UI (`/models`):**
+   - **Available:** The model has either saved weights in `models/saved/` or evaluated metrics in `results/{model}/`. The UI shows real metrics, exact source path, decile lift table, and feature importance.
+   - **Unavailable:** The model has not been trained yet. The UI flags it as `Unavailable` and displays the exact CLI command needed to train and produce its artifacts:
+     ```bash
+     python main.py --mode train --model <model_id>
+     ```
+
+---
+
+## 14. Multi-Model Inference & Decision Threshold Engine
+
+The serving platform (`/predict` and `/`) provides interactive model selection and continuous decision threshold modulation:
+
+### 1. Selectable Inference Models:
+- **XGBoost (Production Champion):** Non-linear gradient boosted trees trained with early stopping on validation folds (Test ROC-AUC: 0.8513, PR-AUC: 0.6813).
+- **Random Forest (Bagging Ensemble):** 500 decision trees with `balanced_subsample` weighting (Test ROC-AUC: 0.8354).
+- **Logistic Regression (Linear Baseline):** SAGA L1-regularized linear model with balanced class penalties and 83.3% churn recall.
+
+### 2. Decision Threshold ($\tau \in [0.10, 0.90]$):
+The binary classification label is dynamically assigned according to:
+$$\hat{y} = \begin{cases} 1 \text{ (Likely to Churn)}, & \text{if } P(\text{churn}) \ge \tau \\ 0 \text{ (Likely to Stay)}, & \text{if } P(\text{churn}) < \tau \end{cases}$$
+
+- **High Recall ($\tau = 0.35$):** Prioritizes customer retention by catching ~80% of churners early (recommended for aggressive retention).
+- **Balanced ($\tau = 0.50$):** Standard industry classification threshold.
+- **High Precision ($\tau = 0.65$):** Minimizes false alarms to focus intervention budgets strictly on high-confidence churners.
 
 ---
 

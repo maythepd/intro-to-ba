@@ -45,8 +45,11 @@ export interface PredictionResult {
   customer_id: string;
   churn_probability: number;
   predicted_churn: boolean;
+  decision_threshold?: number;
   risk_level: RiskLevel;
   model_name: string;
+  model_id?: string;
+  model_source?: string;
   signals: PredictionSignal[];
 }
 
@@ -55,6 +58,8 @@ export interface RiskSummary {
   source: string;
   data_kind: string;
   model_name: string;
+  model_id?: string;
+  decision_threshold?: number;
   total_customers: number;
   scored_customers: number;
   counts: { low: number; medium: number; high: number };
@@ -95,14 +100,41 @@ export interface DashboardStats {
 }
 
 export interface ModelCheckpoint {
+  id?: string;
   name: string;
+  family?: string;
   type: string;
+  available: boolean;
+  status: string;
+  has_weights?: boolean;
+  has_results?: boolean;
   path: string;
   size_kb: number;
-  modified_at: string;
-  status: string;
-  metrics?: Record<string, number>;
+  modified_at: string | null;
+  source_location?: string;
+  train_command?: string;
+  tune_command?: string;
+  metrics?: Record<string, number> | null;
   parameters: Record<string, unknown>;
+}
+
+export interface ModelComparisonRow {
+  model_id: string;
+  model: string;
+  family: string;
+  available: boolean;
+  status: "available" | "unavailable";
+  source_location: string;
+  roc_auc: number | null;
+  pr_auc: number | null;
+  f1: number | null;
+  precision: number | null;
+  recall: number | null;
+  accuracy: number | null;
+  balanced_accuracy?: number | null;
+  cv_roc_auc?: number | null;
+  cv_pr_auc?: number | null;
+  train_command: string;
 }
 
 export interface DecileLiftRow {
@@ -115,10 +147,24 @@ export interface DecileLiftRow {
   cum_lift: string;
 }
 
+export interface DecileLiftTableResponse {
+  model: string;
+  available: boolean;
+  source: string;
+  deciles: DecileLiftRow[];
+}
+
 export interface FeatureImportanceItem {
   feature: string;
   importance: number;
   relative_pct: number;
+}
+
+export interface FeatureImportanceResponse {
+  features?: Record<string, FeatureImportanceItem[]>;
+  sources?: Record<string, string>;
+  available?: Record<string, boolean>;
+  [model: string]: unknown;
 }
 
 export interface TrafficTelemetry {
@@ -268,22 +314,48 @@ export const api = {
   },
   getCustomer: (id: string, signal?: AbortSignal) =>
     request<CustomerFeatures>(`/api/customers/${encodeURIComponent(id)}`, { signal }),
-  predict: (payload: CustomerFeatures, signal?: AbortSignal) =>
-    request<PredictionResult>("/api/predict", { method: "POST", body: {...payload, customer_id: /^\d+$/.test(payload.customer_id) ? Number(payload.customer_id) : null}, signal, timeoutMs: 20000 }),
+  predict: (
+    payload: CustomerFeatures,
+    options?: { model?: string; threshold?: number },
+    signal?: AbortSignal
+  ) => {
+    const q = new URLSearchParams();
+    if (options?.model) q.set("model", options.model);
+    if (options?.threshold !== undefined) q.set("threshold", String(options.threshold));
+    const qs = q.toString() ? `?${q.toString()}` : "";
+    return request<PredictionResult>(`/api/predict${qs}`, {
+      method: "POST",
+      body: {
+        ...payload,
+        customer_id: /^\d+$/.test(payload.customer_id) ? Number(payload.customer_id) : null,
+        model_name: options?.model,
+        decision_threshold: options?.threshold,
+      },
+      signal,
+      timeoutMs: 20000,
+    });
+  },
   metrics: (signal?: AbortSignal) => request<GenericRecord>("/api/metrics", { signal }),
-  riskSummary: (signal?: AbortSignal) =>
-    request<RiskSummary>("/api/dashboard/risk-summary", { signal }),
+  riskSummary: (options?: { model?: string; threshold?: number }, signal?: AbortSignal) => {
+    const q = new URLSearchParams();
+    if (options?.model) q.set("model", options.model);
+    if (options?.threshold !== undefined) q.set("threshold", String(options.threshold));
+    const qs = q.toString() ? `?${q.toString()}` : "";
+    return request<RiskSummary>(`/api/dashboard/risk-summary${qs}`, { signal });
+  },
   dashboardStats: (signal?: AbortSignal) =>
     request<DashboardStats>("/api/dashboard/stats", { signal }),
-  batchScore: (force = false) =>
-    request<RiskSummary>(`/api/predict/batch?force=${force ? "true" : "false"}`,
-      { method: "POST", timeoutMs: 120000 }),
+  batchScore: (force = false, model = "xgboost", threshold = 0.50) =>
+    request<RiskSummary>(
+      `/api/predict/batch?force=${force ? "true" : "false"}&model=${encodeURIComponent(model)}&threshold=${encodeURIComponent(String(threshold))}`,
+      { method: "POST", timeoutMs: 120000 }
+    ),
   modelCheckpoints: (signal?: AbortSignal) =>
     request<ModelCheckpoint[]>("/api/models/checkpoints", { signal }),
-  decileLift: (signal?: AbortSignal) =>
-    request<DecileLiftRow[]>("/api/models/decile-lift", { signal }),
+  decileLift: (model: string = "xgboost", signal?: AbortSignal) =>
+    request<DecileLiftTableResponse>(`/api/models/decile-lift?model=${encodeURIComponent(model)}`, { signal }),
   featureImportance: (signal?: AbortSignal) =>
-    request<Record<string, FeatureImportanceItem[]>>("/api/models/feature-importance", { signal }),
+    request<FeatureImportanceResponse>("/api/models/feature-importance", { signal }),
   segments: (algorithm: ClusterAlgorithm, signal?: AbortSignal) =>
     request<SegmentSummary>(`/api/segments?algorithm=${encodeURIComponent(algorithm)}`, { signal }),
   segmentCustomer: (id: string, signal?: AbortSignal) =>

@@ -1,7 +1,8 @@
 """
 Artifacts and Dataset Inspector for BaBank Analytics Platform.
 Dynamically scans and calculates real data facts, checkpoint metadata, and evaluation results.
-Zero hardcoded synthetic lists or mock fallbacks.
+PRIORITIZES results/{model}/ individual training & tuning outputs over results/comparison/.
+Identifies which models are available and which are unavailable.
 """
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import time
 from typing import Any
 
@@ -55,31 +57,6 @@ def _count_file_lines(path: Path) -> int:
         return 0
 
 
-def _load_comparison_metrics_map() -> dict[str, dict[str, float]]:
-    """Read results/comparison/model_comparison_metrics.csv into a normalized dict."""
-    p = ROOT_DIR / "results/comparison/model_comparison_metrics.csv"
-    res: dict[str, dict[str, float]] = {}
-    if not p.is_file():
-        return res
-    try:
-        df = pd.read_csv(p)
-        for _, row in df.iterrows():
-            m_name = str(row.get("Model", "")).strip().upper()
-            res[m_name] = {
-                "roc_auc": round(float(row.get("ROC_AUC", 0)), 4),
-                "pr_auc": round(float(row.get("PR_AUC", 0)), 4),
-                "f1": round(float(row.get("F1_Score", 0)), 4),
-                "precision": round(float(row.get("Precision", 0)), 4),
-                "recall": round(float(row.get("Recall", 0)), 4),
-                "accuracy": round(float(row.get("Accuracy", 0)), 4),
-                "cv_roc_auc": round(float(row.get("CV_ROC_AUC", 0)), 4) if "CV_ROC_AUC" in row else 0.0,
-                "cv_pr_auc": round(float(row.get("CV_PR_AUC", 0)), 4) if "CV_PR_AUC" in row else 0.0,
-            }
-    except Exception as exc:
-        print(f"[WARN] Failed to read model comparison metrics: {exc}")
-    return res
-
-
 def _load_config_yaml() -> dict[str, Any]:
     """Read config/config.yaml for model parameters and dataset settings."""
     cfg_path = ROOT_DIR / "config/config.yaml"
@@ -91,6 +68,146 @@ def _load_config_yaml() -> dict[str, Any]:
     except Exception as exc:
         print(f"[WARN] Failed to load config.yaml: {exc}")
         return {}
+
+
+def _clean_pct(val: Any) -> float:
+    """Convert percentage string or float to float ratio (e.g. '83.30%' -> 0.833)."""
+    if val is None or pd.isna(val):
+        return 0.0
+    s = str(val).strip()
+    if "%" in s:
+        try:
+            return round(float(s.replace("%", "")) / 100.0, 4)
+        except Exception:
+            return 0.0
+    try:
+        return round(float(s), 4)
+    except Exception:
+        return 0.0
+
+
+def scan_model_metrics(model_key: str) -> tuple[dict[str, float] | None, str]:
+    """
+    Scan metrics for a specific model with strict priority:
+    1. results/{model_key}/ individual training & tuning outputs
+    2. results/comparison/model_comparison_metrics.csv fallback
+    3. Return (None, "unavailable") if not found.
+    """
+    key = model_key.lower().strip()
+    aliases = {
+        "xgboost": ["xgboost", "xgb"],
+        "rf": ["rf", "random_forest"],
+        "random_forest": ["random_forest", "rf"],
+        "lr": ["lr", "logistic_regression"],
+        "logistic_regression": ["logistic_regression", "lr"],
+        "svm": ["svm", "linear_svm"],
+        "linear_svm": ["linear_svm", "svm"],
+    }
+    candidate_keys = aliases.get(key, [key])
+
+    # 1. PRIORITY SCAN: results/{model_key}/
+    for k in candidate_keys:
+        model_dir = ROOT_DIR / "results" / k
+        if not model_dir.is_dir():
+            continue
+
+        # Check for {k}_train_metrics.csv
+        train_csv = model_dir / f"{k}_train_metrics.csv"
+        if train_csv.is_file():
+            try:
+                df = pd.read_csv(train_csv)
+                if not df.empty:
+                    r = df.iloc[0]
+                    return {
+                        "roc_auc": round(float(r.get("ROC_AUC", 0)), 4),
+                        "pr_auc": round(float(r.get("PR_AUC", 0)), 4),
+                        "f1": round(float(r.get("F1_Score", 0)), 4),
+                        "precision": round(float(r.get("Precision", 0)), 4),
+                        "recall": round(float(r.get("Recall", 0)), 4),
+                        "accuracy": round(float(r.get("Accuracy", 0)), 4),
+                        "balanced_accuracy": round(float(r.get("Balanced_Accuracy", 0)), 4) if "Balanced_Accuracy" in r else None,
+                    }, f"results/{k}/{k}_train_metrics.csv"
+            except Exception as exc:
+                print(f"[WARN] Failed to parse {train_csv}: {exc}")
+
+        # Check for {k}_baseline_lift_comparison.csv
+        lift_csv = model_dir / f"{k}_baseline_lift_comparison.csv"
+        if lift_csv.is_file():
+            try:
+                df = pd.read_csv(lift_csv)
+                # Search for preferred configurations: Manual (0.35), Default (0.50), or Optimal F1
+                for target in ["Manual", "Default", "Optimal F1", "Optimal"]:
+                    sub = df[df["Configuration"].str.contains(target, case=False, na=False)]
+                    if not sub.empty:
+                        r = sub.iloc[0]
+                        return {
+                            "roc_auc": round(float(r.get("ROC_AUC", 0)), 4),
+                            "pr_auc": round(float(r.get("PR_AUC", 0)), 4),
+                            "f1": round(float(r.get("F1_Score", 0)), 4),
+                            "precision": _clean_pct(r.get("Precision")),
+                            "recall": _clean_pct(r.get("Recall")),
+                            "accuracy": _clean_pct(r.get("Accuracy")),
+                        }, f"results/{k}/{k}_baseline_lift_comparison.csv"
+            except Exception as exc:
+                print(f"[WARN] Failed to parse {lift_csv}: {exc}")
+
+        # Check for tuning report (e.g. optuna_tuning_{k}_report.md or train_{k}_report.md)
+        for r_name in [f"optuna_tuning_{k}_report.md", f"train_{k}_report.md", f"ablation_{k}_report.md"]:
+            rep_path = model_dir / r_name
+            if rep_path.is_file():
+                try:
+                    text = rep_path.read_text(encoding="utf-8")
+                    roc = re.search(r"ROC_AUC\s*\|\s*([0-9.]+)", text)
+                    pr = re.search(r"PR_AUC\s*\|\s*([0-9.]+)", text)
+                    f1 = re.search(r"F1_Score\s*\|\s*([0-9.]+)", text)
+                    if roc and pr and f1:
+                        prec = re.search(r"Precision\s*\|\s*([0-9.]+)", text)
+                        rec = re.search(r"Recall\s*\|\s*([0-9.]+)", text)
+                        acc = re.search(r"Accuracy\s*\|\s*([0-9.]+)", text)
+                        return {
+                            "roc_auc": float(roc.group(1)),
+                            "pr_auc": float(pr.group(1)),
+                            "f1": float(f1.group(1)),
+                            "precision": float(prec.group(1)) if prec else 0.0,
+                            "recall": float(rec.group(1)) if rec else 0.0,
+                            "accuracy": float(acc.group(1)) if acc else 0.0,
+                        }, f"results/{k}/{r_name}"
+                except Exception as exc:
+                    print(f"[WARN] Failed to parse {rep_path}: {exc}")
+
+    # 2. SECONDARY FALLBACK: results/comparison/model_comparison_metrics.csv
+    comp_p = ROOT_DIR / "results/comparison/model_comparison_metrics.csv"
+    if comp_p.is_file():
+        try:
+            df_comp = pd.read_csv(comp_p)
+            for _, r in df_comp.iterrows():
+                m_str = str(r.get("Model", "")).strip().upper()
+                matched = False
+                if key in ("xgboost", "xgb") and m_str in ("XGBOOST", "XGB"):
+                    matched = True
+                elif key in ("rf", "random_forest") and m_str in ("RF", "RANDOM FOREST"):
+                    matched = True
+                elif key in ("lr", "logistic_regression") and m_str in ("LR", "LOGISTIC REGRESSION"):
+                    matched = True
+                elif key in ("svm", "linear_svm") and m_str in ("SVM", "LINEAR SVM"):
+                    matched = True
+
+                if matched:
+                    return {
+                        "roc_auc": round(float(r.get("ROC_AUC", 0)), 4),
+                        "pr_auc": round(float(r.get("PR_AUC", 0)), 4),
+                        "f1": round(float(r.get("F1_Score", 0)), 4),
+                        "precision": round(float(r.get("Precision", 0)), 4),
+                        "recall": round(float(r.get("Recall", 0)), 4),
+                        "accuracy": round(float(r.get("Accuracy", 0)), 4),
+                        "balanced_accuracy": round(float(r.get("Balanced_Accuracy", 0)), 4) if "Balanced_Accuracy" in r else None,
+                        "cv_roc_auc": round(float(r.get("CV_ROC_AUC", 0)), 4) if "CV_ROC_AUC" in r else None,
+                        "cv_pr_auc": round(float(r.get("CV_PR_AUC", 0)), 4) if "CV_PR_AUC" in r else None,
+                    }, "results/comparison/model_comparison_metrics.csv"
+        except Exception as exc:
+            print(f"[WARN] Failed to read comparison CSV: {exc}")
+
+    return None, "unavailable"
 
 
 def get_dataset_facts() -> dict[str, Any]:
@@ -171,207 +288,355 @@ def get_dataset_facts() -> dict[str, Any]:
 
 
 def get_model_checkpoints() -> list[dict[str, Any]]:
-    """Scan and return real model checkpoints, configurations, and evaluation metrics."""
+    """
+    Scan all models recognized by the platform.
+    Prioritizes results/{model}/ folders over results/comparison/.
+    Labels each model as 'available' or 'unavailable'.
+    """
     if "model_checkpoints" in _CACHE:
         return _CACHE["model_checkpoints"]
 
-    ckpts: list[dict[str, Any]] = []
-    metrics_map = _load_comparison_metrics_map()
     cfg = _load_config_yaml()
     model_cfg = cfg.get("model", {})
+    features_cfg = cfg.get("features", {})
+    ckpts: list[dict[str, Any]] = []
 
-    # 1. XGBoost Churn Classifier (Champion)
-    xgb_p = ROOT_DIR / "models/saved/xgboost_churn.json"
-    if xgb_p.is_file():
-        stat = xgb_p.stat()
-        xgb_meta: dict[str, Any] = {
-            "booster": "gbtree",
-            "objective": "binary:logistic",
-        }
-        try:
-            with xgb_p.open("r", encoding="utf-8") as f:
-                booster_data = json.load(f)
-                learner = booster_data.get("learner", {})
-                xgb_meta["objective"] = learner.get("learner_model_param", {}).get("objective", "binary:logistic")
-                trees = learner.get("gradient_booster", {}).get("model", {}).get("trees", [])
-                xgb_meta["num_trees"] = len(trees)
-        except Exception as exc:
-            print(f"[WARN] Error reading booster json: {exc}")
-
-        # Parameters from config.yaml
-        xgb_params = model_cfg.get("xgboost_params", {})
-        merged_params = {
-            "objective": xgb_meta.get("objective", "binary:logistic"),
-            "num_trees_in_booster": xgb_meta.get("num_trees", 96),
-            **xgb_params,
-        }
-
-        ckpts.append({
+    # Specification catalog of all models in repo
+    catalog = [
+        {
+            "id": "xgboost",
             "name": "XGBoost Churn Classifier (Champion)",
+            "family": "Gradient Boosting",
             "type": "xgboost",
-            "path": "models/saved/xgboost_churn.json",
-            "size_kb": round(stat.st_size / 1024, 1),
-            "modified_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
-            "status": "production_champion",
-            "metrics": metrics_map.get("XGBOOST", {}),
-            "parameters": merged_params,
-        })
-
-    # 2. Random Forest
-    rf_p = ROOT_DIR / "models/saved/rf_churn.pkl"
-    if rf_p.is_file():
-        stat = rf_p.stat()
-        rf_params = model_cfg.get("rf_params", {})
-        ckpts.append({
+            "champion": True,
+            "paths": ["models/saved/xgboost_churn.json", "results/xgboost/xgboost_churn.json"],
+            "result_dir": "results/xgboost",
+            "train_cmd": "python main.py --mode train --model xgboost",
+            "tune_cmd": "python main.py --mode tune --model xgboost",
+            "params_key": "xgboost_params",
+        },
+        {
+            "id": "random_forest",
             "name": "Random Forest Churn Classifier",
+            "family": "Bagging Ensemble",
             "type": "random_forest",
-            "path": "models/saved/rf_churn.pkl",
-            "size_kb": round(stat.st_size / 1024, 1),
-            "modified_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
-            "status": "saved_checkpoint",
-            "metrics": metrics_map.get("RF", {}),
-            "parameters": rf_params,
-        })
-
-    # 3. Logistic Regression
-    lr_p = ROOT_DIR / "models/saved/lr_churn.pkl"
-    if lr_p.is_file():
-        stat = lr_p.stat()
-        lr_params = model_cfg.get("lr_params", {})
-        ckpts.append({
+            "champion": False,
+            "paths": ["models/saved/rf_churn.pkl"],
+            "result_dir": "results/rf",
+            "train_cmd": "python main.py --mode train --model rf",
+            "tune_cmd": "python main.py --mode tune --model rf",
+            "params_key": "rf_params",
+        },
+        {
+            "id": "logistic_regression",
             "name": "Logistic Regression Baseline (SAGA L1)",
+            "family": "Linear Model",
             "type": "logistic_regression",
-            "path": "models/saved/lr_churn.pkl",
-            "size_kb": round(stat.st_size / 1024, 1),
-            "modified_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
-            "status": "saved_checkpoint",
-            "metrics": metrics_map.get("LR", {}),
-            "parameters": lr_params,
-        })
-
-    # 4. Poincaré Hyperbolic Temporal Sequence Encoder
-    temp_p = ROOT_DIR / "models/saved/temporal/temporal_encoder_raw_hyperbolic_poincare_full.pt"
-    if temp_p.is_file():
-        stat = temp_p.stat()
-        temp_cfg = cfg.get("features", {}).get("temporal_embeddings", {})
-        ckpts.append({
-            "name": "Poincaré Hyperbolic Temporal Encoder",
+            "champion": False,
+            "paths": ["models/saved/lr_churn.pkl"],
+            "result_dir": "results/lr",
+            "train_cmd": "python main.py --mode train --model lr",
+            "tune_cmd": "python main.py --mode train --model lr",
+            "params_key": "lr_params",
+        },
+        {
+            "id": "svm",
+            "name": "Linear Support Vector Machine (SVM)",
+            "family": "Max-Margin Hyperplane",
+            "type": "svm",
+            "champion": False,
+            "paths": ["models/saved/svm_churn.pkl"],
+            "result_dir": "results/svm",
+            "train_cmd": "python main.py --mode train --model svm",
+            "tune_cmd": "python main.py --mode train --model svm",
+            "params_key": "svm_params",
+        },
+        {
+            "id": "temporal_encoder",
+            "name": "Poincaré Hyperbolic Temporal Sequence Encoder",
+            "family": "Deep Sequence Embeddings",
             "type": "deep_learning_temporal",
-            "path": "models/saved/temporal/temporal_encoder_raw_hyperbolic_poincare_full.pt",
-            "size_kb": round(stat.st_size / 1024, 1),
-            "modified_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
-            "status": "saved_checkpoint",
-            "parameters": {
-                "manifold": f"Poincaré Hyperbolic Ball (curvature c={temp_cfg.get('curvature', 1.0)})",
-                "latent_dim": temp_cfg.get("latent_dim", 16),
-                "hidden_dim": temp_cfg.get("hidden_dim", 64),
-                "num_layers": temp_cfg.get("num_layers", 2),
-                "raw_sequence_length": temp_cfg.get("raw_sequence_length", 50),
-                "strategy": temp_cfg.get("manifold_strategy", "hyperbolic_poincare"),
-            },
-        })
-
-    # 5. Graph Attention Network (GNN) Encoder
-    gnn_p = ROOT_DIR / "models/saved/gnn/folds/gnn_encoder_fold1_full.pt"
-    if gnn_p.is_file():
-        stat = gnn_p.stat()
-        gnn_cfg = cfg.get("features", {}).get("gnn_embeddings", {})
-        ckpts.append({
+            "champion": False,
+            "paths": ["models/saved/temporal/temporal_encoder_raw_hyperbolic_poincare_full.pt"],
+            "result_dir": "results/temporal",
+            "train_cmd": "python main.py --mode representation",
+            "tune_cmd": "python main.py --mode representation",
+            "params_key": None,
+        },
+        {
+            "id": "gnn_encoder",
             "name": "Graph Attention Network (GNN) Encoder",
+            "family": "Graph Neural Network",
             "type": "deep_learning_gnn",
-            "path": "models/saved/gnn/folds/gnn_encoder_fold1_full.pt",
-            "size_kb": round(stat.st_size / 1024, 1),
-            "modified_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
-            "status": "saved_checkpoint",
-            "parameters": {
-                "graph_construction": f"Self-Supervised k-NN Behavioral Graph (k={gnn_cfg.get('k_neighbors', 5)})",
-                "latent_dim": gnn_cfg.get("latent_dim", 16),
-                "hidden_dim": gnn_cfg.get("hidden_dim", 32),
-                "heads": gnn_cfg.get("heads", 2),
-            },
-        })
-
-    # 6. Customer Segmentation Bundle
-    seg_p = ROOT_DIR / "artifacts/segmentation/cluster_bundle.joblib"
-    if seg_p.is_file():
-        stat = seg_p.stat()
-        seg_cfg = cfg.get("segmentation", {})
-        ckpts.append({
-            "name": "Customer Segmentation Bundle",
+            "champion": False,
+            "paths": ["models/saved/gnn/folds/gnn_encoder_fold1_full.pt"],
+            "result_dir": "results/gnn",
+            "train_cmd": "python main.py --mode representation",
+            "tune_cmd": "python main.py --mode representation",
+            "params_key": None,
+        },
+        {
+            "id": "segmentation",
+            "name": "Customer Segmentation Bundle (KMeans & Ward)",
+            "family": "Unsupervised Clustering",
             "type": "clustering",
-            "path": "artifacts/segmentation/cluster_bundle.joblib",
-            "size_kb": round(stat.st_size / 1024, 1),
-            "modified_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
-            "status": "active_serving",
-            "parameters": {
+            "champion": False,
+            "paths": ["artifacts/segmentation/cluster_bundle.joblib"],
+            "result_dir": "artifacts/segmentation",
+            "train_cmd": "python api.py segmentation",
+            "tune_cmd": "python api.py segmentation",
+            "params_key": None,
+        },
+    ]
+
+    for item in catalog:
+        m_id = item["id"]
+        # 1. Check for physical model weights / checkpoint
+        found_path: Path | None = None
+        for p_str in item["paths"]:
+            p = ROOT_DIR / p_str
+            if p.is_file():
+                found_path = p
+                break
+
+        # 2. Priority metrics scan (results/{m_id} first, then comparison)
+        metrics, source_loc = scan_model_metrics(m_id)
+
+        # 3. Parameters extraction
+        params: dict[str, Any] = {}
+        if item["params_key"] and item["params_key"] in model_cfg:
+            params = dict(model_cfg[item["params_key"]])
+        elif m_id == "temporal_encoder":
+            t_cfg = features_cfg.get("temporal_embeddings", {})
+            params = {
+                "manifold": f"Poincaré Hyperbolic Ball (c={t_cfg.get('curvature', 1.0)})",
+                "latent_dim": t_cfg.get("latent_dim", 16),
+                "hidden_dim": t_cfg.get("hidden_dim", 64),
+                "num_layers": t_cfg.get("num_layers", 2),
+                "raw_sequence_length": t_cfg.get("raw_sequence_length", 50),
+            }
+        elif m_id == "gnn_encoder":
+            g_cfg = features_cfg.get("gnn_embeddings", {})
+            params = {
+                "graph_construction": f"k-NN Behavioral Graph (k={g_cfg.get('k_neighbors', 5)})",
+                "latent_dim": g_cfg.get("latent_dim", 16),
+                "hidden_dim": g_cfg.get("hidden_dim", 32),
+                "heads": g_cfg.get("heads", 2),
+            }
+        elif m_id == "segmentation":
+            s_cfg = cfg.get("segmentation", {})
+            params = {
                 "algorithms": ["KMeans", "Hierarchical (Ward)"],
-                "n_clusters": seg_cfg.get("common_k", 4),
-                "max_iter": seg_cfg.get("max_iter", 300),
-                "stability_floor": seg_cfg.get("stability_floor", 0.80),
-            },
+                "n_clusters": s_cfg.get("common_k", 4),
+                "max_iter": s_cfg.get("max_iter", 300),
+            }
+
+        # 4. Check if XGBoost booster contains tree counts
+        if m_id == "xgboost" and found_path and found_path.suffix == ".json":
+            try:
+                with found_path.open("r", encoding="utf-8") as f:
+                    booster_data = json.load(f)
+                    trees = booster_data.get("learner", {}).get("gradient_booster", {}).get("model", {}).get("trees", [])
+                    params["num_trees_in_booster"] = len(trees)
+            except Exception:
+                pass
+
+        # 5. Determine Availability
+        has_weights = found_path is not None
+        has_results = metrics is not None
+        is_available = has_weights or has_results
+
+        if item.get("champion"):
+            status_label = "production_champion"
+        elif is_available:
+            status_label = "available"
+        else:
+            status_label = "unavailable"
+
+        size_kb = round(found_path.stat().st_size / 1024, 1) if found_path else 0.0
+        mod_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(found_path.stat().st_mtime)) if found_path else None
+
+        ckpts.append({
+            "id": m_id,
+            "name": item["name"],
+            "family": item["family"],
+            "type": item["type"],
+            "available": is_available,
+            "status": status_label,
+            "has_weights": has_weights,
+            "has_results": has_results,
+            "path": str(found_path.relative_to(ROOT_DIR)) if found_path else item["paths"][0],
+            "size_kb": size_kb,
+            "modified_at": mod_time,
+            "source_location": source_loc,
+            "metrics": metrics,
+            "parameters": params,
+            "train_command": item["train_cmd"],
+            "tune_command": item["tune_cmd"],
         })
 
     _CACHE["model_checkpoints"] = ckpts
     return ckpts
 
 
-def get_decile_lift_table() -> list[dict[str, Any]]:
-    """Read champion decile lift table dynamically from results/comparison/."""
-    if "decile_lift" in _CACHE:
-        return _CACHE["decile_lift"]
+def get_benchmark_comparison_list() -> list[dict[str, Any]]:
+    """
+    Return three-model comparison list prioritizing results/{model}/ folders.
+    Includes availability status for each model.
+    """
+    rows = []
+    models_to_check = [
+        ("xgboost", "XGBoost", "Gradient Boosting"),
+        ("random_forest", "Random Forest", "Bagging Ensemble"),
+        ("logistic_regression", "Logistic Regression", "Linear Model"),
+        ("svm", "Linear SVM", "Max-Margin"),
+    ]
 
-    p = ROOT_DIR / "results/comparison/champion_decile_lift_table.csv"
-    if not p.is_file():
-        p = ROOT_DIR / "results/comparison/xgboost_decile_lift_table.csv"
+    for key, display_name, family in models_to_check:
+        metrics, source_loc = scan_model_metrics(key)
+        is_available = metrics is not None
+        rows.append({
+            "model_id": key,
+            "model": display_name,
+            "family": family,
+            "available": is_available,
+            "status": "available" if is_available else "unavailable",
+            "source_location": source_loc,
+            "roc_auc": metrics.get("roc_auc") if metrics else None,
+            "pr_auc": metrics.get("pr_auc") if metrics else None,
+            "f1": metrics.get("f1") if metrics else None,
+            "precision": metrics.get("precision") if metrics else None,
+            "recall": metrics.get("recall") if metrics else None,
+            "accuracy": metrics.get("accuracy") if metrics else None,
+            "balanced_accuracy": metrics.get("balanced_accuracy") if metrics else None,
+            "cv_roc_auc": metrics.get("cv_roc_auc") if metrics else None,
+            "cv_pr_auc": metrics.get("cv_pr_auc") if metrics else None,
+            "train_command": f"python main.py --mode train --model {key}",
+        })
 
-    rows: list[dict[str, Any]] = []
-    if p.is_file():
-        try:
-            df = pd.read_csv(p)
-            for _, r in df.iterrows():
-                rows.append({
-                    "decile": str(r.get("Decile", "")),
-                    "customers": int(r.get("Customers", 0)),
-                    "churners": int(r.get("Churners", 0)),
-                    "churn_rate": str(r.get("Churn_Rate", "")),
-                    "decile_lift": str(r.get("Decile_Lift", "")),
-                    "cum_recall": str(r.get("Cum_Recall", "")),
-                    "cum_lift": str(r.get("Cum_Lift", "")),
-                })
-        except Exception as exc:
-            print(f"[WARN] Failed to read decile lift table: {exc}")
-
-    _CACHE["decile_lift"] = rows
     return rows
 
 
-def get_top_features() -> dict[str, list[dict[str, Any]]]:
-    """Read top feature importances for all 3 models from results/comparison/."""
+def get_decile_lift_table(model_name: str = "xgboost") -> dict[str, Any]:
+    """
+    Read decile lift table prioritizing results/{model_name}/{model_name}_decile_lift_table.csv.
+    Fallback to results/comparison/champion_decile_lift_table.csv.
+    """
+    cache_key = f"decile_lift_{model_name}"
+    if cache_key in _CACHE:
+        return _CACHE[cache_key]
+
+    key = model_name.lower().strip()
+    candidate_files = [
+        ROOT_DIR / f"results/{key}/{key}_decile_lift_table.csv",
+        ROOT_DIR / f"results/{key}/decile_lift_table.csv",
+        ROOT_DIR / f"results/comparison/{key}_decile_lift_table.csv",
+        ROOT_DIR / "results/comparison/champion_decile_lift_table.csv",
+    ]
+
+    # Specific alias handling
+    if key in ("xgboost", "xgb"):
+        candidate_files.insert(0, ROOT_DIR / "results/xgboost/xgboost_decile_lift_table.csv")
+    elif key in ("lr", "logistic_regression"):
+        candidate_files.insert(0, ROOT_DIR / "results/lr/lr_decile_lift_table.csv")
+    elif key in ("rf", "random_forest"):
+        candidate_files.insert(0, ROOT_DIR / "results/rf/rf_decile_lift_table.csv")
+
+    rows: list[dict[str, Any]] = []
+    resolved_source = "unavailable"
+
+    for p in candidate_files:
+        if p.is_file():
+            try:
+                df = pd.read_csv(p)
+                for _, r in df.iterrows():
+                    rows.append({
+                        "decile": str(r.get("Decile", "")),
+                        "customers": int(r.get("Customers", 0)),
+                        "churners": int(r.get("Churners", 0)),
+                        "churn_rate": str(r.get("Churn_Rate", "")),
+                        "decile_lift": str(r.get("Decile_Lift", "")),
+                        "cum_recall": str(r.get("Cum_Recall", "")),
+                        "cum_lift": str(r.get("Cum_Lift", "")),
+                    })
+                resolved_source = str(p.relative_to(ROOT_DIR))
+                break
+            except Exception as exc:
+                print(f"[WARN] Failed to read {p}: {exc}")
+
+    result = {
+        "model": key,
+        "available": len(rows) > 0,
+        "source": resolved_source,
+        "deciles": rows,
+    }
+    _CACHE[cache_key] = result
+    return result
+
+
+def get_top_features() -> dict[str, Any]:
+    """
+    Read top feature importances prioritizing results/{model}/ folders.
+    Returns feature dictionary and availability flags.
+    """
     if "top_features" in _CACHE:
         return _CACHE["top_features"]
 
-    result: dict[str, list[dict[str, Any]]] = {"xgboost": [], "random_forest": [], "logistic_regression": []}
-    files = {
-        "xgboost": ROOT_DIR / "results/comparison/feature_importance_xgboost.csv",
-        "random_forest": ROOT_DIR / "results/comparison/feature_importance_random_forest.csv",
-        "logistic_regression": ROOT_DIR / "results/comparison/feature_importance_logistic_regression.csv",
+    result_features: dict[str, list[dict[str, Any]]] = {}
+    sources: dict[str, str] = {}
+    models_to_scan = [
+        ("xgboost", [
+            ROOT_DIR / "results/xgboost/xgboost_feature_importance_all.csv",
+            ROOT_DIR / "results/xgboost/xgboost_feature_importance.csv",
+            ROOT_DIR / "results/comparison/feature_importance_xgboost.csv",
+        ]),
+        ("logistic_regression", [
+            ROOT_DIR / "results/lr/lr_feature_importance.csv",
+            ROOT_DIR / "results/logistic_regression/feature_importance.csv",
+            ROOT_DIR / "results/comparison/feature_importance_logistic_regression.csv",
+        ]),
+        ("random_forest", [
+            ROOT_DIR / "results/rf/rf_feature_importance.csv",
+            ROOT_DIR / "results/random_forest/feature_importance.csv",
+            ROOT_DIR / "results/comparison/feature_importance_random_forest.csv",
+        ]),
+        ("svm", [
+            ROOT_DIR / "results/svm/svm_feature_importance.csv",
+            ROOT_DIR / "results/comparison/feature_importance_svm.csv",
+        ]),
+    ]
+
+    for model_key, candidate_paths in models_to_scan:
+        items: list[dict[str, Any]] = []
+        found_src = "unavailable"
+        for p in candidate_paths:
+            if p.is_file():
+                try:
+                    df = pd.read_csv(p).head(15)
+                    for _, r in df.iterrows():
+                        items.append({
+                            "feature": str(r.get("Feature", "")),
+                            "importance": round(float(r.get("Importance", 0)), 4),
+                            "relative_pct": round(float(r.get("Relative_Pct", 0)), 2),
+                        })
+                    found_src = str(p.relative_to(ROOT_DIR))
+                    break
+                except Exception as exc:
+                    print(f"[WARN] Failed to read {p}: {exc}")
+
+        result_features[model_key] = items
+        sources[model_key] = found_src
+
+    available_map = {k: len(v) > 0 for k, v in result_features.items()}
+
+    payload = {
+        "features": result_features,
+        "sources": sources,
+        "available": available_map,
+        **result_features,
     }
-
-    for key, path in files.items():
-        if path.is_file():
-            try:
-                df = pd.read_csv(path).head(15)
-                for _, r in df.iterrows():
-                    result[key].append({
-                        "feature": str(r.get("Feature", "")),
-                        "importance": round(float(r.get("Importance", 0)), 4),
-                        "relative_pct": round(float(r.get("Relative_Pct", 0)), 2),
-                    })
-            except Exception as exc:
-                print(f"[WARN] Failed to read {path}: {exc}")
-
-    _CACHE["top_features"] = result
-    return result
+    _CACHE["top_features"] = payload
+    return payload
 
 
 def get_monitoring_telemetry(inference_count: int = 0) -> dict[str, Any]:

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -49,6 +50,9 @@ function Kpi({
 }
 
 function Dashboard() {
+  const [selectedModel, setSelectedModel] = useState<"xgboost" | "random_forest" | "logistic_regression">("xgboost");
+  const [threshold, setThreshold] = useState<number>(0.50);
+
   const statsQuery = useQuery({
     queryKey: ["dashboard-stats"],
     queryFn: ({ signal }) => api.dashboardStats(signal),
@@ -57,15 +61,15 @@ function Dashboard() {
   });
 
   const riskQuery = useQuery({
-    queryKey: ["dashboard-risk-summary"],
-    queryFn: ({ signal }) => api.riskSummary(signal),
+    queryKey: ["dashboard-risk-summary", selectedModel, threshold],
+    queryFn: ({ signal }) => api.riskSummary({ model: selectedModel, threshold }, signal),
     enabled: isApiConfigured,
     retry: false,
     staleTime: 60000,
   });
 
   const batch = useMutation({
-    mutationFn: (force: boolean) => api.batchScore(force),
+    mutationFn: (force: boolean) => api.batchScore(force, selectedModel, threshold),
     onSuccess: () => {
       void riskQuery.refetch();
       void statsQuery.refetch();
@@ -239,8 +243,36 @@ function Dashboard() {
 
         <Panel
           className="lg:col-span-2"
-          title="XGBoost Churn Risk Distribution"
-          subtitle={risk && totalCust !== undefined ? `Breakdown across all ${fmtInt(totalCust)} customers` : "Computing risk bands…"}
+          title={`${risk?.model_name || "Portfolio"} Risk Distribution`}
+          subtitle={
+            risk && totalCust !== undefined
+              ? `Breakdown across ${fmtInt(totalCust)} customers (Threshold τ = ${(risk.decision_threshold ?? threshold).toFixed(2)})`
+              : "Computing risk bands…"
+          }
+          action={
+            <div className="flex items-center gap-1.5">
+              <select
+                aria-label="Select Model"
+                className="h-8 rounded-lg border bg-background px-2 text-xs font-medium"
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value as any)}
+              >
+                <option value="xgboost">XGBoost</option>
+                <option value="random_forest">Random Forest</option>
+                <option value="logistic_regression">Logistic Reg</option>
+              </select>
+              <select
+                aria-label="Select Decision Threshold"
+                className="h-8 rounded-lg border bg-background px-2 text-xs font-mono font-medium"
+                value={threshold}
+                onChange={(e) => setThreshold(parseFloat(e.target.value))}
+              >
+                <option value={0.35}>τ = 0.35</option>
+                <option value={0.50}>τ = 0.50</option>
+                <option value={0.65}>τ = 0.65</option>
+              </select>
+            </div>
+          }
         >
           {risk ? (
             <div className="h-64 rounded-xl">

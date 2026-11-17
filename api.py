@@ -30,6 +30,28 @@ import subprocess
 import sys
 import time
 
+# Silence Windows asyncio ProactorEventLoop ConnectionResetError (WinError 10054)
+if sys.platform == "win32":
+    import asyncio
+    try:
+        from asyncio.proactor_events import _ProactorBasePipeTransport
+        _orig_call_connection_lost = _ProactorBasePipeTransport._call_connection_lost
+
+        def _silenced_call_connection_lost(self, exc):
+            try:
+                _orig_call_connection_lost(self, exc)
+            except ConnectionResetError:
+                pass
+            except OSError as e:
+                if getattr(e, "winerror", None) == 10054:
+                    pass
+                else:
+                    raise
+
+        _ProactorBasePipeTransport._call_connection_lost = _silenced_call_connection_lost
+    except Exception:
+        pass
+
 ROOT_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
@@ -158,20 +180,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def _open_browser_when_ready(url: str, check_port: int, timeout: float = 12.0) -> None:
     """Poll for the port to become reachable, then automatically pop open the web browser."""
-    import socket
     import threading
+    import urllib.request
     import webbrowser
 
     def _worker():
         start_t = time.time()
+        probe_url = f"http://127.0.0.1:{check_port}/health" if check_port != 5173 else f"http://127.0.0.1:{check_port}/"
         while time.time() - start_t < timeout:
             try:
-                with socket.create_connection(("127.0.0.1", check_port), timeout=0.4):
+                req = urllib.request.Request(probe_url, headers={"User-Agent": "BaBankProbe/1.0"})
+                with urllib.request.urlopen(req, timeout=0.6):
                     time.sleep(0.3)
                     print(f"[INFO] 🌐 Opening browser UI at {url} ...\n", flush=True)
                     webbrowser.open(url)
                     return
-            except (OSError, ConnectionRefusedError):
+            except Exception:
                 time.sleep(0.3)
         try:
             print(f"[INFO] 🌐 Opening browser UI at {url} ...\n", flush=True)

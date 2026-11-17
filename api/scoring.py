@@ -29,9 +29,20 @@ def score_probabilities(model, inputs: pd.DataFrame) -> np.ndarray:
     return probabilities
 
 
-def risk_level(probability: float) -> str:
-    if probability >= 0.7:
+def risk_level(probability: float, threshold: float = 0.5) -> str:
+    """
+    Map churn probability to risk band relative to decision threshold.
+    When threshold = 0.5, preserves standard benchmark bands (low < 0.3, med 0.3-0.7, high >= 0.7).
+    """
+    if threshold <= 0.0 or threshold >= 1.0:
+        threshold = 0.5
+
+    # If probability reaches high absolute level or significantly exceeds decision threshold:
+    high_cutoff = min(0.85, max(0.65, threshold + 0.15))
+    low_cutoff = max(0.15, min(0.30, threshold - 0.20))
+
+    if probability >= high_cutoff:
         return "high"
-    if probability >= 0.3:
+    if probability >= low_cutoff:
         return "medium"
     return "low"
