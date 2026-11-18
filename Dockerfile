@@ -40,6 +40,7 @@ COPY models/ ./models/
 COPY results/ ./results/
 COPY preprocessing/ ./preprocessing/
 COPY utils/ ./utils/
+COPY artifacts/ ./artifacts/
 COPY api.py main.py ./
 
 # Copy built frontend from Stage 1 into frontend/dist

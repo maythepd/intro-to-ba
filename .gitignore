@@ -1,7 +1,11 @@
 __pycache__/
 *.joblib
+!artifacts/module5/preprocessor.joblib
+!artifacts/segmentation/cluster_bundle.joblib
 *.db
 *.env
 eda/
-data/
+data/*
+!data/official/
+!data/full_bank_data.csv
 node_modules/
