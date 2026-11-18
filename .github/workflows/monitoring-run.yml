@@ -1,0 +1,53 @@
+name: Run deployed model monitoring
+on:
+  schedule:
+    - cron: '20 1 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Run recent windows or generate the isolated study replay
+        type: choice
+        options: [monitoring, demo]
+        default: monitoring
+permissions:
+  contents: read
+concurrency:
+  group: deployed-model-monitoring
+  cancel-in-progress: false
+jobs:
+  run-monitoring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      MONITORING_API_URL: ${{ vars.MONITORING_API_URL }}
+      MONITORING_ADMIN_TOKEN: ${{ secrets.MONITORING_ADMIN_TOKEN }}
+      MODE: ${{ inputs.mode || 'monitoring' }}
+    steps:
+      - name: Evaluate closed windows on the deployed API
+        shell: python
+        run: |
+          import json, os, time, urllib.error, urllib.request
+          origin = os.environ.get('MONITORING_API_URL', '').rstrip('/')
+          token = os.environ.get('MONITORING_ADMIN_TOKEN', '')
+          if not origin.startswith('https://') or not token:
+              raise SystemExit('Configure MONITORING_API_URL and MONITORING_ADMIN_TOKEN in repository settings')
+          demo = os.environ.get('MODE') == 'demo'
+          path = '/api/monitoring/demo' if demo else '/api/monitoring/runs'
+          payloads = [{}] if demo else [{'source':source,'days':2} for source in ('live','snapshot_batch')]
+          for payload in payloads:
+              request = urllib.request.Request(origin + path, data=json.dumps(payload).encode(),
+                  headers={'Authorization':'Bearer ' + token, 'Content-Type':'application/json'}, method='POST')
+              for attempt in range(3):
+                  try:
+                      with urllib.request.urlopen(request, timeout=150) as response:
+                          result = json.load(response)
+                      rows = result.get('items', result.get('runs', []))
+                      print(json.dumps([{'id':row['id'],'status':row['status']} for row in rows]))
+                      break
+                  except urllib.error.HTTPError as error:
+                      if error.code < 500 or attempt == 2:
+                          raise SystemExit('Monitoring API returned HTTP ' + str(error.code))
+                  except (TimeoutError, urllib.error.URLError):
+                      if attempt == 2:
+                          raise SystemExit('Monitoring API could not be reached')
+                  time.sleep(10)

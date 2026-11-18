@@ -18,6 +18,7 @@ from model_development.config import load_unified_config
 from model_development.preprocessing.etl import BankDataETL
 from model_development.preprocessing.pipeline import FeatureEngineeringPipeline
 from model_development.preprocessing.splitting import DataSplitter
+from monitoring.baseline import build_reference
 
 DATASET = "maythepd/full-dataset-intro2ba/versions/3"
 
@@ -70,6 +71,7 @@ def prepare(data: pd.DataFrame, *, checkpoint: Path = module5.CHECKPOINT_PATH,
                   "random_state": cfg.random_state},
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    reference = build_reference(split.train_df, preprocessor, classifier, metrics)
     # Publish only a fully validated export. The manifest is written last.
     output = preprocessor_path.parent
     output.mkdir(parents=True, exist_ok=True)
@@ -81,9 +83,16 @@ def prepare(data: pd.DataFrame, *, checkpoint: Path = module5.CHECKPOINT_PATH,
         data.to_csv(staging / "customers.csv", index=False)
         manifest["preprocessor_sha256"] = module5.file_hash(staging / "preprocessor.joblib")
         manifest["data_sha256"] = module5.file_hash(staging / "customers.csv")
+        reference.update(checkpoint_sha256=manifest["checkpoint_sha256"], preprocessor_sha256=manifest["preprocessor_sha256"])
+        (staging / "monitoring_reference.json").write_text(json.dumps(reference, allow_nan=False), encoding="utf-8")
+        split.test_df.to_csv(staging / "monitoring_replay.csv", index=False)
+        manifest["monitoring_reference_sha256"] = module5.file_hash(staging / "monitoring_reference.json")
+        manifest["monitoring_replay_sha256"] = module5.file_hash(staging / "monitoring_replay.csv")
         (staging / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         (staging / "preprocessor.joblib").replace(preprocessor_path)
         (staging / "customers.csv").replace(data_path)
+        (staging / "monitoring_reference.json").replace(output / "monitoring_reference.json")
+        (staging / "monitoring_replay.csv").replace(output / "monitoring_replay.csv")
         (staging / "manifest.json").replace(manifest_path)
     return manifest
 

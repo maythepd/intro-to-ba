@@ -48,6 +48,10 @@ export interface PredictionResult {
   risk_level: RiskLevel;
   model_name: string;
   signals: PredictionSignal[];
+  prediction_id?: string | null;
+  prediction_timestamp?: string | null;
+  outcome_horizon_end?: string | null;
+  monitoring_recorded?: boolean;
 }
 
 export interface RiskSummary {
@@ -71,6 +75,43 @@ export interface HealthResponse {
 }
 
 export type GenericRecord = Record<string, unknown>;
+
+export type MonitoringSource = "live" | "snapshot_batch" | "study_replay";
+export interface DistributionBin { bin: string; reference: number; current: number }
+export interface DriftFeature {
+  name: string; kind: string; method: string; score: number | null; status: string;
+  valid_samples: number; missing_rate: number; missing_excess: number; new_category_rate: number;
+  distribution: DistributionBin[];
+}
+export interface MonitoringAlert {
+  id: string; rule: string; status: string; action: string; evidence: Record<string, unknown>;
+}
+export interface PerformanceReport {
+  status: string; sample_count: number; mature_samples: number; labeled_samples: number;
+  label_coverage: number; positive_samples: number; negative_samples: number;
+  metrics: { roc_auc: number | null; average_precision: number | null; precision: number; recall: number; f1: number; confusion_matrix: number[][] } | null;
+  baseline: Record<string, number>; threshold: number; trigger_candidate: boolean; drops: Record<string, number>;
+}
+export interface MonitoringRun {
+  id: string; model_id: string; source: MonitoringSource; scenario: string;
+  window_start: string; window_end: string; computed_at: string; status: string; sample_count: number;
+  data_kind?: string; reference_sha256?: string;
+  drift: { status: string; sample_count: number; minimum_samples: number; critical_share: number | null; trigger_candidate: boolean; features?: DriftFeature[] };
+  prediction_drift?: DriftFeature | null; performance: PerformanceReport;
+  quality: { request_count: number; valid_requests: number; invalid_requests: number; error_rate: number; max_missing_excess: number; trigger_candidate: boolean };
+  latency?: { p50_ms: number | null; p95_ms: number | null };
+  segments?: { status: string; coverage: number; sample_count?: number; model_id?: string; distribution?: DistributionBin[]; note?: string };
+  consecutive_candidates?: Record<string, number>; alerts: MonitoringAlert[];
+  policy?: MonitoringSummary["policy"];
+}
+export interface MonitoringSummary {
+  storage_ready: boolean; storage_backend: string; storage_persistent: boolean; model_id: string | null;
+  reference_available: boolean; last_ingest_error: string | null; last_error_at: string | null; last_write_at: string | null;
+  source: MonitoringSource; scenario: string; window_hours: number; outcome_horizon_days: number; minimum_drift_samples: number;
+  latest: MonitoringRun | null; history: MonitoringRun[]; models: Array<{ id: string; name: string; created_at: string }>;
+  drift_available: boolean; performance_tracking_available: boolean; stale: boolean;
+  policy: { min_labeled_samples: number; min_class_samples: number; min_label_coverage: number; consecutive_windows: number; psi_critical: number; js_critical: number; performance_drop: number; quality_error_rate: number };
+}
 
 export type ClusterAlgorithm = "kmeans" | "hierarchical";
 export interface ClusterProfile {
@@ -185,7 +226,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 }
 
 export const api = {
-  health: (signal?: AbortSignal) => request<HealthResponse>("/health", { signal, timeoutMs: 6000 }),
+  health: (signal?: AbortSignal) => request<HealthResponse>("/health", { signal, timeoutMs: 60000 }),
   listCustomers: (params: { search?: string; limit?: number }, signal?: AbortSignal) => {
     const q = new URLSearchParams();
     if (params.search) q.set("search", params.search);
@@ -209,7 +250,13 @@ export const api = {
   predictSegment: (payload: CustomerFeatures, algorithm: ClusterAlgorithm, signal?: AbortSignal) =>
     request<SegmentPrediction>(`/api/segments/predict?algorithm=${encodeURIComponent(algorithm)}`,
       { method: "POST", body: payload, signal }),
-  monitoring: (signal?: AbortSignal) => request<GenericRecord>("/api/monitoring", { signal }),
+  monitoring: (params: { source: MonitoringSource; scenario?: string; modelId?: string; days?: number }, signal?: AbortSignal) => {
+    const q = new URLSearchParams({ source: params.source, days: String(params.days ?? 30) });
+    if (params.scenario) q.set("scenario", params.scenario);
+    if (params.modelId) q.set("model_id", params.modelId);
+    return request<MonitoringSummary>(`/api/monitoring?${q}`, { signal, timeoutMs: 90000 });
+  },
+  monitoringRun: (id: string, signal?: AbortSignal) => request<MonitoringRun>(`/api/monitoring/runs/${encodeURIComponent(id)}`, { signal, timeoutMs: 60000 }),
 };
 
 export function normalizeCustomerList(data: CustomerFeatures[] | { items: CustomerFeatures[] }): CustomerFeatures[] {
