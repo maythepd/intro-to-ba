@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 import os
+import pathlib
 from pathlib import Path
+import sys
+
+# Enable cross-platform unpickling of WindowsPath objects on Linux/Render
+if sys.platform != "win32":
+    pathlib.WindowsPath = pathlib.PosixPath
 
 import joblib
 import numpy as np

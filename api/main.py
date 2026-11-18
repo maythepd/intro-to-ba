@@ -1,6 +1,7 @@
 """Bank customer churn inference and staff lookup API."""
 from __future__ import annotations
 from contextlib import asynccontextmanager
+import pathlib
 from pathlib import Path
 from datetime import datetime, timezone
 from threading import Lock, Thread
@@ -10,6 +11,10 @@ import sys
 import time
 import numpy as np
 import pandas as pd
+
+# Fix cross-platform unpickling of WindowsPath objects on Linux/Render
+if sys.platform != "win32":
+    pathlib.WindowsPath = pathlib.PosixPath
 
 # Silence Windows asyncio ProactorEventLoop ConnectionResetError (WinError 10054)
 if sys.platform == "win32":
@@ -71,6 +76,21 @@ class CustomerInput(BaseModel):
     model_name: str | None = None
     decision_threshold: float | None = None
 
+def _get_rf_model(app: FastAPI):
+    """Lazy-load Random Forest model on demand to stay well within Render Free 512MB RAM limit."""
+    rf_inst = getattr(app.state, "rf_model", None)
+    if rf_inst is None:
+        rf_path = Path(__file__).resolve().parent.parent / "models/saved/rf_churn.pkl"
+        if rf_path.is_file():
+            try:
+                import joblib
+                rf_inst = joblib.load(rf_path)
+                app.state.rf_model = rf_inst
+                print("[INFO] Random Forest churn model loaded on-demand")
+            except Exception as exc:
+                print(f"[WARN] Failed to load Random Forest model: {exc}")
+    return rf_inst
+
 def compute_batch_risk(
     app: FastAPI,
     include_predictions: bool = False,
@@ -107,7 +127,7 @@ def compute_batch_risk(
 
         try:
             if m_key in ("rf", "random_forest"):
-                rf_inst = getattr(app.state, "rf_model", None)
+                rf_inst = _get_rf_model(app)
                 if rf_inst is None:
                     raise HTTPException(503, "Random Forest model checkpoint not loaded (models/saved/rf_churn.pkl)")
                 transformed = xgb_model.transform(customers)
@@ -174,7 +194,11 @@ def compute_batch_risk(
             "risk_thresholds": {"low_cutoff": round(low_th, 2), "high_cutoff": round(high_th, 2), "decision_threshold": th},
             "scored_at": datetime.now(timezone.utc).isoformat(),
         }
-        batch_cache[cache_key] = {"summary": summary, "predictions": scores}
+        if len(batch_cache) > 4:
+            batch_cache.clear()
+            import gc
+            gc.collect()
+        batch_cache[cache_key] = {"summary": summary, "predictions": scores if include_predictions else []}
         app.state.risk_summary = summary
         app.state.inference_count = getattr(app.state, "inference_count", 0) + len(customers)
         result = dict(summary, cached=False)
@@ -209,23 +233,14 @@ async def lifespan(app: FastAPI):
             pass
 
     def _load_all_artifacts():
+        import gc
         try:
             app.state.churn_model = module5.load()
             print("[INFO] Module 5 XGBoost churn model loaded successfully")
         except Exception as exc:
             print(f"[WARN] Failed to load Module 5 churn model: {exc}")
 
-        # Load Random Forest checkpoint for multi-model serving
-        rf_path = Path(__file__).resolve().parent.parent / "models/saved/rf_churn.pkl"
-        if rf_path.is_file():
-            try:
-                import joblib
-                app.state.rf_model = joblib.load(rf_path)
-                print("[INFO] Random Forest churn model loaded for multi-model inference")
-            except Exception as exc:
-                print(f"[WARN] Failed to load Random Forest model: {exc}")
-
-        # Load Logistic Regression checkpoint for multi-model serving
+        # Load Logistic Regression checkpoint for multi-model serving (lightweight: ~2MB RAM)
         lr_path = Path(__file__).resolve().parent.parent / "models/saved/lr_churn.pkl"
         if lr_path.is_file():
             try:
@@ -235,10 +250,18 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 print(f"[WARN] Failed to load Logistic Regression model: {exc}")
 
+        # Note: Random Forest (~83MB RAM) is loaded lazily on demand via _get_rf_model()
+        # to guarantee the container never exceeds Render Free 512MB RAM limit.
+
         try:
             if app.state.churn_model is not None:
-                app.state.customers = app.state.churn_model.profiles(pd.read_csv(DATA_PATH))
-                print("[INFO] Customer profiles materialized successfully")
+                df_cust = pd.read_csv(DATA_PATH)
+                profiles = app.state.churn_model.profiles(df_cust)
+                float_cols = profiles.select_dtypes(include=["float64"]).columns
+                if len(float_cols) > 0:
+                    profiles[float_cols] = profiles[float_cols].astype("float32")
+                app.state.customers = profiles
+                print("[INFO] Customer profiles materialized and memory-optimized successfully")
         except Exception as exc:
             print(f"[WARN] Failed to materialize customer profiles: {exc}")
 
@@ -247,6 +270,9 @@ async def lifespan(app: FastAPI):
             print("[INFO] Segmentation model loaded successfully")
         except Exception as exc:
             print(f"[WARN] Failed to load segmentation model: {exc}")
+
+        gc.collect()
+        print("[INFO] All backend models and artifacts initialized; GC memory reclaimed")
 
     # Launch background thread for heavy artifact deserialization so uvicorn binds port instantly
     Thread(target=_load_all_artifacts, daemon=True).start()
@@ -377,7 +403,7 @@ def predict(
                   if isinstance(xgb_model, module5.Module5Model) else pd.DataFrame([p.model_dump()]))
 
         if m_key in ("rf", "random_forest"):
-            rf_inst = getattr(app.state, "rf_model", None)
+            rf_inst = _get_rf_model(app)
             if rf_inst is None:
                 raise HTTPException(503, "Random Forest model checkpoint not loaded (models/saved/rf_churn.pkl)")
             transformed = xgb_model.transform(inputs)
