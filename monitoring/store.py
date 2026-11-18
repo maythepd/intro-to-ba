@@ -161,8 +161,8 @@ class Store:
         with self.engine.begin() as connection:
             for offset in range(0, len(rows), 250):
                 result = connection.execute(self.insert(events).values(rows[offset:offset + 250])
-                                            .on_conflict_do_nothing(index_elements=["id"]))
-                inserted += max(result.rowcount, 0)
+                                            .on_conflict_do_nothing(index_elements=["id"]).returning(events.c.id))
+                inserted += len(result.scalars().all())
         return inserted
 
     def add_outcomes(self, rows: list[dict], *, as_of: str | None = None) -> int:
@@ -193,8 +193,8 @@ class Store:
             inserted = 0
             for offset in range(0, len(normalized), 250):
                 result = connection.execute(self.insert(outcomes).values(normalized[offset:offset + 250])
-                                            .on_conflict_do_nothing(index_elements=["event_id"]))
-                inserted += max(result.rowcount, 0)
+                                            .on_conflict_do_nothing(index_elements=["event_id"]).returning(outcomes.c.event_id))
+                inserted += len(result.scalars().all())
             return inserted
 
     def window_events(self, model_id: str, source: str, scenario: str, start: str, end: str, limit: int) -> list[dict]:
