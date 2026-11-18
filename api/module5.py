@@ -11,11 +11,15 @@ import joblib
 import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT / ".env", override=False)
 CHECKPOINT_PATH = Path(os.getenv("MODULE5_CHECKPOINT_PATH", str(ROOT / "model_development/models/saved/xgboost_churn.json")))
 PREPROCESSOR_PATH = Path(os.getenv("MODULE5_PREPROCESSOR_PATH", str(ROOT / "artifacts/module5/preprocessor.joblib")))
 MANIFEST_PATH = Path(os.getenv("MODULE5_MANIFEST_PATH", str(ROOT / "artifacts/module5/manifest.json")))
+REFERENCE_PATH = Path(os.getenv("MONITORING_REFERENCE_PATH", str(PREPROCESSOR_PATH.parent / "monitoring_reference.json")))
+REPLAY_PATH = Path(os.getenv("MONITORING_REPLAY_PATH", str(PREPROCESSOR_PATH.parent / "monitoring_replay.csv")))
 DATA_PATH = Path(os.getenv("CUSTOMERS_CSV_PATH", str(ROOT / "data/official/module5_customer_features.csv")))
 CONFIG_PATH = ROOT / "model_development/config/config.yaml"
 REPORT_PATH = ROOT / "model_development/results/comparison/model_comparison_metrics.csv"

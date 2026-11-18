@@ -137,4 +137,10 @@ curl -X POST 'http://localhost:8000/api/predict/batch?force=true'
 - `GET /api/dashboard/risk-summary` returns the most recent successful batch-scoring counts and timestamp. It returns HTTP **503** before the first completed run, or when the model or official data is unavailable. The UI shows a **Run batch scoring** button rather than fabricating values.
 - Risk thresholds are **Low** p < 0.30, **Medium** 0.30 ≤ p < 0.70, **High** p ≥ 0.70. **Customers Requiring Attention = High count**, not Medium+High. These thresholds match single-customer inference and are heuristic business cutoffs, not externally validated intervention rules.
 - Both single and batch inference share `api/scoring.py`; the fitted feature list and order are preserved. True `churn` labels are never used as model features, and unexpected model outputs fail closed. If any batch fails, the previously completed snapshot remains cached; there is no partially updated distribution.
-- Batch results are stored **only in the API process's memory** and reset upon restart. They are computed by the saved Module 5 checkpoint on the study snapshot. Persistent versioned scoring and ongoing performance monitoring are tracked in the Module 7 plan.
+- The dashboard's batch cache resets on restart. Module 7 also records deduplicated, versioned monitoring observations in PostgreSQL; repeated scoring of the same snapshot does not become new incoming data.
+
+## Module 7 monitoring
+
+The `/monitoring` dashboard now uses measured reference/current distributions, labeled window metrics and persistent alert history. It distinguishes incoming API requests, fixed snapshot batches and controlled study replay. Configure `DATABASE_URL` and `MONITORING_ADMIN_TOKEN`, run `python -m monitoring.migrate`, and generate the course demo with `python -m monitoring.simulate`.
+
+See [the complete monitoring guide](docs/module-7-monitoring.md) for rules, delayed-label import, PostgreSQL/RLS setup, API/report downloads, scheduler installation, retention and retraining actions. The [submission notebook](notebooks/module7_monitoring.ipynb) explains the controlled scenarios. Monitoring does not fill missing labels or turn a simulated time series into a live bank measurement.

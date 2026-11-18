@@ -2,10 +2,13 @@
 from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import perf_counter
 from datetime import datetime, timezone
 from threading import Lock
 from typing import Literal
 import os
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 import pandas as pd
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from api.scoring import score_probabilities, risk_level
@@ -14,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from api import module5, segmentation_service
+from api.monitoring_routes import router as monitoring_router
+from monitoring.service import MonitoringService
 
 DATA_PATH = module5.DATA_PATH
 SEGMENTATION_DATA_PATH = Path(os.environ.get("SEGMENTATION_CUSTOMERS_CSV_PATH", "data/official/customer_features.csv"))
@@ -52,15 +57,35 @@ async def lifespan(app: FastAPI):
     app.state.risk_summary = None
     app.state.batch_predictions = None
     app.state.batch_lock = Lock()
-    yield
+    app.state.monitoring = MonitoringService(app.state.churn_model, segmentation=app.state.segmentation)
+    try:
+        yield
+    finally:
+        app.state.monitoring.close()
 
 app = FastAPI(title="BaBank Analytics API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[x.strip() for x in os.environ.get("CORS_ORIGINS","http://localhost:5173").split(",") if x.strip()],
     allow_methods=["GET","POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+app.include_router(monitoring_router)
+
+
+@app.middleware("http")
+async def monitor_prediction_errors(request, call_next):
+    started = perf_counter()
+    response = await call_next(request)
+    service = getattr(request.app.state, "monitoring", None)
+    if (request.method == "POST" and request.url.path == "/api/predict" and response.status_code >= 400
+            and service is not None and service.model is request.app.state.churn_model):
+        # Sync database work stays off the event loop.
+        from starlette.concurrency import run_in_threadpool
+        await run_in_threadpool(service.record_failure, "validation_error" if response.status_code == 422 else "inference_error",
+                                (perf_counter() - started) * 1000)
+    return response
 
 @app.get("/", include_in_schema=False)
 def root():
@@ -74,7 +99,8 @@ def health():
             "model_loaded":model is not None,"customers_loaded":app.state.customers is not None,
             "segmentation_loaded":app.state.segmentation is not None,
             "model_source":"module5_checkpoint", "checkpoint_sha256":metadata.get("checkpoint_sha256"),
-            "feature_count":len(metadata.get("features", [])), "study_reproduced":metadata.get("study_reproduced", False)}
+            "feature_count":len(metadata.get("features", [])), "study_reproduced":metadata.get("study_reproduced", False),
+            "monitoring":app.state.monitoring.status()}
 
 def signals(p: CustomerInput) -> list[dict[str,str]]:
     result=[]
@@ -125,6 +151,7 @@ def predict_batch(
             raise HTTPException(503, "Official dataset is missing columns required by the prediction API")
 
         scores = []
+        telemetry_chunks = []
         counts = {"low": 0, "medium": 0, "high": 0}
         for start in range(0, len(customers), batch_size):
             chunk = customers.iloc[start:start + batch_size]
@@ -134,6 +161,7 @@ def predict_batch(
             except ValidationError as exc:
                 raise HTTPException(503, "Official customer features failed input validation") from exc
             try:
+                started = perf_counter()
                 probabilities = score_probabilities(model, chunk)
             except Exception as exc:
                 raise HTTPException(500, "Batch scoring failed: verify fitted model compatibility") from exc
@@ -147,8 +175,20 @@ def predict_batch(
                     "predicted_churn": p >= 0.5,
                     "risk_level": level,
                 })
+            telemetry_chunks.append((chunk, probabilities, (perf_counter() - started) * 1000 / len(chunk)))
         if sum(counts.values()) != len(customers):
             raise HTTPException(500, "Batch scoring was incomplete")
+        # Log only after every chunk succeeds, using one atomic, idempotent batch.
+        service = app.state.monitoring
+        if service.model is model and service.store:
+            try:
+                telemetry = []
+                for chunk, probabilities, elapsed in telemetry_chunks:
+                    telemetry.extend(service.event_rows(chunk, probabilities, source="snapshot_batch",
+                        namespace="snapshot:" + model.manifest["data_sha256"], latency_ms=elapsed))
+                service.store.append_events(telemetry)
+            except Exception as exc:
+                service.failed(exc)
         summary = {
             "status": "scored",
             "source": "Committed Module 5 XGBoost checkpoint on the Module 5 customer feature table",
@@ -185,6 +225,7 @@ def dashboard_risk_summary():
 
 @app.post("/api/predict")
 def predict(p: CustomerInput):
+    started = perf_counter()
     model = require_churn_model()
     try:
         inputs = (module5.prediction_inputs(model, p.model_dump(), app.state.customers)
@@ -200,9 +241,17 @@ def predict(p: CustomerInput):
     if isinstance(model, module5.Module5Model):
         profile = model.profiles(inputs).iloc[0].to_dict()
         signal_input = CustomerInput.model_validate({**profile, "customer_id":p.customer_id})
+    service = app.state.monitoring
+    telemetry = (service.record(inputs, [prob], source="live", customer_ids=[p.customer_id],
+                                    latency_ms=(perf_counter() - started) * 1000)[0]
+                     if service.model is model else None)
     return {"customer_id": str(p.customer_id or ""),"churn_probability":prob,
             "predicted_churn":prob>=.5,"risk_level":level,"model_name":"XGBoost (Module 5)",
-            "model_source":"module5_checkpoint", "signals":signals(signal_input)}
+            "model_source":"module5_checkpoint", "signals":signals(signal_input),
+            "prediction_id":telemetry["prediction_id"] if telemetry else None,
+            "prediction_timestamp":telemetry["prediction_timestamp"] if telemetry else None,
+            "outcome_horizon_end":telemetry["outcome_horizon_end"] if telemetry else None,
+            "monitoring_recorded":telemetry is not None}
 
 @app.get("/api/customers")
 def customers(search: str="",limit: int=Query(20,ge=1,le=100)):
@@ -269,12 +318,6 @@ def metrics():
         "study_reproduced": getattr(app.state.churn_model, "manifest", {}).get("study_reproduced", False),
         "checkpoint_sha256": getattr(app.state.churn_model, "manifest", {}).get("checkpoint_sha256"),
     }
-
-@app.get("/api/monitoring")
-def monitoring():
-    return {"model_loaded":app.state.churn_model is not None,
-            "predictions_this_process":app.state.inference_count,"drift_available":False,
-            "performance_tracking_available":False}
 
 def require_segmentation():
     bundle = app.state.segmentation

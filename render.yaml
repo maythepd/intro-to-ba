@@ -3,9 +3,19 @@ services:
     name: babank-api
     runtime: python
     buildCommand: pip install -r requirements.txt && python -m api.prepare_module5 --download && python -m api.official_data --download && python -m api.segmentation_service
-    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    startCommand: python -m monitoring.migrate && uvicorn api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: CORS_ORIGINS
         sync: false
       - key: OFFICIAL_DATA_DIR
         value: data/official/raw
+      - key: DATABASE_URL
+        sync: false
+      - key: MONITORING_ADMIN_TOKEN
+        sync: false
+      - key: MONITORING_DATABASE_ROLE
+        value: bank_monitoring_writer
+      - key: ENABLE_MONITORING_DEMO
+        value: "false"
+      - key: SUPABASE_URL
+        value: https://exifwzbacchvvtzckxcw.supabase.co
