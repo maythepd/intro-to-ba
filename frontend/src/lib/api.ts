@@ -254,7 +254,8 @@ export class ApiTimeoutError extends Error {
 
 const RAW_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ?? "";
 export const API_BASE_URL = RAW_BASE.replace(/\/+$/, "");
-export const isApiConfigured = API_BASE_URL.length > 0;
+// In browser or unified production server, same-origin relative paths (/api/...) are always valid.
+export const isApiConfigured = API_BASE_URL.length > 0 || typeof window !== "undefined";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 

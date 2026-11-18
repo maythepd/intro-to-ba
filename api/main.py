@@ -37,12 +37,13 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from api.scoring import score_probabilities, risk_level
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, FileResponse
 from pydantic import BaseModel, Field
 from api import module5, segmentation_service, artifacts_inspector
 
 DATA_PATH = module5.DATA_PATH
 SEGMENTATION_DATA_PATH = Path(os.environ.get("SEGMENTATION_CUSTOMERS_CSV_PATH", "data/official/customer_features.csv"))
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend/dist"
 
 class CustomerInput(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
@@ -274,6 +275,9 @@ async def telemetry_middleware(request, call_next):
 
 @app.get("/", include_in_schema=False)
 def root():
+    index_file = FRONTEND_DIST / "index.html"
+    if index_file.is_file():
+        return FileResponse(index_file)
     return RedirectResponse(url="/docs")
 
 @app.get("/health")
@@ -534,10 +538,8 @@ def predict_segments(payload: CustomerInput, algorithm: Literal["kmeans", "hiera
 
 
 # Serve static production frontend when built (for single-container cloud deploy or static serving)
-FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend/dist"
 if FRONTEND_DIST.is_dir():
     from fastapi.staticfiles import StaticFiles
-    from fastapi.responses import FileResponse
 
     assets_dir = FRONTEND_DIST / "assets"
     if assets_dir.is_dir():
