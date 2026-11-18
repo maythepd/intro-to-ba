@@ -81,6 +81,20 @@ def main():
         raise SystemExit("Review required: API rootDir is not repository root")
     if frontend.get("rootDir") not in (None, "", "./", "frontend", "frontend/"):
         raise SystemExit("Review required: unexpected frontend rootDir; no configuration changed")
+    if backend["type"] != "web_service" or frontend["type"] != "static_site":
+        raise SystemExit("Review required: unexpected BaBank service types; no configuration changed")
+    routes = []
+    cursor = None
+    while True:
+        query = urllib.parse.urlencode({"limit":100, **({"cursor":cursor} if cursor else {})})
+        page = request(f"/services/{frontend['id']}/routes?" + query)
+        routes.extend(item.get("route", item) for item in page)
+        if len(page) < 100:
+            break
+        cursor = page[-1]["cursor"]
+    catch_all = [route for route in routes if route["source"] == "/*"]
+    if any(route["type"] != "rewrite" or route["destination"] != "/index.html" for route in catch_all):
+        raise SystemExit("Review required: an existing catch-all route conflicts with the React SPA; no configuration changed")
     commands = {"buildCommand":blueprint["buildCommand"], "startCommand":blueprint["startCommand"]}
     request("/services/" + backend["id"], method="PATCH", payload={"serviceDetails":{"envSpecificDetails":commands}})
     def set_env(service, key, value):
@@ -103,7 +117,10 @@ def main():
         raise SystemExit("Review required: unexpected frontend rootDir")
     request("/services/" + frontend["id"], method="PATCH", payload={"serviceDetails":{"buildCommand":build, "publishPath":publish}})
     set_env(frontend, "VITE_API_BASE_URL", API_URL)
-    output = {"updated_services":[service["id"] for service in targets], "secret_values":"not displayed"}
+    if not catch_all:
+        request(f"/services/{frontend['id']}/routes", method="POST",
+                payload={"type":"rewrite", "source":"/*", "destination":"/index.html"})
+    output = {"updated_services":[service["id"] for service in targets], "spa_rewrite":"configured", "secret_values":"not displayed"}
     if args.deploy:
         output["deploys"] = [{"service_id":service["id"], "deploy_id":request(f"/services/{service['id']}/deploys",
             method="POST", payload={"clearCache":"do_not_clear", "commitId":args.commit})["id"]} for service in targets]

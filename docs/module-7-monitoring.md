@@ -126,6 +126,8 @@ Use `notebooks/module7_monitoring.ipynb` for the explanatory notebook. Download 
 
 `render.yaml` prepares baseline/replay artifacts during the build and runs migrations before Uvicorn at startup. Manually managed Render services need the updated commands and environment values copied into their service settings. Deploy both API and frontend; the public frontend needs only `VITE_API_BASE_URL`.
 
+The React static site also needs a `/*` -> `/index.html` rewrite for direct visits or refreshes on `/monitoring`. The operator helper `python tools/configure_render_monitoring.py --apply --deploy --commit <demo-sha> --enable-demo` configures the existing two services and adds this rule when absent, preserving other rules. It reads `RENDER_API_KEY` only from the local `.env` and never uploads that key. Without `--apply`, it only inspects the services. See [Render's rewrite rules](https://render.com/docs/redirects-rewrites).
+
 The scheduler calls the deployed API for `live` and `snapshot_batch`, daily at 01:20 UTC (08:20 Vietnam/Thailand time). GitHub schedules execute from the repository's **default branch**. The user-approved installation places only `.github/workflows/monitoring-run.yml` on the fork's `main`; application code remains on `demo`. Set repository variable `MONITORING_API_URL` and encrypted secret `MONITORING_ADMIN_TOKEN`. The optional setup command is:
 
 ```bash
