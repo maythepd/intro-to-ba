@@ -39,6 +39,21 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
+def match_file_hash(path: Path, expected: str | None) -> bool:
+    if not path.is_file() or not expected:
+        return False
+    actual = file_hash(path)
+    if actual == expected:
+        return True
+    # Handle cross-platform CRLF / LF line-ending divergence for text/CSV datasets
+    if path.suffix.lower() in (".csv", ".json", ".txt"):
+        data = path.read_bytes()
+        crlf_hash = sha256(data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")).hexdigest()
+        lf_hash = sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+        return expected in (crlf_hash, lf_hash)
+    return False
+
+
 @dataclass
 class Module5Model:
     classifier: XGBClassifier
@@ -89,7 +104,7 @@ def load() -> Module5Model | None:
         ("data_sha256", DATA_PATH),
     )
     for key, path in critical_artifacts:
-        if manifest.get(key) != file_hash(path):
+        if not match_file_hash(path, manifest.get(key)):
             raise ValueError(f"Module 5 artifact mismatch: {key}. Run python -m api.prepare_module5")
     for key, path in (("config_sha256", CONFIG_PATH), ("report_sha256", REPORT_PATH)):
         if path.is_file() and manifest.get(key) != file_hash(path):

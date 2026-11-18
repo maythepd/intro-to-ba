@@ -110,6 +110,21 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def match_sha256(path, expected):
+    p = Path(path)
+    if not p.is_file() or not expected:
+        return False
+    actual = sha256(p)
+    if actual == expected:
+        return True
+    if p.suffix.lower() in (".csv", ".json", ".txt"):
+        data = p.read_bytes()
+        crlf_hash = hashlib.sha256(data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")).hexdigest()
+        lf_hash = hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+        return expected in (crlf_hash, lf_hash)
+    return False
+
+
 def train(data_path=DATA_PATH, model_dir=MODEL_DIR, clusters=4, hier_sample=1500):
     data_path, model_dir = Path(data_path), Path(model_dir)
     if not data_path.is_file():
@@ -181,7 +196,7 @@ def load(data_path=DATA_PATH, model_dir=MODEL_DIR):
     if not path.is_file() or not Path(data_path).is_file():
         return None
     bundle = joblib.load(path)  # Load only trusted artifacts built by this project.
-    if bundle.get("version") != 1 or bundle.get("data_sha256") != sha256(data_path):
+    if bundle.get("version") != 1 or not match_sha256(data_path, bundle.get("data_sha256")):
         return None
     return bundle
 
