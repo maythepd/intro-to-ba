@@ -513,8 +513,8 @@ Adjusting decision thresholds $\tau$ or changing Optuna objective metrics traver
 
 Computes individualized observation weights $w_i$:
 $$w_i = w_{\text{recency}}(i) \cdot w_{\text{value}}(i) \cdot w_{\text{churn}}(i)$$
-1. **Exponential Recency Decay:** Prioritizes customers with recent activity signals while older observations decay:
-   $$w_{\text{recency}}(i) = \exp\left(-\frac{\ln(2)}{t_{1/2}} \cdot \text{recency\_days}\_i\right)$$
+1. **Exponential Recency Decay:** Prioritizes customers with recent activity signals (`recency_days`) while older observations decay:
+   $$w_{\text{recency}}(i) = \exp\left(-\frac{\ln(2)}{t_{1/2}} \cdot \text{recency}_i\right)$$
 2. **Financial Value Weighting:** Heavily penalizes churning high-balance customers who inflict significant CLV loss:
    $$w_{\text{value}}(i) = 1.0 + \alpha \cdot \ln\left(1 + \frac{\max(\text{balance}_i, 0)}{\text{median}(\text{balance}^+)}\right)$$
 3. **Churn Multiplier:** Scales minority positive class penalization during tree splits or loss calculation.
