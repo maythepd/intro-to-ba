@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, timezone
-from threading import Lock
+from threading import Lock, Thread
 from typing import Literal
 import os
 import sys
@@ -208,41 +208,48 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-    try:
-        app.state.churn_model = module5.load()
-    except Exception as exc:
-        print(f"[WARN] Failed to load Module 5 churn model: {exc}")
-
-    # Load Random Forest checkpoint for multi-model serving
-    rf_path = Path(__file__).resolve().parent.parent / "models/saved/rf_churn.pkl"
-    if rf_path.is_file():
+    def _load_all_artifacts():
         try:
-            import joblib
-            app.state.rf_model = joblib.load(rf_path)
-            print("[INFO] Random Forest churn model loaded for multi-model inference")
+            app.state.churn_model = module5.load()
+            print("[INFO] Module 5 XGBoost churn model loaded successfully")
         except Exception as exc:
-            print(f"[WARN] Failed to load Random Forest model: {exc}")
+            print(f"[WARN] Failed to load Module 5 churn model: {exc}")
 
-    # Load Logistic Regression checkpoint for multi-model serving
-    lr_path = Path(__file__).resolve().parent.parent / "models/saved/lr_churn.pkl"
-    if lr_path.is_file():
+        # Load Random Forest checkpoint for multi-model serving
+        rf_path = Path(__file__).resolve().parent.parent / "models/saved/rf_churn.pkl"
+        if rf_path.is_file():
+            try:
+                import joblib
+                app.state.rf_model = joblib.load(rf_path)
+                print("[INFO] Random Forest churn model loaded for multi-model inference")
+            except Exception as exc:
+                print(f"[WARN] Failed to load Random Forest model: {exc}")
+
+        # Load Logistic Regression checkpoint for multi-model serving
+        lr_path = Path(__file__).resolve().parent.parent / "models/saved/lr_churn.pkl"
+        if lr_path.is_file():
+            try:
+                import joblib
+                app.state.lr_model = joblib.load(lr_path)
+                print("[INFO] Logistic Regression churn model loaded for multi-model inference")
+            except Exception as exc:
+                print(f"[WARN] Failed to load Logistic Regression model: {exc}")
+
         try:
-            import joblib
-            app.state.lr_model = joblib.load(lr_path)
-            print("[INFO] Logistic Regression churn model loaded for multi-model inference")
+            if app.state.churn_model is not None:
+                app.state.customers = app.state.churn_model.profiles(pd.read_csv(DATA_PATH))
+                print("[INFO] Customer profiles materialized successfully")
         except Exception as exc:
-            print(f"[WARN] Failed to load Logistic Regression model: {exc}")
+            print(f"[WARN] Failed to materialize customer profiles: {exc}")
 
-    try:
-        if app.state.churn_model is not None:
-            app.state.customers = app.state.churn_model.profiles(pd.read_csv(DATA_PATH))
-    except Exception as exc:
-        print(f"[WARN] Failed to materialize customer profiles: {exc}")
+        try:
+            app.state.segmentation = segmentation_service.load(SEGMENTATION_DATA_PATH)
+            print("[INFO] Segmentation model loaded successfully")
+        except Exception as exc:
+            print(f"[WARN] Failed to load segmentation model: {exc}")
 
-    try:
-        app.state.segmentation = segmentation_service.load(SEGMENTATION_DATA_PATH)
-    except Exception as exc:
-        print(f"[WARN] Failed to load segmentation model: {exc}")
+    # Launch background thread for heavy artifact deserialization so uvicorn binds port instantly
+    Thread(target=_load_all_artifacts, daemon=True).start()
 
     yield
 
