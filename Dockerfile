@@ -49,4 +49,4 @@ COPY --from=frontend-builder /build/frontend/dist ./frontend/dist
 EXPOSE 8000
 
 # Start unified FastAPI web service (serves both React UI and REST API)
-CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
