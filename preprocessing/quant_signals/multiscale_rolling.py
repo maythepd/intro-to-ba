@@ -89,6 +89,20 @@ def extract_multiscale_rolling_features(
             features[f"quant_multiscale_outflow_{w}d"] = out_sum.values
             features[f"quant_multiscale_net_flow_{w}d"] = (in_sum - out_sum).values
 
+            # Standalone ticket size and daily spending/transaction velocity per window
+            features[f"quant_multiscale_avg_ticket_size_{w}d"] = tx_agg[f"tx_amount_{w}d"].values / (tx_agg[f"tx_count_{w}d"].values + 1e-6)
+            features[f"quant_multiscale_spending_velocity_{w}d"] = tx_agg[f"tx_amount_{w}d"].values / float(w)
+            features[f"quant_multiscale_tx_freq_daily_{w}d"] = tx_agg[f"tx_count_{w}d"].values / float(w)
+
+            # Standalone 1w, 2w, 1m, 2m, 3m aliases (clean namespace to avoid df_bank merge collisions)
+            w_alias = {7: "1w", 14: "2w", 30: "1m", 60: "2m", 90: "3m"}.get(w)
+            if w_alias:
+                features[f"quant_multiscale_tx_amount_{w_alias}"] = tx_agg[f"tx_amount_{w}d"].values
+                features[f"quant_multiscale_tx_count_{w_alias}"] = tx_agg[f"tx_count_{w}d"].values
+                features[f"quant_multiscale_net_flow_{w_alias}"] = (in_sum - out_sum).values
+                features[f"quant_multiscale_avg_ticket_size_{w_alias}"] = features[f"quant_multiscale_avg_ticket_size_{w}d"]
+                features[f"quant_multiscale_spending_velocity_{w_alias}"] = features[f"quant_multiscale_spending_velocity_{w}d"]
+
         # Dynamic cross-scale ratios (Velocity & Activity drop indicators)
         c7 = tx_agg["tx_count_7d"].values
         c14 = tx_agg["tx_count_14d"].values
@@ -132,6 +146,12 @@ def extract_multiscale_rolling_features(
             sub_log = log[log["days_to_cutoff"] <= w]
             l_cnt = sub_log.groupby("customer_id")["login_status"].count().reindex(cust_idx, fill_value=0.0)
             features[f"quant_multiscale_login_count_{w}d"] = l_cnt.values
+            features[f"quant_multiscale_login_freq_daily_{w}d"] = l_cnt.values / float(w)
+
+            w_alias = {7: "1w", 14: "2w", 30: "1m", 60: "2m", 90: "3m"}.get(w)
+            if w_alias:
+                features[f"quant_multiscale_login_count_{w_alias}"] = l_cnt.values
+                features[f"quant_multiscale_login_freq_{w_alias}"] = l_cnt.values / float(w)
 
             if w in [7, 14, 30]:
                 fail_cnt = (
@@ -141,6 +161,8 @@ def extract_multiscale_rolling_features(
                     .reindex(cust_idx, fill_value=0.0)
                 )
                 features[f"quant_multiscale_login_failed_count_{w}d"] = fail_cnt.values
+                if w_alias:
+                    features[f"quant_multiscale_login_failed_count_{w_alias}"] = fail_cnt.values
 
         # Login drop-off ratio: 7d vs 30d pace
         l7 = features["quant_multiscale_login_count_7d"]

@@ -69,6 +69,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model-type",
+        "--model",
+        dest="model_type",
         type=str,
         default="xgboost",
         choices=["xgboost", "lr", "rf", "svm", "linear_svm"],
@@ -82,6 +84,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--tuning-metric",
+        "--metric",
+        dest="tuning_metric",
         type=str,
         default=None,
         choices=["PR_AUC", "ROC_AUC", "F1_Score", "Recall", "F2_Score", "Precision", "recall"],
@@ -185,6 +189,84 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Top K features to retain when feature selection is enabled",
     )
+    # Clustering & Segmentation feature flags
+    parser.add_argument(
+        "--enable-clustering-features",
+        action="store_true",
+        help="Enable modular customer segmentation / cluster-derived features in feature pipeline",
+    )
+    parser.add_argument(
+        "--disable-clustering-features",
+        action="store_true",
+        help="Explicitly disable cluster-derived features (overriding config.yaml)",
+    )
+    parser.add_argument(
+        "--clustering-algorithm",
+        type=str,
+        default=None,
+        choices=["kmeans", "hierarchical", "both"],
+        help="Clustering algorithm for representation extraction ('kmeans', 'hierarchical', 'both')",
+    )
+    parser.add_argument(
+        "--cluster-count",
+        "--n-clusters",
+        dest="cluster_count",
+        type=int,
+        default=None,
+        help="Number of clusters K for customer segmentation representation",
+    )
+    parser.add_argument(
+        "--cluster-bundle-path",
+        type=str,
+        default=None,
+        help="Custom path to pre-trained cluster_bundle.joblib",
+    )
+    parser.add_argument(
+        "--no-saved-cluster-bundle",
+        action="store_true",
+        help="Force dynamic fitting of KMeans on training data instead of loading saved bundle",
+    )
+    # PCA Manifold Feature flags
+    parser.add_argument(
+        "--enable-pca-features",
+        action="store_true",
+        help="Enable PCA feature projection, reconstruction error, and Mahalanobis distance",
+    )
+    parser.add_argument(
+        "--disable-pca-features",
+        action="store_true",
+        help="Explicitly disable PCA feature extraction (overriding config.yaml)",
+    )
+    parser.add_argument(
+        "--pca-components",
+        type=int,
+        default=None,
+        help="Number of principal components (k) to extract (default from config: 5)",
+    )
+    # LDA Fisher Discriminant Feature flags
+    parser.add_argument(
+        "--enable-lda-features",
+        action="store_true",
+        help="Enable supervised Fisher LDA feature projection, posterior probabilities, log-odds, and centroid distances",
+    )
+    parser.add_argument(
+        "--disable-lda-features",
+        action="store_true",
+        help="Explicitly disable LDA feature extraction (overriding config.yaml)",
+    )
+    parser.add_argument(
+        "--lda-solver",
+        type=str,
+        default=None,
+        choices=["lsqr", "eigen", "svd"],
+        help="LDA solver ('lsqr', 'eigen', 'svd')",
+    )
+    parser.add_argument(
+        "--lda-shrinkage",
+        type=str,
+        default=None,
+        help="LDA shrinkage parameter ('auto', 'none', or float value like 0.1)",
+    )
     # Legacy alias for backward compatibility
     parser.add_argument(
         "--allow-nonlinear-representations",
@@ -254,6 +336,63 @@ def main() -> None:
     if args.force_retrain_temporal:
         cfg.features.temporal_force_retrain = True
         print("[INFO] Force re-training enabled for Temporal Sequence Encoders (ignoring checkpoints)")
+
+    # Apply Clustering & Segmentation Features overrides if passed via CLI
+    if args.enable_clustering_features:
+        cfg.features.enable_clustering_features = True
+        print("[INFO] Clustering & Segmentation Features enabled via CLI")
+    elif args.disable_clustering_features:
+        cfg.features.enable_clustering_features = False
+        print("[INFO] Clustering & Segmentation Features disabled via CLI")
+
+    if args.clustering_algorithm is not None:
+        cfg.features.clustering_algorithm = args.clustering_algorithm
+        print(f"[INFO] Clustering algorithm set to: {args.clustering_algorithm}")
+    if args.cluster_count is not None:
+        cfg.features.cluster_count = args.cluster_count
+        print(f"[INFO] Cluster count set to: {args.cluster_count}")
+    if args.cluster_bundle_path is not None:
+        cfg.features.cluster_bundle_path = args.cluster_bundle_path
+        print(f"[INFO] Cluster bundle path set to: {args.cluster_bundle_path}")
+    if args.no_saved_cluster_bundle:
+        cfg.features.cluster_use_saved_bundle = False
+        print("[INFO] Saved cluster bundle bypassed; fitting KMeans dynamically on train data")
+
+    # Apply PCA Features overrides if passed via CLI
+    if args.enable_pca_features:
+        cfg.features.enable_pca_features = True
+        print("[INFO] PCA Manifold Features enabled via CLI")
+    elif args.disable_pca_features:
+        cfg.features.enable_pca_features = False
+        print("[INFO] PCA Manifold Features disabled via CLI")
+
+    if args.pca_components is not None:
+        cfg.features.pca_n_components = args.pca_components
+        print(f"[INFO] PCA n_components set to: {args.pca_components}")
+
+    # Apply LDA Features overrides if passed via CLI
+    if args.enable_lda_features:
+        cfg.features.enable_lda_features = True
+        print("[INFO] Fisher LDA Features enabled via CLI")
+    elif args.disable_lda_features:
+        cfg.features.enable_lda_features = False
+        print("[INFO] Fisher LDA Features disabled via CLI")
+
+    if args.lda_solver is not None:
+        cfg.features.lda_solver = args.lda_solver
+        print(f"[INFO] LDA solver set to: {args.lda_solver}")
+    if args.lda_shrinkage is not None:
+        val = args.lda_shrinkage
+        if val.lower() == "none":
+            cfg.features.lda_shrinkage = None
+        elif val.lower() == "auto":
+            cfg.features.lda_shrinkage = "auto"
+        else:
+            try:
+                cfg.features.lda_shrinkage = float(val)
+            except ValueError:
+                cfg.features.lda_shrinkage = val
+        print(f"[INFO] LDA shrinkage set to: {cfg.features.lda_shrinkage}")
 
     # 2. Ingest / load dataset via pipeline (auto-orchestrates ETL if needed)
     force_rebuild = args.rebuild_dataset or getattr(cfg.features, "rebuild_full_dataset", False)

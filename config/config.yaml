@@ -51,6 +51,9 @@ features:
   enable_feature_selection: true   # Lọc đặc trưng Top-K theo độ quan trọng
   enable_temporal_embeddings: false   # Biểu diễn chuỗi sự kiện thời gian (Multi-snapshot Bi-GRU Autoencoder)
   enable_gnn_embeddings: false        # Biểu diễn cấu trúc ngữ cảnh mạng lưới đồ thị (Self-Supervised k-NN Graph Attention Network)
+  enable_clustering_features: true   # Đặc trưng phân cụm khách hàng (Geometry, Soft Membership, Boundary & Peer Ratios)
+  enable_pca_features: false          # Biểu diễn đa tạp trực giao toàn cục (PCA Manifold & Residual Error)
+  enable_lda_features: true          # Biểu diễn biệt thức có giám sát (Fisher LDA Projection & Log-Odds)
 
   # Chi tiết biến đổi phân phối lệch (Skewness sub-toggles)
   skewness_transform:
@@ -136,6 +139,40 @@ features:
     hybrid_pearson_weight: 0.50          # Trọng số cho Pearson trong MI_Pearson_Hybrid (0.0 đến 1.0)
     compute_feature_importance: true
 
+  # Chi tiết đặc trưng phân cụm & phân khúc khách hàng (Clustering & Segmentation Features)
+  clustering_features:
+    enabled: true                      # Bật/tắt toàn bộ nhóm đặc trưng trích xuất từ phân cụm
+    algorithm: "both"                 # "kmeans" | "hierarchical" | "both"
+    n_clusters: 4                       # Số cụm persona
+    use_saved_bundle: true              # Ưu tiên tái sử dụng artifacts/segmentation/cluster_bundle.joblib nếu có
+    bundle_path: "artifacts/segmentation/cluster_bundle.joblib"
+    softmax_temperature: 1.0            # Nhiệt độ Softmax tính xác suất mềm
+    features:
+      enable_centroid_distances: true   # Khoảng cách Euclidean & Cosine tới từng tâm cụm (cluster_dist_*, cluster_cos_dist_*)
+      enable_soft_probabilities: true   # Xác suất mềm thuộc cụm & Entropy phân tán (cluster_prob_*, cluster_entropy)
+      enable_cluster_inertia_boundary: true # Khoảng cách gần nhất, nhì & Silhouette-like margin (cluster_min_dist, cluster_silhouette_margin)
+      enable_risk_affinity_ratio: true  # Tỷ lệ rủi ro Churn Persona Contrast (cluster_risk_affinity_ratio, cluster_risk_dist_diff)
+      enable_cluster_relative_ratios: true # Tỷ lệ lệch chuẩn so với giá trị trung bình cụm (cluster_rel_balance, cluster_diff_trans_trend)
+      enable_cluster_one_hot: true      # Mã hóa nhãn cụm One-Hot (cluster_id, is_cluster_*)
+      enable_hierarchical_features: true # Đặc trưng phân cụm phân cấp Ward (hier_dist_*, hier_kmeans_agreement)
+
+  # Chi tiết đặc trưng phân tích thành phần chính (PCA Manifold Features)
+  pca_features:
+    enabled: false                      # Bật/tắt toàn bộ nhóm đặc trưng PCA
+    n_components: 10                     # Số thành phần trực giao chính (PC1..PC5)
+    whiten: false                       # Chuẩn hóa phương sai các thành phần về 1
+    enable_reconstruction_error: true   # Sai số tái tạo Euclid & sai số tương đối (Residual Anomaly Score)
+    enable_mahalanobis: true            # Khoảng cách Mahalanobis trong không gian đa tạp PCA
+
+  # Chi tiết đặc trưng biệt thức tuyến tính có giám sát (Fisher LDA Features)
+  lda_features:
+    enabled: true                      # Bật/tắt toàn bộ nhóm đặc trưng LDA
+    solver: "lsqr"                      # "lsqr" | "eigen" | "svd" (lsqr hỗ trợ co ma trận shrinkage)
+    shrinkage: "auto"                   # Ledoit-Wolf shrinkage chống quá khớp
+    enable_probabilities: true          # Xác suất hậu nghiệm Bayes Churn
+    enable_log_odds: true               # Tỷ số Log-Odds phân biệt tuyến tính
+    enable_centroid_distances: true     # Khoảng cách tới tâm nhóm Loyal và Churn
+
   # Chi tiết biểu diễn chuỗi hành vi thời gian (Temporal Multi-Snapshot Sequence Embeddings)
   temporal_embeddings:
     enabled: false                      # Bật/tắt khai thác chuỗi sự kiện thô từ transactions, logins, complaints
@@ -220,6 +257,7 @@ features:
 model:
   name: "xgboost"                   # Mô hình mặc định khi train đơn lẻ: "xgboost" | "lr" | "rf"
   decision_threshold: 0.35          # Ngưỡng ra quyết định phân loại Churn (0.50: đối xứng | 0.35: tối ưu F1 & cân bằng Recall ~65-70% | 0.20: High Recall ~85%)
+  early_stopping_rounds: 30
 
   # Cấu hình Focal Loss (Phương án 2: Tập trung gradient vào các ca khó)
   focal_loss:

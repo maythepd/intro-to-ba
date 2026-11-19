@@ -378,6 +378,36 @@ class PipelineConfig:
     quant_cache_path: str = "data/processed/quant_signal_features.csv"
     quant_force_recompute: bool = False
 
+    # Clustering / Customer Segmentation Features (Geometry, Soft Membership, Boundary & Peer Ratios)
+    enable_clustering_features: bool = False
+    clustering_algorithm: str = "kmeans"  # "kmeans" | "hierarchical" | "both"
+    cluster_count: int = 4
+    cluster_use_saved_bundle: bool = True
+    cluster_bundle_path: str = "artifacts/segmentation/cluster_bundle.joblib"
+    cluster_softmax_temperature: float = 1.0
+    cluster_enable_centroid_distances: bool = True
+    cluster_enable_soft_probabilities: bool = True
+    cluster_enable_inertia_boundary: bool = True
+    cluster_enable_risk_affinity: bool = True
+    cluster_enable_relative_ratios: bool = True
+    cluster_enable_cluster_one_hot: bool = True
+    cluster_enable_hierarchical_features: bool = False
+
+    # PCA Manifold Features configuration
+    enable_pca_features: bool = False
+    pca_n_components: int = 5
+    pca_whiten: bool = False
+    pca_enable_reconstruction_error: bool = True
+    pca_enable_mahalanobis: bool = True
+
+    # LDA Fisher Discriminant Features configuration
+    enable_lda_features: bool = False
+    lda_solver: str = "lsqr"
+    lda_shrinkage: Optional[Union[str, float]] = "auto"
+    lda_enable_probabilities: bool = True
+    lda_enable_log_odds: bool = True
+    lda_enable_centroid_distances: bool = True
+
     # Legacy compatibility aliases (deprecated)
     allow_nonlinear_representations: bool = False
     nonlinear_method: str = "supervised"
@@ -421,6 +451,12 @@ class PipelineConfig:
                 "nonlinear_representations",
                 "nonlinear",
                 "dataset",
+                "clustering_features",
+                "clustering",
+                "pca_features",
+                "pca",
+                "lda_features",
+                "lda",
             ]
             for sec in section_keys:
                 if sec in feature_dict and isinstance(feature_dict[sec], dict):
@@ -434,6 +470,69 @@ class PipelineConfig:
         for k, v in data.items():
             if k not in ["dataset", "features", "model", "experiment"]:
                 flat_data[k] = v
+
+        # Handle PCA mappings
+        pca_source = data.get("pca_features") or data.get("pca") or (feature_dict.get("pca_features") if isinstance(feature_dict, dict) else None) or (feature_dict.get("pca") if isinstance(feature_dict, dict) else None)
+        if isinstance(pca_source, dict):
+            if "enabled" in pca_source:
+                flat_data["enable_pca_features"] = pca_source["enabled"]
+            if "n_components" in pca_source:
+                flat_data["pca_n_components"] = pca_source["n_components"]
+            if "whiten" in pca_source:
+                flat_data["pca_whiten"] = pca_source["whiten"]
+            if "enable_reconstruction_error" in pca_source:
+                flat_data["pca_enable_reconstruction_error"] = pca_source["enable_reconstruction_error"]
+            if "enable_mahalanobis" in pca_source:
+                flat_data["pca_enable_mahalanobis"] = pca_source["enable_mahalanobis"]
+
+        # Handle LDA mappings
+        lda_source = data.get("lda_features") or data.get("lda") or (feature_dict.get("lda_features") if isinstance(feature_dict, dict) else None) or (feature_dict.get("lda") if isinstance(feature_dict, dict) else None)
+        if isinstance(lda_source, dict):
+            if "enabled" in lda_source:
+                flat_data["enable_lda_features"] = lda_source["enabled"]
+            if "solver" in lda_source:
+                flat_data["lda_solver"] = lda_source["solver"]
+            if "shrinkage" in lda_source:
+                flat_data["lda_shrinkage"] = lda_source["shrinkage"]
+            if "enable_probabilities" in lda_source:
+                flat_data["lda_enable_probabilities"] = lda_source["enable_probabilities"]
+            if "enable_log_odds" in lda_source:
+                flat_data["lda_enable_log_odds"] = lda_source["enable_log_odds"]
+            if "enable_centroid_distances" in lda_source:
+                flat_data["lda_enable_centroid_distances"] = lda_source["enable_centroid_distances"]
+
+        # Handle clustering_features mappings
+        clust_source = data.get("clustering_features") or (feature_dict.get("clustering_features") if isinstance(feature_dict, dict) else None)
+        if isinstance(clust_source, dict):
+            if "enabled" in clust_source:
+                flat_data["enable_clustering_features"] = clust_source["enabled"]
+            if "algorithm" in clust_source:
+                flat_data["clustering_algorithm"] = clust_source["algorithm"]
+            if "n_clusters" in clust_source:
+                flat_data["cluster_count"] = clust_source["n_clusters"]
+            if "use_saved_bundle" in clust_source:
+                flat_data["cluster_use_saved_bundle"] = clust_source["use_saved_bundle"]
+            if "bundle_path" in clust_source:
+                flat_data["cluster_bundle_path"] = clust_source["bundle_path"]
+            if "softmax_temperature" in clust_source:
+                flat_data["cluster_softmax_temperature"] = clust_source["softmax_temperature"]
+            
+            sub_feats = clust_source.get("features", {})
+            if isinstance(sub_feats, dict):
+                if "enable_centroid_distances" in sub_feats:
+                    flat_data["cluster_enable_centroid_distances"] = sub_feats["enable_centroid_distances"]
+                if "enable_soft_probabilities" in sub_feats:
+                    flat_data["cluster_enable_soft_probabilities"] = sub_feats["enable_soft_probabilities"]
+                if "enable_cluster_inertia_boundary" in sub_feats:
+                    flat_data["cluster_enable_inertia_boundary"] = sub_feats["enable_cluster_inertia_boundary"]
+                if "enable_risk_affinity_ratio" in sub_feats:
+                    flat_data["cluster_enable_risk_affinity"] = sub_feats["enable_risk_affinity_ratio"]
+                if "enable_cluster_relative_ratios" in sub_feats:
+                    flat_data["cluster_enable_relative_ratios"] = sub_feats["enable_cluster_relative_ratios"]
+                if "enable_cluster_one_hot" in sub_feats:
+                    flat_data["cluster_enable_cluster_one_hot"] = sub_feats["enable_cluster_one_hot"]
+                if "enable_hierarchical_features" in sub_feats:
+                    flat_data["cluster_enable_hierarchical_features"] = sub_feats["enable_hierarchical_features"]
 
         # Handle sample_weighting mappings
         sw_source = data.get("sample_weighting") or (feature_dict.get("sample_weighting") if isinstance(feature_dict, dict) else None)

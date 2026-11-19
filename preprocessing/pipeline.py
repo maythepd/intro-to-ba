@@ -37,6 +37,9 @@ from .selection.sample_weighting import SampleWeightConfig, SampleWeightGenerato
 from .temporal.manager import TemporalEmbeddingManager
 from .gnn.manager import GNNEmbeddingManager
 from .quant_signals.extractor import QuantSignalFeatureExtractor
+from .clustering.cluster_features import ClusterFeatureExtractor
+from .projections.pca_features import PCAFeatureExtractor
+from .projections.lda_features import LDAFeatureExtractor
 
 
 def load_dataset(
@@ -325,6 +328,45 @@ class FeatureEngineeringPipeline:
             verbose=self.verbose,
         )
 
+        # 9. Clustering & Customer Segmentation Feature Extractor
+        self.cluster_extractor = ClusterFeatureExtractor(
+            enabled=getattr(cfg, "enable_clustering_features", False),
+            algorithm=getattr(cfg, "clustering_algorithm", "kmeans"),
+            n_clusters=getattr(cfg, "cluster_count", 4),
+            use_saved_bundle=getattr(cfg, "cluster_use_saved_bundle", True),
+            bundle_path=getattr(cfg, "cluster_bundle_path", "artifacts/segmentation/cluster_bundle.joblib"),
+            enable_centroid_distances=getattr(cfg, "cluster_enable_centroid_distances", True),
+            enable_soft_probabilities=getattr(cfg, "cluster_enable_soft_probabilities", True),
+            enable_inertia_boundary=getattr(cfg, "cluster_enable_inertia_boundary", True),
+            enable_risk_affinity=getattr(cfg, "cluster_enable_risk_affinity", True),
+            enable_relative_ratios=getattr(cfg, "cluster_enable_relative_ratios", True),
+            enable_cluster_one_hot=getattr(cfg, "cluster_enable_cluster_one_hot", True),
+            enable_hierarchical_features=getattr(cfg, "cluster_enable_hierarchical_features", False),
+            softmax_temperature=getattr(cfg, "cluster_softmax_temperature", 1.0),
+            verbose=self.verbose,
+        )
+
+        # 10. PCA Manifold Feature Extractor
+        self.pca_extractor = PCAFeatureExtractor(
+            enabled=getattr(cfg, "enable_pca_features", False),
+            n_components=getattr(cfg, "pca_n_components", 5),
+            whiten=getattr(cfg, "pca_whiten", False),
+            enable_reconstruction_error=getattr(cfg, "pca_enable_reconstruction_error", True),
+            enable_mahalanobis=getattr(cfg, "pca_enable_mahalanobis", True),
+            verbose=self.verbose,
+        )
+
+        # 11. LDA Supervised Fisher Discriminant Feature Extractor
+        self.lda_extractor = LDAFeatureExtractor(
+            enabled=getattr(cfg, "enable_lda_features", False),
+            solver=getattr(cfg, "lda_solver", "lsqr"),
+            shrinkage=getattr(cfg, "lda_shrinkage", "auto"),
+            enable_probabilities=getattr(cfg, "lda_enable_probabilities", True),
+            enable_log_odds=getattr(cfg, "lda_enable_log_odds", True),
+            enable_centroid_distances=getattr(cfg, "lda_enable_centroid_distances", True),
+            verbose=self.verbose,
+        )
+
     def fit(self, df: pd.DataFrame, target_col: Optional[str] = None) -> "FeatureEngineeringPipeline":
         """
         Fit all stateful transformers sequentially on training dataframe.
@@ -370,6 +412,21 @@ class FeatureEngineeringPipeline:
             self.quant_engineer.fit(current, y=y)
             current = self.quant_engineer.transform(current)
 
+        # Step 9: Clustering & Customer Segmentation Features (Geometry, Boundary, Risk Affinity & Peer Ratios)
+        if getattr(self.config, "enable_clustering_features", False):
+            self.cluster_extractor.fit(current, y=y)
+            current = self.cluster_extractor.transform(current)
+
+        # Step 10: PCA Manifold Features (Orthogonal variance axes & residual anomaly score)
+        if getattr(self.config, "enable_pca_features", False):
+            self.pca_extractor.fit(current, y=None)
+            current = self.pca_extractor.transform(current)
+
+        # Step 11: Supervised Fisher LDA Features (Linear discriminant axis & Bayes log-odds)
+        if getattr(self.config, "enable_lda_features", False):
+            self.lda_extractor.fit(current, y=y)
+            current = self.lda_extractor.transform(current)
+
         return self
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -406,6 +463,18 @@ class FeatureEngineeringPipeline:
         # Step 8: Classical Quantitative & Signal Processing Features (Pure Classical ML)
         if getattr(self.config, "enable_quant_signal_features", False):
             out = self.quant_engineer.transform(out)
+
+        # Step 9: Clustering & Customer Segmentation Features
+        if getattr(self.config, "enable_clustering_features", False):
+            out = self.cluster_extractor.transform(out)
+
+        # Step 10: PCA Manifold Features
+        if getattr(self.config, "enable_pca_features", False):
+            out = self.pca_extractor.transform(out)
+
+        # Step 11: Supervised Fisher LDA Features
+        if getattr(self.config, "enable_lda_features", False):
+            out = self.lda_extractor.transform(out)
 
         return out
 
