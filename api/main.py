@@ -1,10 +1,11 @@
 """Bank customer churn inference and staff lookup API."""
 from __future__ import annotations
+import asyncio
 from contextlib import asynccontextmanager
 import pathlib
 from pathlib import Path
 from datetime import datetime, timezone
-from threading import Lock, Thread
+from threading import Lock
 from typing import Literal
 import os
 import sys
@@ -18,7 +19,6 @@ if sys.platform != "win32":
 
 # Silence Windows asyncio ProactorEventLoop ConnectionResetError (WinError 10054)
 if sys.platform == "win32":
-    import asyncio
     try:
         from asyncio.proactor_events import _ProactorBasePipeTransport
         _orig_call_connection_lost = _ProactorBasePipeTransport._call_connection_lost
@@ -91,6 +91,34 @@ def _get_rf_model(app: FastAPI):
                 print(f"[WARN] Failed to load Random Forest model: {exc}")
     return rf_inst
 
+BATCH_CUSTOMER_ADAPTER = TypeAdapter(list[CustomerInput])
+
+
+def _batch_customer_ids(customers: pd.DataFrame) -> tuple[int, ...]:
+    try:
+        profiles = customers.loc[:, module5.PROFILE_COLUMNS].to_dict("records")
+        validated_profiles = BATCH_CUSTOMER_ADAPTER.validate_python(profiles)
+    except (KeyError, ValidationError) as exc:
+        raise HTTPException(503, "Official customer feature table contains invalid profiles") from exc
+
+    customer_ids = tuple(profile.customer_id for profile in validated_profiles)
+    if None in customer_ids or len(set(customer_ids)) != len(customer_ids):
+        raise HTTPException(503, "Official customer feature table requires unique customer IDs")
+    return customer_ids
+
+
+def _batch_predictions(customer_ids: tuple[int, ...], probabilities: np.ndarray, threshold: float) -> list[dict]:
+    return [
+        {
+            "customer_id": str(customer_id),
+            "churn_probability": probability,
+            "predicted_churn": probability >= threshold,
+            "risk_level": risk_level(probability, threshold),
+        }
+        for customer_id, probability in zip(customer_ids, probabilities.tolist())
+    ]
+
+
 def compute_batch_risk(
     app: FastAPI,
     include_predictions: bool = False,
@@ -103,9 +131,10 @@ def compute_batch_risk(
     if xgb_model is None or customers is None or customers.empty:
         raise HTTPException(503, "Official customer feature table or churn model unavailable")
 
+    customer_ids = _batch_customer_ids(customers)
     m_key = (model_name or "xgboost").lower().strip()
     th = float(threshold if threshold is not None and 0.0 < threshold < 1.0 else 0.50)
-    cache_key = f"{m_key}_{th:.2f}"
+    cache_key = (m_key, th)
 
     batch_lock = getattr(app.state, "batch_lock", None)
     if batch_lock is None:
@@ -118,11 +147,11 @@ def compute_batch_risk(
         app.state.batch_cache = batch_cache
 
     with batch_lock:
-        if not force and cache_key in batch_cache:
-            cached_item = batch_cache[cache_key]
+        cached_item = None if force else batch_cache.get(cache_key)
+        if cached_item is not None and cached_item["customer_ids"] == customer_ids:
             result = dict(cached_item["summary"], cached=True)
             if include_predictions:
-                result["predictions"] = cached_item.get("predictions")
+                result["predictions"] = _batch_predictions(customer_ids, cached_item["probabilities"], th)
             return result
 
         try:
@@ -131,7 +160,7 @@ def compute_batch_risk(
                 if rf_inst is None:
                     raise HTTPException(503, "Random Forest model checkpoint not loaded (models/saved/rf_churn.pkl)")
                 transformed = xgb_model.transform(customers)
-                probabilities = rf_inst.predict_proba(transformed)
+                probabilities = score_probabilities(rf_inst, transformed)
                 model_display = "Random Forest Churn Classifier"
                 model_source = "saved_checkpoint"
             elif m_key in ("lr", "logistic_regression"):
@@ -140,7 +169,7 @@ def compute_batch_risk(
                     raise HTTPException(503, "Logistic Regression model checkpoint not loaded (models/saved/lr_churn.pkl)")
                 transformed = xgb_model.transform(customers)
                 df_lr = transformed.reindex(columns=lr_inst.feature_names_, fill_value=0.0)
-                probabilities = lr_inst.predict_proba(df_lr)
+                probabilities = score_probabilities(lr_inst, df_lr)
                 model_display = "Logistic Regression Baseline (SAGA L1)"
                 model_source = "saved_checkpoint"
             else:
@@ -150,34 +179,25 @@ def compute_batch_risk(
                 m_key = "xgboost"
         except HTTPException:
             raise
+        except module5.Module5InputError as exc:
+            raise HTTPException(503, "Official customer feature table contains invalid raw inputs") from exc
         except Exception as exc:
             raise HTTPException(500, f"Batch scoring failed for {model_name}: {exc}") from exc
 
-        p_arr = np.asarray(probabilities, dtype=float)
         high_th = min(0.85, max(0.65, th + 0.15))
         low_th = max(0.15, min(0.30, th - 0.20))
-        levels = np.where(p_arr >= high_th, "high", np.where(p_arr >= low_th, "medium", "low"))
+        levels = np.where(probabilities >= high_th, "high", np.where(probabilities >= low_th, "medium", "low"))
 
         low_count = int(np.sum(levels == "low"))
         med_count = int(np.sum(levels == "medium"))
         high_count = int(np.sum(levels == "high"))
-        predicted_churn_count = int(np.sum(p_arr >= th))
+        predicted_churn_count = int(np.sum(probabilities >= th))
         counts = {
             "low": low_count,
             "medium": med_count,
             "high": high_count,
             "predicted_churn": predicted_churn_count,
         }
-
-        scores = []
-        if include_predictions:
-            for identifier, p, level in zip(customers["customer_id"], p_arr, levels):
-                scores.append({
-                    "customer_id": str(int(identifier)),
-                    "churn_probability": float(p),
-                    "predicted_churn": bool(p >= th),
-                    "risk_level": str(level),
-                })
 
         summary = {
             "status": "scored",
@@ -198,12 +218,12 @@ def compute_batch_risk(
             batch_cache.clear()
             import gc
             gc.collect()
-        batch_cache[cache_key] = {"summary": summary, "predictions": scores if include_predictions else []}
+        batch_cache[cache_key] = {"summary": summary, "customer_ids": customer_ids, "probabilities": probabilities}
         app.state.risk_summary = summary
         app.state.inference_count = getattr(app.state, "inference_count", 0) + len(customers)
         result = dict(summary, cached=False)
         if include_predictions:
-            result["predictions"] = scores
+            result["predictions"] = _batch_predictions(customer_ids, probabilities, th)
         return result
 
 
@@ -232,11 +252,11 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-    def _load_all_artifacts():
-        import gc
+    def load_churn_artifacts():
         try:
             app.state.churn_model = module5.load()
-            print("[INFO] Module 5 XGBoost churn model loaded successfully")
+            if app.state.churn_model is not None:
+                print("[INFO] Module 5 XGBoost churn model loaded successfully")
         except Exception as exc:
             print(f"[WARN] Failed to load Module 5 churn model: {exc}")
 
@@ -265,6 +285,9 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             print(f"[WARN] Failed to materialize customer profiles: {exc}")
 
+    def load_segmentation_artifact():
+        import gc
+
         try:
             app.state.segmentation = segmentation_service.load(SEGMENTATION_DATA_PATH)
             print("[INFO] Segmentation model loaded successfully")
@@ -272,12 +295,15 @@ async def lifespan(app: FastAPI):
             print(f"[WARN] Failed to load segmentation model: {exc}")
 
         gc.collect()
-        print("[INFO] All backend models and artifacts initialized; GC memory reclaimed")
 
-    # Launch background thread for heavy artifact deserialization so uvicorn binds port instantly
-    Thread(target=_load_all_artifacts, daemon=True).start()
+    # Churn routes can start receiving requests as soon as lifespan yields.
+    await asyncio.to_thread(load_churn_artifacts)
+    segmentation_task = asyncio.create_task(asyncio.to_thread(load_segmentation_artifact))
 
-    yield
+    try:
+        yield
+    finally:
+        await segmentation_task
 
 app = FastAPI(title="BaBank Analytics API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(

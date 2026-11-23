@@ -34,6 +34,12 @@ class Module5ServingTest(unittest.TestCase):
         payload["customer_id"] = identifier
         return payload
 
+    def test_churn_artifacts_ready_when_api_starts(self):
+        self.assertIsNotNone(self.model)
+        health = self.client.get("/health").json()
+        self.assertTrue(health["model_loaded"])
+        self.assertTrue(health["customers_loaded"])
+
     def test_checkpoint_identity_and_reproduced_metrics(self):
         health = self.client.get("/health").json()
         self.assertTrue(health["model_loaded"])
