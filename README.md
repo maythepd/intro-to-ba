@@ -28,6 +28,10 @@ python -m pytest tests/test_segmentation.py -q
 8. [Hyperparameter Optimization (Optuna)](#hyperparameter-optimization-optuna)
 9. [Visualizations & Generated Reports](#visualizations--generated-reports)
 10. [Evaluation Metrics & Business Rationale](#evaluation-metrics--business-rationale)
+11. [Continuous Deployment (CI/CD) & Public Hosting Guide](#continuous-deployment-cicd--public-hosting-guide)
+12. [System Telemetry & Monitoring Architecture](#system-telemetry--monitoring-architecture)
+13. [Model Artifacts & Priority Results Scanner](#model-artifacts--priority-results-scanner)
+14. [Multi-Model Inference & Decision Threshold Engine](#multi-model-inference--decision-threshold-engine)
 
 ---
 
@@ -54,19 +58,42 @@ This project delivers **Module 5 (Model Development)** of the Business Analytics
 intro-to-ba/
 ├── requirements.txt                 # Project dependencies with version bounds
 ├── main.py                          # Unified CLI entrypoint (compare, ablation, tune, train, recall)
-├── test_pipeline.py                 # Smoke & regression test suite
+├── api.py                           # MLOps & API Serving CLI (runs FastAPI backend + Vite frontend)
 ├── README.md                        # Project documentation & configuration guide
+│
+├── api/                             # FastAPI Serving Backend & Inference Service
+│   ├── __init__.py                  # Exposes FastAPI app instance
+│   ├── main.py                      # FastAPI routes (/health, /predict, /segments, /dashboard)
+│   ├── module5.py                   # XGBoost & preprocessing serving adapter
+│   ├── official_data.py             # Official Kaggle data preparation pipeline
+│   ├── scoring.py                   # Shared churn probability scoring & risk thresholds
+│   └── segmentation_service.py      # KMeans & Hierarchical clustering inference service
+│
+├── frontend/                        # Modern React 19 + Vite + Tailwind CSS Dashboard
+│   ├── package.json                 # Frontend dependencies (TanStack Router & Query, Recharts, Lucide)
+│   ├── vite.config.ts               # Vite configuration with proxy to FastAPI
+│   └── src/                         # Application source (routes, components, api client)
+│
+├── segmentation/                    # Customer Segmentation Engine (KMeans & Hierarchical Ward)
+│   ├── data.py                      # Data loading & feature snapshot preparation
+│   ├── kmeans.py                    # KMeans clustering model & evaluation
+│   ├── runner.py                    # Training & cluster profiling coordinator
+│   └── evaluation.py                # Silhouette score & business metrics evaluation
 │
 ├── config/
 │   ├── config.yaml                  # Master YAML configuration file
 │   └── pipeline_config.py           # Dataclass loaders, schemas, and path routers
 │
+├── docs/                            # Deep Architectural & Feature Engineering Documentation
+│   ├── manifold_representation_learning_strategies.md # Detailed specification of 4 manifold learning strategies
+│   └── new_temporal_feats.md        # Comprehensive catalog of 37 dynamic temporal sequence channels
+│
 ├── data/
-│   ├── full_bank_data.csv           # Consolidated customer-level dataset (82 columns)
+│   ├── full_bank_data.csv           # Consolidated customer-level dataset (70+ columns)
 │   ├── cleaned_bank_data.csv        # Legacy simplified dataset (backward compatibility)
 │   └── full_dataset/                # 7 raw relational tables (accounts, transactions, logins, etc.)
 │
-├── utils/                          # Common Utilities, Experiment Runners & Reporting
+├── utils/                           # Common Utilities, Experiment Runners & Reporting
 │   ├── __init__.py                  # Exports all utilities, experiment runners & report generators
 │   ├── common.py                    # Path resolution and environment setup
 │   ├── experiments.py               # Model factory (build_model), experiment runners & ablation
@@ -85,10 +112,26 @@ intro-to-ba/
 │   ├── feature_selection.py         # Mutual Information (`MI_Score`) & ranking
 │   └── temporal/                    # Temporal Behavioral Sequence Representation Package
 │       ├── __init__.py              # Clean exports
-│       ├── extractor.py             # Multi-period monthly event snapshot extractor (T=6, D=10)
-│       ├── model.py                 # Bi-GRU Sequence Autoencoder (Self-supervised MSE loss)
+│       ├── extractor.py             # TemporalSnapshotExtractor Coordinator (T=6, D=37)
+│       ├── model.py                 # Bi-GRU Sequence Autoencoder & Loss Head Trainer
 │       ├── manager.py               # TemporalEmbeddingManager (extraction, caching, merging)
-│       └── benchmark.py             # Representation benchmark comparison suite
+│       ├── benchmark.py             # Representation benchmark comparison suite
+│       ├── extractors/              # Domain-specific multi-snapshot Sub-Extractors (D=37)
+│       │   ├── __init__.py          # Exports ALL_FEATURE_NAMES_37
+│       │   ├── base.py              # BaseSubExtractor ABC with numerical safety helpers
+│       │   ├── transaction_extractor.py # 11 Financial & cash flow channels (T1 - T11)
+│       │   ├── login_extractor.py   # 15 Digital habits & authentication friction channels (L1 - L15)
+│       │   ├── complaint_extractor.py # 5 Service dispute & SLA breach channels (C1 - C5)
+│       │   ├── account_extractor.py # 4 Portfolio stock & account closure channels (A1 - A4)
+│       │   └── cross_channel_extractor.py # 2 Cross-table interaction coupling channels (X1 - X2)
+│       └── strategies/              # Pluggable Manifold Representation Learning Strategies
+│           ├── __init__.py          # Strategy Registry & Factory (get_temporal_strategy)
+│           ├── base.py              # BaseTemporalStrategy ABC
+│           ├── unsupervised.py      # S0: Unsupervised Bi-GRU Reconstruction Baseline (MSE)
+│           ├── asymmetric_arcface.py # S1: Asymmetric Angular Margin Contrastive Metric (ArcFace)
+│           ├── hyperbolic_poincare.py # S2: Hyperbolic Poincaré Ball Geometry
+│           ├── optimal_transport.py # S3: Optimal Transport & Wasserstein Drift Regularization
+│           └── neyman_pearson.py    # S4: Constrained Neyman-Pearson False Positive Minimization
 │
 ├── models/                          # Classifier Architectures & Tuner
 │   ├── __init__.py                  # Exports LR, RF, XGBoost, and OptunaTuner
@@ -101,6 +144,13 @@ intro-to-ba/
 │   └── saved/                       # Serialized model artifacts (.json, .pkl)
 │       └── temporal/                # PyTorch recurrent checkpoints (temporal_encoder.pt)
 │
+├── test/                            # Comprehensive Automated Test Suite
+│   ├── test_config_loading.py       # Config validation and YAML serialization tests
+│   ├── test_latent_importance.py    # Temporal latent feature importance & gain verification
+│   ├── test_modular_temporal_extractors.py # Sub-extractors (D=37), variance & safety tests
+│   ├── test_pipeline.py             # Full end-to-end preprocessing, Optuna, & model smoke tests
+│   └── test_temporal_strategies.py  # Pluggable representation strategies & loss head tests
+│
 ├── visualization/                   # Plotting Engine (300 DPI Figures)
 │   ├── __init__.py                  # Exports plotting utilities
 │   └── plots.py                     # Feature importance, model comparison, Optuna history
@@ -109,6 +159,7 @@ intro-to-ba/
     ├── comparison/                  # Head-to-head comparison reports & comparison charts
     ├── lr/                          # Logistic Regression metrics, plots & ablation reports
     ├── rf/                          # Random Forest metrics, plots & ablation reports
+    ├── temporal/                    # Representation benchmark logs & strategy comparisons
     └── xgboost/                     # XGBoost metrics, plots & ablation reports
 ```
 
@@ -141,16 +192,74 @@ pip install -r requirements.txt
 | `seaborn` | `>=0.12.0` | Statistical visualization palettes and chart styling |
 
 ### 3. Verify Setup
-Run the end-to-end smoke test to verify dependencies, config loading, and pipeline integrity:
+Run the comprehensive test suite to verify dependencies, config loading, modular extractors, and end-to-end pipeline integrity:
 ```bash
-python test_pipeline.py
+# Run all unit and integration tests across test/
+python -m unittest discover -s test -p "test_*.py"
+
+# Or run the full end-to-end pipeline smoke test
+python test/test_pipeline.py
 ```
 
 ---
 
 ## CLI Entrypoint & Run Modes
 
-All operations are executed through the single root entrypoint: [`main.py`](file:///d:/Introduction%20to%20BA/intro-to-ba/main.py).
+All operations are executed through two primary entrypoints:
+- **[`main.py`](file:///d:/Introduction%20to%20BA/intro-to-ba/main.py):** Model training, ablation, tuning, comparison, and evaluation.
+- **[`api.py`](file:///d:/Introduction%20to%20BA/intro-to-ba/api.py):** MLOps data/artifact preparation and web serving (FastAPI + Vite Frontend).
+
+---
+
+### 4.1 MLOps & Web Serving CLI (`api.py`)
+
+[`api.py`](file:///d:/Introduction%20to%20BA/intro-to-ba/api.py) provides a unified command-line interface for running the live web service and managing production serving artifacts.
+
+#### One-Command Full Stack Startup & Auto Browser Pop-up
+
+Running `python api.py` (or `python api.py serve`) starts both the FastAPI backend on port 8000 AND the Vite frontend development server on port 5173, then **automatically opens the UI in your default web browser**:
+
+```bash
+# Starts both services and automatically pops open http://localhost:5173 in browser
+python api.py serve
+
+# Or run in headless mode (no auto-opening browser, e.g. for CI/remote servers)
+python api.py serve --no-browser
+```
+
+> [!TIP]
+> **Windows Browser Access Note:**
+> The CLI automatically opens [`http://localhost:5173`](http://localhost:5173). In Windows browsers (Chrome, Edge), always navigate to:
+> - **Frontend Web UI:** [`http://localhost:5173`](http://localhost:5173) (or `http://localhost:8000` when built)
+> - **FastAPI Swagger Docs:** [`http://localhost:8000/docs`](http://localhost:8000/docs)
+> - **API Health Check:** [`http://localhost:8000/health`](http://localhost:8000/health)
+>
+> Do **not** type `http://0.0.0.0:8000` into your browser address bar; `0.0.0.0` is an all-interfaces bind address that Windows browsers reject with `ERR_ADDRESS_INVALID`.
+
+#### Serving CLI Commands & Options:
+
+```bash
+# 1. Start both FastAPI (port 8000) and Frontend UI (port 5173) with auto browser pop-up
+python api.py serve --port 8000 --frontend-port 5173 --reload
+
+# 2. Start only the FastAPI backend (headless / API-only mode)
+python api.py serve --no-frontend --port 8000 --no-browser
+
+# 3. Download and reproduce Module 5 XGBoost serving artifacts
+python api.py prepare --download
+
+# 4. Download and prepare official customer feature snapshot
+python api.py official-data --download
+
+# 5. Train and export customer segmentation models (KMeans & Hierarchical Ward)
+python api.py segmentation --data data/official/customer_features.csv --output artifacts/segmentation
+```
+
+---
+
+### 4.2 Model Development & Evaluation CLI (`main.py`)
+
+All model research operations are executed through [`main.py`](file:///d:/Introduction%20to%20BA/intro-to-ba/main.py).
 
 Sub-modules (such as `etl.py`, `splitting.py`, `tuner.py`) contain no standalone entrypoints. Instead, `main.py` ingests data via `preprocessing.pipeline.load_dataset()`, dynamically checking if `data/full_bank_data.csv` exists and compiling it from `data/full_dataset/` raw tables if needed.
 
@@ -339,14 +448,24 @@ python -m visualization.separability --output-dir results/visualizations --sampl
 ---
 
 #### 7. Temporal Behavioral Sequence Representation & Embeddings (`--mode representation`)
-Extracts rich longitudinal customer behavioral dynamics directly from raw event streams (`data/full_dataset/` with ~500k transactions, 1.3M logins, and 13k complaints) modularized under [`preprocessing/temporal/`](file:///d:/Introduction%20to%20BA/intro-to-ba/preprocessing/temporal/):
+Extracts rich longitudinal customer behavioral dynamics directly from raw event streams (`data/full_dataset/` with ~500k transactions, 1.3M logins, 13k complaints, and 17k accounts) modularized under [`preprocessing/temporal/`](file:///d:/Introduction%20to%20BA/intro-to-ba/preprocessing/temporal/):
 
-1. **Multi-Period Monthly Snapshot Extractor (`extractor.py`):**
-   Aggregates raw event streams across 6 monthly snapshots ($T=6$, April–September 2026) along 10 longitudinal behavioral channels (inward/outward transaction volumes, net flow, transaction count, cancellation rate, average ticket size, login frequency, login failure rate, mobile device share, complaint count), constructing a normalized 3D tensor $(N, T=6, D=10)$.
-2. **Self-Supervised Bi-GRU Sequence Autoencoder (`model.py`):**
-   Encodes the 6-month temporal sequence into a dense latent behavioral embedding $z \in \mathbb{R}^{16}$ using a Bidirectional GRU encoder, reconstructed by a GRU decoder trained with Mean Squared Error (MSE) loss. **Completely unsupervised and self-supervised ($y$ is never used) $\to$ guarantees Zero Target Leakage!**
+1. **Modular Sub-Extractors & Multi-Period Coordinator (`extractor.py` & `extractors/`):**
+   Aggregates raw event streams across 6 monthly snapshots ($T=6$, April–September 2026) along **37 longitudinal behavioral channels** ($D=37$), constructing a standardized 3D tensor $(N, T=6, D=37)$ with bounded outlier clamping $[-5.0, 5.0]$:
+   * **`TransactionSnapshotExtractor` (11 channels):** Inward/outward volume, net flow, transaction count, cancellation rate, ticket size, external transfer volume/ratio, ATM cash withdrawals, fee deductions, branch visits.
+   * **`LoginSnapshotExtractor` (15 channels):** Login count, active days, daily session intensity, habit breadth, inactivity drought, weekend share, circadian night share, business hours share, intra-month decay, desktop share, device diversity, Shannon device entropy, failed logins, fail rate, lockout burst alarm.
+   * **`ComplaintSnapshotExtractor` (5 channels):** Complaint count, average resolution delay, service SLA breach count, cumulative unresolved stock, escalation velocity ($\Delta$).
+   * **`AccountSnapshotExtractor` (4 channels):** Active account stock, premature savings account liquidation, everyday account closure, manual renewal ratio.
+   * **`CrossChannelSnapshotExtractor` (2 channels):** Login-to-transaction ratio (passive anxiety monitoring), failed login to complaint coupling.
+   *(Legacy 10-channel extraction path is cleanly preserved via sub-extractor delegation).*
+2. **Pluggable Manifold Representation Learning Strategies (`model.py` & `strategies/`):**
+   * **Unsupervised Baseline (S0):** Bidirectional GRU autoencoder with reconstruction MSE loss ($\mathcal{L}_{\text{recon}}$), ensuring strict zero target leakage.
+   * **Asymmetric ArcFace (S1):** Angular margin penalty ($m_{\text{churn}} > 0, m_{\text{loyal}} = 0$) forcing high-risk churn vectors into a concentrated hyperspherical cone.
+   * **Hyperbolic Poincaré Ball (S2):** Conformal Riemannian metric modeling tree-like hierarchy from core loyal banking to peripheral churn.
+   * **Optimal Transport (S3):** Wasserstein distance drift regularization ($\vec{v} = z_{t=6} - z_{t=1}$) capturing trajectory acceleration.
+   * **Neyman-Pearson Constrained Optimization (S4):** Primal-dual Lagrangian minimizing churn risk subject to an upper bound on False Alarm Rate ($\text{FPR} \le \alpha$).
 3. **Feature Space Augmentation & High-Performance Caching (`manager.py`):**
-   Concatenates latent vectors $[z_0, \dots, z_{15}]$ to tabular customer analytical records (`temporal_z0`...`temporal_z15`). Automatically caches embeddings to `data/processed/temporal_embeddings.csv` and serializes model weights to `models/saved/temporal/temporal_encoder.pt` for sub-second downstream inference.
+   Concatenates latent vectors $[z_0, \dots, z_{15}]$ and manifold metrics (`temporal_drift_velocity`, angular margins) to tabular customer records. Automatically caches embeddings to `data/processed/temporal_embeddings.csv` and serializes model weights to `models/saved/temporal/` for sub-second downstream inference.
 4. **Hybrid Multi-Metric Feature Selection (`feature_selection.py`):**
    Offers Pearson correlation (`Pearson`), Mutual Information (`MI_Score`), and a weighted hybrid score (`MI_Pearson_Hybrid`):
    $$\text{Score}_{\text{hybrid}} = w_p \cdot \text{Pearson}_{\text{norm}} + (1 - w_p) \cdot \text{MI}_{\text{norm}}$$
@@ -405,8 +524,8 @@ Adjusting decision thresholds $\tau$ or changing Optuna objective metrics traver
 
 Computes individualized observation weights $w_i$:
 $$w_i = w_{\text{recency}}(i) \cdot w_{\text{value}}(i) \cdot w_{\text{churn}}(i)$$
-1. **Exponential Recency Decay:** Prioritizes customers with recent activity signals while older observations decay:
-   $$w_{\text{recency}}(i) = \exp\left(-\frac{\ln(2)}{t_{1/2}} \cdot \text{recency\_days}_i\right)$$
+1. **Exponential Recency Decay:** Prioritizes customers with recent activity signals (`recency_days`) while older observations decay:
+   $$w_{\text{recency}}(i) = \exp\left(-\frac{\ln(2)}{t_{1/2}} \cdot \text{recency}_i\right)$$
 2. **Financial Value Weighting:** Heavily penalizes churning high-balance customers who inflict significant CLV loss:
    $$w_{\text{value}}(i) = 1.0 + \alpha \cdot \ln\left(1 + \frac{\max(\text{balance}_i, 0)}{\text{median}(\text{balance}^+)}\right)$$
 3. **Churn Multiplier:** Scales minority positive class penalization during tree splits or loss calculation.
@@ -772,6 +891,146 @@ We prioritize metrics based on business impact:
 | **Top-Decile Lift (D1)** | $\ge 3.0\text{x}$ | **Targeting Efficiency:** Measures concentration of actual churners in the top 10% riskiest segment vs. random guessing (achieves **3.77x**). |
 | **Cumulative Lift (Top 20%)** | $\ge 2.5\text{x}$ | **Retention Campaign ROI:** Confirms that contacting the top 20% highest-risk customers captures $\approx 60\%$ of all impending churners (achieves **3.0x**). |
 | **Log-Loss** | Lower is better | Measures the calibration of predicted churn probabilities, critical for tiered customer intervention. |
+
+---
+
+## Continuous Deployment (CI/CD) & Public Hosting Guide
+
+Anyone can access the live dashboard via a public web link. The platform is designed with a **Unified Single-Port Architecture**: when built, FastAPI automatically serves the compiled React 19 single-page application (`frontend/dist`) alongside the REST API, meaning **only one cloud service is needed** and there are **zero CORS issues**.
+
+### 1. Free Cloud Hosting Options
+
+| Platform | Free Plan Specs | Best For | URL Format |
+|---|---|---|---|
+| **Render.com** | 512 MB RAM, 0.1 CPU, Free Web Service | Quickest setup, native git push integration | `https://babank-analytics.onrender.com` |
+| **Hugging Face Spaces** | **16 GB RAM**, 2 vCPUs, Free Docker Space | Heavy ML / deep learning models (PyTorch + RF) | `https://huggingface.co/spaces/<user>/<repo>` |
+| **Railway.app** | $5 monthly credit, fast builds | Developer control & instant build | `https://babank.up.railway.app` |
+
+---
+
+### 2. Deploying on Render (5-Minute Guide)
+
+1. Sign up / Log in to [Render.com](https://render.com).
+2. Click **New +** $\rightarrow$ **Web Service**.
+3. Connect your GitHub repository (`intro-to-ba`).
+4. Configure the service settings:
+   - **Name:** `babank-retention-platform` (or any custom name)
+   - **Environment:** `Python` (or `Docker` using the included `Dockerfile`)
+   - **Region:** Singapore / Frankfurt / Oregon (nearest to users)
+   - **Branch:** `main`
+   - **Build Command:**
+     ```bash
+     pip install -r requirements.txt && (cd frontend && npm install && npm run build) && python api.py prepare --download && python api.py official-data --download && python api.py segmentation
+     ```
+   - **Start Command:**
+     ```bash
+     uvicorn api:app --host 0.0.0.0 --port $PORT
+     ```
+5. Click **Create Web Service**. Render will build the React frontend into `frontend/dist`, download official data, export model checkpoints, and start the app.
+6. Once deployed, Render provides a public URL (e.g. `https://babank-retention-platform.onrender.com`) that anyone can open in their browser.
+
+---
+
+### 3. Automated Model Updates via GitHub Actions
+
+Whenever you train a new model, tune hyperparameters, or push new files in `models/saved/`, GitHub Actions automatically triggers testing and redeploys the service so your public link is always up-to-date.
+
+Workflow configuration is located in [`.github/workflows/deploy.yml`](file:///.github/workflows/deploy.yml):
+
+```
+Push new model / commit to main
+               │
+               ▼
+┌─────────────────────────────────┐
+│  GitHub Actions: deploy.yml     │
+│  1. Run model tests (unittest)  │
+│  2. Build React bundle (Vite)   │
+└─────────────────────────────────┘
+               │ (Pass)
+               ▼
+┌─────────────────────────────────┐
+│  Automated Cloud Deployment     │
+│  - Render Deploy Hook Triggered │
+│  - Or Render Git Auto-Deploy    │
+└─────────────────────────────────┘
+               │
+               ▼
+🚀 Public URL Updated with New Model!
+```
+
+#### Setting Up the GitHub Actions Deploy Hook:
+1. In your Render Dashboard, open your Web Service $\rightarrow$ **Settings**.
+2. Scroll to **Deploy Hook** and copy the URL (format: `https://api.render.com/deploy/srv-xxxx?key=yyyy`).
+3. In your GitHub repository, go to **Settings** $\rightarrow$ **Secrets and variables** $\rightarrow$ **Actions**.
+4. Click **New repository secret**:
+   - **Name:** `RENDER_DEPLOY_HOOK_URL`
+   - **Secret:** (paste your Render Deploy Hook URL)
+5. From now on, whenever you push to `main` (including updating `models/saved/xgboost_churn.json` or `models/saved/rf_churn.pkl`), GitHub Actions will run tests and automatically refresh your live public web application!
+
+---
+
+## System Telemetry & Monitoring Architecture
+
+The live monitoring dashboard (`/monitoring`) reports real hardware metrics and dataset facts via `psutil` and FastAPI middleware.
+
+### Why CPU Utilization Previously Showed 0%
+
+In Python's `psutil` library, `Process.cpu_percent(interval=None)` calculates CPU utilization by comparing:
+$$\frac{\Delta \text{Process CPU Time}}{\Delta \text{System Wall-Clock Time}}$$
+between **two consecutive calls on the exact same `psutil.Process` instance**.
+
+- When `proc = psutil.Process()` was instantiated inside the request handler, every incoming HTTP request created a brand new `Process` instance.
+- In `psutil`, the **first call on any new instance always returns 0.0% by design** because there is no prior baseline to compare against.
+- As a result, every poll was an initial baseline call, perpetually displaying `0%`.
+
+### Windows Asyncio Socket Reset (WinError 10054) Resolution
+
+On Windows operating systems, when a web browser, polling probe, or Vite dev proxy terminates a connection abruptly, Python's `asyncio.proactor_events._ProactorBasePipeTransport._call_connection_lost` attempts to call `socket.shutdown(SHUT_RDWR)` on an already-closed socket, triggering:
+```
+ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+```
+The platform resolves this across both `api.py` and `api/main.py`:
+1. **Graceful HTTP Probing:** `_open_browser_when_ready()` performs full HTTP pings via `urllib.request` rather than raw TCP socket aborts.
+2. **Proactor Transport Guard:** A transparent monkey-patch wraps `_call_connection_lost` to safely catch and ignore transient Windows socket resets without bubbling up unhandled traceback logs.
+
+---
+
+## 13. Model Artifacts & Priority Results Scanner
+
+When running individual model training or hyperparameter tuning (`python main.py --mode train --model {name}` or `python main.py --mode tune --model {name}`), outputs are exported directly into dedicated model subdirectories:
+- `results/xgboost/`: `xgboost_baseline_lift_comparison.csv`, `xgboost_decile_lift_table.csv`, `xgboost_feature_importance_all.csv`, `optuna_tuning_xgboost_report.md`
+- `results/lr/`: `lr_train_metrics.csv`, `lr_baseline_lift_comparison.csv`, `lr_decile_lift_table.csv`, `lr_feature_importance.csv`, `train_lr_report.md`
+- `results/rf/`: `rf_train_metrics.csv`, `rf_decile_lift_table.csv`, `rf_feature_importance.csv`
+- `results/svm/`: `svm_train_metrics.csv`
+
+### Dual-Tier Priority Scanner Logic:
+1. **Tier 1 (Highest Priority):** Scan `results/{model}/` directly for model-specific training metrics, 10-decile lift tables, and feature importances.
+2. **Tier 2 (Fallback):** If no individual directory exists, fallback to `results/comparison/model_comparison_metrics.csv`.
+3. **Availability Classification on UI (`/models`):**
+   - **Available:** The model has either saved weights in `models/saved/` or evaluated metrics in `results/{model}/`. The UI shows real metrics, exact source path, decile lift table, and feature importance.
+   - **Unavailable:** The model has not been trained yet. The UI flags it as `Unavailable` and displays the exact CLI command needed to train and produce its artifacts:
+     ```bash
+     python main.py --mode train --model <model_id>
+     ```
+
+---
+
+## 14. Multi-Model Inference & Decision Threshold Engine
+
+The serving platform (`/predict` and `/`) provides interactive model selection and continuous decision threshold modulation:
+
+### 1. Selectable Inference Models:
+- **XGBoost (Production Champion):** Non-linear gradient boosted trees trained with early stopping on validation folds (Test ROC-AUC: 0.8513, PR-AUC: 0.6813).
+- **Random Forest (Bagging Ensemble):** 500 decision trees with `balanced_subsample` weighting (Test ROC-AUC: 0.8354).
+- **Logistic Regression (Linear Baseline):** SAGA L1-regularized linear model with balanced class penalties and 83.3% churn recall.
+
+### 2. Decision Threshold ($\tau \in [0.10, 0.90]$):
+The binary classification label is dynamically assigned according to:
+$$\hat{y} = \begin{cases} 1 \text{ (Likely to Churn)}, & \text{if } P(\text{churn}) \ge \tau \\ 0 \text{ (Likely to Stay)}, & \text{if } P(\text{churn}) < \tau \end{cases}$$
+
+- **High Recall ($\tau = 0.35$):** Prioritizes customer retention by catching ~80% of churners early (recommended for aggressive retention).
+- **Balanced ($\tau = 0.50$):** Standard industry classification threshold.
+- **High Precision ($\tau = 0.65$):** Minimizes false alarms to focus intervention budgets strictly on high-confidence churners.
 
 ---
 

@@ -1,10 +1,10 @@
 # BÁO CÁO TỐI ƯU HÓA SIÊU THAM SỐ (OPTUNA TUNING REPORT)
 ## MÔ HÌNH: XGBOOST CHURN PREDICTION
 
-**Thời gian thực hiện:** `2026-11-06 15:36:28`  
-**Mục tiêu tối ưu:** `Recall` (Cross-Validation Folds: `5`)  
-**Tổng số trials:** `30` (Hoàn thành: `19`, Cắt tỉa sớm - Pruned: `11`)  
-**CV Score cao nhất (Recall):** `0.8712`  
+**Thời gian thực hiện:** `2026-11-19 23:44:59`  
+**Mục tiêu tối ưu:** `PR_AUC` (Cross-Validation Folds: `5`)  
+**Tổng số trials:** `30` (Hoàn thành: `17`, Cắt tỉa sớm - Pruned: `13`)  
+**CV Score cao nhất (PR_AUC):** `0.6824`  
 
 ---
 
@@ -18,16 +18,15 @@
 
 | Hyperparameter   |   Optimal Value |
 |:-----------------|----------------:|
-| scale_pos_weight |        4.5      |
-| n_estimators     |      150        |
-| max_depth        |        3        |
-| learning_rate    |        0.023368 |
-| subsample        |        0.7      |
-| colsample_bytree |        0.8      |
-| gamma            |        1.4      |
-| min_child_weight |        6        |
-| reg_alpha        |        0.651525 |
-| reg_lambda       |        0.147708 |
+| n_estimators     |     250         |
+| max_depth        |       3         |
+| learning_rate    |       0.108506  |
+| subsample        |       1         |
+| colsample_bytree |       0.9       |
+| gamma            |       0.8       |
+| min_child_weight |       1         |
+| reg_alpha        |       0.075187  |
+| reg_lambda       |       0.0164413 |
 
 ---
 
@@ -37,20 +36,20 @@
 
 | Metric            |   Score |
 |:------------------|--------:|
-| ROC_AUC           |  0.8534 |
-| PR_AUC            |  0.6276 |
-| F1_Score          |  0.5178 |
-| Precision         |  0.3647 |
-| Recall            |  0.8922 |
-| Accuracy          |  0.661  |
-| Balanced_Accuracy |  0.747  |
-| Log_Loss          |  0.6351 |
+| ROC_AUC           |  0.8442 |
+| PR_AUC            |  0.6665 |
+| F1_Score          |  0.5791 |
+| Precision         |  0.5749 |
+| Recall            |  0.5833 |
+| Accuracy          |  0.827  |
+| Balanced_Accuracy |  0.7364 |
+| Log_Loss          |  0.3621 |
 
 ### Ma trận nhầm lẫn (Confusion Matrix):
-- **True Positives (Bắt đúng churn):** `182`
-- **False Negatives (Bỏ sót churn):** `22`
-- **True Negatives (Khách hàng ở lại):** `479`
-- **False Positives (Báo nhầm churn):** `317`
+- **True Positives (Bắt đúng churn):** `119`
+- **False Negatives (Bỏ sót churn):** `85`
+- **True Negatives (Khách hàng ở lại):** `708`
+- **False Positives (Báo nhầm churn):** `88`
 
 ---
 
@@ -58,23 +57,24 @@
 
 ![Đặc trưng quan trọng](xgboost_feature_importance_tuned.png)
 
-| Feature                   |   Importance |   Relative_Pct |
-|:--------------------------|-------------:|---------------:|
-| is_middle_aged_vulnerable |      710.094 |           8.34 |
-| gender_Male               |      557.433 |           6.54 |
-| is_product_danger_zone    |      435.315 |           5.11 |
-| gender_Female             |      404.827 |           4.75 |
-| age                       |      329.621 |           3.87 |
-| gender_target_enc         |      322.618 |           3.79 |
-| has_resolved_complaint    |      291.914 |           3.43 |
-| is_zero_balance           |      271.615 |           3.19 |
-| std_age                   |      263.328 |           3.09 |
-| products_number           |      254.19  |           2.98 |
-| country_France            |      252.5   |           2.96 |
-| country_Germany           |      237.323 |           2.79 |
-| is_high_friction          |      218.266 |           2.56 |
-| is_spending_collapsing    |      216.092 |           2.54 |
-| germany_high_balance      |      214.451 |           2.52 |
+| Feature                                 |   Importance |   Relative_Pct |
+|:----------------------------------------|-------------:|---------------:|
+| lda_projection_churn                    |     115.319  |           4.65 |
+| lda_prob_churn                          |      87.3778 |           3.53 |
+| quant_multiscale_outflow_14d            |      41.5838 |           1.68 |
+| quant_volatility_net_flow_cv            |      30.5443 |           1.23 |
+| trans_trend_ratio                       |      30.1458 |           1.22 |
+| cluster_second_min_dist                 |      27.5642 |           1.11 |
+| cluster_dist_1                          |      25.1393 |           1.01 |
+| quant_inter_germany_x_age               |      24.1251 |           0.97 |
+| quant_multiscale_avg_ticket_size_90d    |      20.8478 |           0.84 |
+| quant_multiscale_login_failed_count_14d |      20.673  |           0.83 |
+| quant_multiscale_login_count_60d        |      20.0608 |           0.81 |
+| quant_rolling_mean_3m_login_days        |      19.6609 |           0.79 |
+| germany_high_balance                    |      19.3547 |           0.78 |
+| robust_trans_trend_ratio                |      19.2491 |           0.78 |
+| balance                                 |      18.3546 |           0.74 |
+
 
 ---
 
@@ -83,31 +83,32 @@
 ![Lift and Cumulative Gains Curve](lift_and_gains_curve.png)
 
 ### 5.1. Bảng 10 phân vị rủi ro (Decile Lift Analysis):
-* **Top 10% rủi ro cao nhất (Decile D1):** Đạt hệ số **Lift 3.38x** so với chọn ngẫu nhiên.
-* **Top 20% rủi ro cao nhất (Decile D1 + D2):** Đạt hệ số **Cumulative Lift 2.87x**.
+* **Top 10% rủi ro cao nhất (Decile D1):** Đạt hệ số **Lift 3.87x** so với chọn ngẫu nhiên.
+* **Top 20% rủi ro cao nhất (Decile D1 + D2):** Đạt hệ số **Cumulative Lift 2.89x**.
 
 | Decile   |   Customers |   Churners | Churn_Rate   | Decile_Lift   | Cum_Recall   | Cum_Lift   |
 |:---------|------------:|-----------:|:-------------|:--------------|:-------------|:-----------|
-| D1       |         100 |         69 | 69.00%       | 3.38x         | 33.82%       | 3.38x      |
-| D2       |         100 |         48 | 48.00%       | 2.35x         | 57.35%       | 2.87x      |
-| D3       |         100 |         30 | 30.00%       | 1.47x         | 72.06%       | 2.40x      |
-| D4       |         100 |         23 | 23.00%       | 1.13x         | 83.33%       | 2.08x      |
-| D5       |         100 |         12 | 12.00%       | 0.59x         | 89.22%       | 1.78x      |
-| D6       |         100 |         11 | 11.00%       | 0.54x         | 94.61%       | 1.58x      |
-| D7       |         100 |          5 | 5.00%        | 0.25x         | 97.06%       | 1.39x      |
-| D8       |         100 |          4 | 4.00%        | 0.20x         | 99.02%       | 1.24x      |
-| D9       |         100 |          1 | 1.00%        | 0.05x         | 99.51%       | 1.11x      |
-| D10      |         100 |          1 | 1.00%        | 0.05x         | 100.00%      | 1.00x      |
+| D1       |         100 |         79 | 79.00%       | 3.87x         | 38.73%       | 3.87x      |
+| D2       |         100 |         39 | 39.00%       | 1.91x         | 57.84%       | 2.89x      |
+| D3       |         100 |         33 | 33.00%       | 1.62x         | 74.02%       | 2.47x      |
+| D4       |         100 |         13 | 13.00%       | 0.64x         | 80.39%       | 2.01x      |
+| D5       |         100 |         14 | 14.00%       | 0.69x         | 87.25%       | 1.75x      |
+| D6       |         100 |         10 | 10.00%       | 0.49x         | 92.16%       | 1.54x      |
+| D7       |         100 |          6 | 6.00%        | 0.29x         | 95.10%       | 1.36x      |
+| D8       |         100 |          6 | 6.00%        | 0.29x         | 98.04%       | 1.23x      |
+| D9       |         100 |          2 | 2.00%        | 0.10x         | 99.02%       | 1.10x      |
+| D10      |         100 |          2 | 2.00%        | 0.10x         | 100.00%      | 1.00x      |
 
 ### 5.2. So sánh với các Baselines & Điểm vận hành tối ưu:
 | Configuration                              | Threshold   | Accuracy   | Precision   | Recall   |   F1_Score |   ROC_AUC |   PR_AUC | Precision_Lift   | Recall_Lift   | PR_AUC_Lift   |
 |:-------------------------------------------|:------------|:-----------|:------------|:---------|-----------:|----------:|---------:|:-----------------|:--------------|:--------------|
 | 1. Random Guess Baseline                   | -           | 67.52%     | 20.40%      | 20.40%   |     0.204  |    0.5    |   0.204  | 1.00x            | 1.00x         | 1.00x         |
 | 2. Majority Class Baseline (All Non-Churn) | 1.00        | 79.60%     | 0.00%       | 0.00%    |     0      |    0.5    |   0.204  | 0.00x            | 0.00x         | 1.00x         |
-| Model @ Default (0.50)                     | 0.50        | 66.10%     | 36.47%      | 89.22%   |     0.5178 |    0.8534 |   0.6276 | 1.79x            | 4.37x         | 3.08x         |
-| Model @ Optimal F1                         | 0.60        | 76.10%     | 45.07%      | 78.43%   |     0.5725 |    0.8534 |   0.6276 | 2.21x            | 3.84x         | 3.08x         |
-| Model @ Optimal F2 (High Recall)           | 0.56        | 72.30%     | 41.16%      | 83.33%   |     0.5511 |    0.8534 |   0.6276 | 2.02x            | 4.08x         | 3.08x         |
-| Model @ Target Recall (>=75%)              | 0.60        | 76.10%     | 45.07%      | 78.43%   |     0.5725 |    0.8534 |   0.6276 | 2.21x            | 3.84x         | 3.08x         |
+| Model @ Default (0.50)                     | 0.50        | 85.90%     | 72.34%      | 50.00%   |     0.5913 |    0.8442 |   0.6665 | 3.55x            | 2.45x         | 3.27x         |
+| Model @ Optimal F1                         | 0.28        | 81.30%     | 53.44%      | 64.71%   |     0.5854 |    0.8442 |   0.6665 | 2.62x            | 3.17x         | 3.27x         |
+| Model @ Optimal F2 (High Recall)           | 0.13        | 73.50%     | 42.08%      | 79.41%   |     0.5501 |    0.8442 |   0.6665 | 2.06x            | 3.89x         | 3.27x         |
+| Model @ Target Recall (>=75%)              | 0.31        | 81.50%     | 54.11%      | 61.27%   |     0.5747 |    0.8442 |   0.6665 | 2.65x            | 3.00x         | 3.27x         |
+| Model @ Manual (0.35)                      | 0.35        | 82.70%     | 57.49%      | 58.33%   |     0.5791 |    0.8442 |   0.6665 | 2.82x            | 2.86x         | 3.27x         |
 
 
 ---

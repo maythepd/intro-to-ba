@@ -17,11 +17,12 @@ import optuna
 
 from config.pipeline_config import PipelineConfig, UnifiedConfig
 from preprocessing.pipeline import FeatureEngineeringPipeline
-from preprocessing.splitting import DataSplitter
+from preprocessing.pipeline import DataSplitter
 from models.recall_eval import export_lift_artifacts
 from visualization.plots import (
     plot_feature_importance,
     plot_optuna_tuning_history,
+    plot_latent_embeddings_importance,
 )
 
 # Configure Optuna logger with the familiar green INFO logs on terminal
@@ -90,7 +91,7 @@ class OptunaTuner:
         if self.model_type not in ("xgboost", "rf", "lr"):
             raise ValueError(f"Unsupported model_type '{model_type}'. Expected: xgboost | rf | lr")
 
-        self.config = config or UnifiedConfig()
+        self.config = config if config is not None else UnifiedConfig.from_yaml()
         self.target_metric = target_metric
         self.cv_folds = cv_folds
         self.n_trials = n_trials
@@ -133,11 +134,13 @@ class OptunaTuner:
                 "n_jobs": -1,
             }
         elif self.model_type == "lr":
+            penalty = trial.suggest_categorical("penalty", ["l1", "l2"])
+            solver = "saga" if penalty == "l1" else "lbfgs"
             return {
                 "C": trial.suggest_float("C", 0.005, 5.0, log=True),
-                "penalty": trial.suggest_categorical("penalty", ["l1", "l2"]),
-                "solver": "saga",
-                "max_iter": 3000,
+                "penalty": penalty,
+                "solver": solver,
+                "max_iter": 1000,
                 "tol": 1e-3,
                 "class_weight": "balanced",
                 "random_state": self.random_state,
@@ -217,67 +220,96 @@ class OptunaTuner:
         # Combine train + val for CV tuning (Test remains strictly held-out!)
         cv_train_pool = pd.concat([train_df, val_df], ignore_index=True) if split.has_val else train_df
 
-        # Pre-compute fold-isolated temporal sequence encoders if enabled (Strict Inductive)
+        # Pre-compute fold-isolated temporal sequence encoders and prepare fold matrices (Strict Inductive)
         enable_temporal = getattr(feat_cfg, "enable_temporal_embeddings", False)
         if enable_temporal:
             if verbose:
-                print(f"\n[INFO] Pre-computing Fold-Isolated Temporal Sequence Encoders across {self.cv_folds} folds (Strict Inductive)...")
-            # 1. Pre-cache raw snapshot tensor for all customers so fold slicing is instantaneous (0.001s)
+                print("\n[INFO] Validating & Extracting Longitudinal Temporal Snapshot Tensor...")
             from preprocessing.temporal.extractor import TemporalSnapshotExtractor
             raw_data_dir = getattr(feat_cfg, "raw_full_dataset_dir", "data/full_dataset")
             raw_extractor = TemporalSnapshotExtractor(raw_data_dir=raw_data_dir)
             raw_extractor.extract(df["customer_id"].values, verbose=verbose)
 
-            # 2. Pre-warm isolated encoder per CV fold and cache both train & val representations
-            for fold in splitter.get_cv_folds(cv_train_pool, target_col=target, n_splits=self.cv_folds):
-                p_fold = FeatureEngineeringPipeline(copy.deepcopy(feat_cfg), fold_id=fold.fold)
-                p_fold.fit(fold.train_df, target_col=target)
-                p_fold.transform(fold.val_df)
+        # Pre-process & prepare fold datasets with strict isolation so trials execute with zero repeated overhead
+        precomputed_folds = []
+        if verbose:
+            print("\n=======================================================")
+            print(f"PRE-PROCESSING & PREPARING {self.cv_folds} CROSS-VALIDATION FOLDS:")
+            feat_sel_str = (
+                f"ENABLED (Top-{feat_cfg.top_k_features} via {getattr(feat_cfg, 'feature_selection_metric', 'MI_Score')})"
+                if getattr(feat_cfg, "enable_feature_selection", False) and getattr(feat_cfg, "top_k_features", None)
+                else "DISABLED (All features retained)"
+            )
+            smote_str = f"ENABLED ({getattr(feat_cfg, 'smote_sampling_strategy', 'auto')})" if getattr(feat_cfg, "enable_smote", False) else "DISABLED"
+            temporal_str = f"ENABLED (16-dim Bi-GRU [{getattr(feat_cfg, 'temporal_manifold_strategy', 'asymmetric_arcface').upper()}])" if enable_temporal else "DISABLED"
+            print(f"  • Feature Selection: {feat_sel_str}")
+            print(f"  • SMOTE Balancing:   {smote_str}")
+            print(f"  • Temporal Vectors:  {temporal_str}")
+            print("-------------------------------------------------------")
+
+        for fold in splitter.get_cv_folds(cv_train_pool, target_col=target, n_splits=self.cv_folds):
+            p_fold = FeatureEngineeringPipeline(copy.deepcopy(feat_cfg), fold_id=fold.fold, verbose=False)
+            if hasattr(p_fold, "temporal_manager") and p_fold.temporal_manager is not None:
+                p_fold.temporal_manager.verbose = verbose
+            p_fold.fit(fold.train_df, target_col=target)
+
+            # Transform partitions
+            tr_tr = p_fold.transform(fold.train_df)
+            va_tr = p_fold.transform(fold.val_df)
+
+            feature_cols = p_fold.extract_model_features(tr_tr)
+            X_tr = tr_tr[feature_cols].copy()
+            y_tr = tr_tr[target].copy()
+            X_va = va_tr[feature_cols].copy()
+            y_va = va_tr[target].copy()
+
+            # Resample strictly on fold training data
+            X_tr_res, y_tr_res = p_fold.balancer.fit_resample(X_tr, y_tr)
+
+            # Feature selection if enabled
+            if p_fold.config.enable_feature_selection and p_fold.config.top_k_features:
+                p_fold.feature_selector.fit(X_tr, y_tr, compute_ranking=False)
+                X_tr_res = p_fold.feature_selector.transform(X_tr_res)
+                X_va = p_fold.feature_selector.transform(X_va)
+
+            # Sample weighting strictly computed on fold training data
+            sw_fold = None
+            if hasattr(p_fold, "sample_weighter") and getattr(p_fold.sample_weighter.config, "enabled", False):
+                p_fold.sample_weighter.fit(fold.train_df, y_tr)
+                sw_raw = p_fold.sample_weighter.compute_weights(fold.train_df, y_tr)
+                if p_fold.config.enable_smote and len(y_tr_res) > len(y_tr):
+                    sw_fold = p_fold.sample_weighter.expand_for_smote(sw_raw, y_tr, y_tr_res)
+                else:
+                    sw_fold = sw_raw
+
+            precomputed_folds.append((fold.fold, X_tr_res, y_tr_res, X_va, y_va, sw_fold))
+
             if verbose:
-                print(f"[OK] All {self.cv_folds} fold-isolated temporal encoders pre-computed and cached!\n")
-            # Ensure Optuna trials read from the newly generated cache without re-training
-            feat_cfg.temporal_force_retrain = False
-            self.config.features.temporal_force_retrain = False
+                sel_tag = f"-> Selected: ({X_tr_res.shape[0]} samples x {X_tr_res.shape[1]} features)" if getattr(feat_cfg, "enable_feature_selection", False) else ""
+                print(
+                    f"  [Fold {fold.fold}] Raw: ({fold.train_df.shape[0]}x{fold.train_df.shape[1]}) -> "
+                    f"Extracted: ({X_tr.shape[0]}x{len(feature_cols)}) -> "
+                    f"SMOTE: ({X_tr_res.shape[0]}x{len(feature_cols)}) {sel_tag} | "
+                    f"Val: ({X_va.shape[0]} samples x {X_va.shape[1]} features)"
+                )
+
+        if verbose:
+            n_samples_cv = precomputed_folds[0][1].shape[0]
+            n_features_cv = precomputed_folds[0][1].shape[1]
+            print(f"[OK] Pre-processed all {len(precomputed_folds)} CV folds successfully.")
+            print(f"[INFO] Each Optuna trial evaluates on {n_samples_cv} samples x {n_features_cv} features across {self.cv_folds} folds.")
+            print("=======================================================\n")
+
+        # Ensure Optuna trials read from the newly generated cache without re-training
+        feat_cfg.temporal_force_retrain = False
+        self.config.features.temporal_force_retrain = False
 
         # 2. Define Optuna Objective with K-Fold CV
         def objective(trial: optuna.Trial) -> float:
             sampled_params = self._sample_params(trial)
             fold_scores: List[float] = []
 
-            for fold in splitter.get_cv_folds(cv_train_pool, target_col=target, n_splits=self.cv_folds):
-                # Fresh pipeline for each fold to prevent data leakage (with fold-isolated temporal embeddings)
-                fold_pipe = FeatureEngineeringPipeline(copy.deepcopy(self.config.features), fold_id=fold.fold)
-                fold_pipe.fit(fold.train_df, target_col=target)
-
-                # Transform partitions
-                tr_tr = fold_pipe.transform(fold.train_df)
-                va_tr = fold_pipe.transform(fold.val_df)
-
-                feature_cols = fold_pipe.extract_model_features(tr_tr)
-                X_tr = tr_tr[feature_cols].copy()
-                y_tr = tr_tr[target].copy()
-                X_va = va_tr[feature_cols].copy()
-                y_va = va_tr[target].copy()
-
-                # Resample strictly on fold training data
-                X_tr_res, y_tr_res = fold_pipe.balancer.fit_resample(X_tr, y_tr)
-
-                # Feature selection if enabled
-                if fold_pipe.config.enable_feature_selection and fold_pipe.config.top_k_features:
-                    fold_pipe.feature_selector.fit(X_tr, y_tr, compute_ranking=True)
-                    X_tr_res = fold_pipe.feature_selector.transform(X_tr_res)
-                    X_va = fold_pipe.feature_selector.transform(X_va)
-
-                # Sample weighting strictly computed on fold training data
-                sw_fold = None
-                if hasattr(fold_pipe, "sample_weighter") and getattr(fold_pipe.sample_weighter.config, "enabled", False):
-                    fold_pipe.sample_weighter.fit(fold.train_df, y_tr)
-                    sw_raw = fold_pipe.sample_weighter.compute_weights(fold.train_df, y_tr)
-                    if fold_pipe.config.enable_smote and len(y_tr_res) > len(y_tr):
-                        sw_fold = fold_pipe.sample_weighter.expand_for_smote(sw_raw, y_tr, y_tr_res)
-                    else:
-                        sw_fold = sw_raw
-
+            for fold_idx, X_tr_res, y_tr_res, X_va, y_va, sw_fold in precomputed_folds:
                 # Fit model
                 model = self._build_model(sampled_params)
                 fit_kwargs = {"sample_weight": sw_fold} if sw_fold is not None else {}
@@ -300,7 +332,7 @@ class OptunaTuner:
                 fold_scores.append(score)
 
                 # Intermediate pruning check
-                trial.report(np.mean(fold_scores), step=fold.fold)
+                trial.report(np.mean(fold_scores), step=fold_idx)
                 if trial.should_prune():
                     raise optuna.exceptions.TrialPruned()
 
@@ -333,19 +365,29 @@ class OptunaTuner:
             print("=======================================================")
 
         # 4. Refit Best Model on Full Training Pool & Evaluate on Independent Test Set
-        final_pipe = FeatureEngineeringPipeline(copy.deepcopy(self.config.features), fold_id="final")
+        if verbose:
+            print("\n=======================================================")
+            print("STEP 4: FINAL MODEL REFIT & TEST EVALUATION")
+            print("=======================================================")
+            print(f"[INFO] Fitting final pipeline on complete training pool: {cv_train_pool.shape[0]} rows x {cv_train_pool.shape[1]} columns")
+
+        final_pipe = FeatureEngineeringPipeline(copy.deepcopy(self.config.features), fold_id="final", verbose=False)
+        if hasattr(final_pipe, "temporal_manager") and final_pipe.temporal_manager is not None:
+            final_pipe.temporal_manager.verbose = verbose
         final_pipe.fit(cv_train_pool, target_col=target)
 
         tr_full = final_pipe.transform(cv_train_pool)
         te_full = final_pipe.transform(test_df)
 
         feat_cols = final_pipe.extract_model_features(tr_full)
+        n_raw_features = len(feat_cols)
         X_train_full = tr_full[feat_cols].copy()
         y_train_full = tr_full[target].copy()
         X_test_final = te_full[feat_cols].copy()
         y_test_final = te_full[target].copy()
 
         X_train_res, y_train_res = final_pipe.balancer.fit_resample(X_train_full, y_train_full)
+        smote_applied = len(y_train_res) > len(y_train_full)
 
         if final_pipe.config.enable_feature_selection and final_pipe.config.top_k_features:
             final_pipe.feature_selector.fit(X_train_full, y_train_full, compute_ranking=True)
@@ -371,6 +413,21 @@ class OptunaTuner:
             y_val_final = te_val[target].copy()
             if final_pipe.config.enable_feature_selection and final_pipe.config.top_k_features:
                 X_val_final = final_pipe.feature_selector.transform(X_val_final)
+
+        if verbose:
+            print("[INFO] Final Pipeline Transformation Summary:")
+            print(f"  • Raw Training Pool:        {cv_train_pool.shape[0]} rows x {cv_train_pool.shape[1]} columns")
+            print(f"  • Extracted Candidate Feat: {n_raw_features} features")
+            if smote_applied:
+                print(f"  • SMOTE Resampling:         {X_train_full.shape[0]} -> {X_train_res.shape[0]} samples")
+            if final_pipe.config.enable_feature_selection and final_pipe.config.top_k_features:
+                metric_name = getattr(final_pipe.config, "feature_selection_metric", "Pearson")
+                print(f"  • Feature Selection ({metric_name}): {n_raw_features} -> {X_train_res.shape[1]} features (Top-{final_pipe.config.top_k_features})")
+            print(f"  -> PASSING TO FINAL {self.model_type.upper()}:  {X_train_res.shape[0]} samples x {X_train_res.shape[1]} features")
+            print(f"  -> HOLD-OUT TEST MATRIX:    {X_test_final.shape[0]} samples x {X_test_final.shape[1]} features")
+            if X_val_final is not None:
+                print(f"  -> VALIDATION MATRIX:       {X_val_final.shape[0]} samples x {X_val_final.shape[1]} features")
+            print("-------------------------------------------------------")
 
         # Merge base params with best tuned params
         merged_best = self._sample_params(optuna.trial.FixedTrial(best_params))
@@ -421,8 +478,27 @@ class OptunaTuner:
         plot_imp_path = out_dir / f"{self.model_type}_feature_importance_tuned.png"
         plot_feature_importance(df_imp, plot_imp_path, model_name=f"{self.model_type.upper()} (Tuned)")
 
+        # Export full feature importances table (all features, without Top 15 truncation)
+        all_imp_csv = out_dir / f"{self.model_type}_feature_importance_all.csv"
+        df_imp.to_csv(str(all_imp_csv), index=False)
+
+        # Plot dedicated temporal latent features importance if temporal embeddings are present
+        plot_latent_imp_path = None
+        has_temporal = any(df_imp["Feature"].astype(str).str.startswith("temporal_z"))
+        if has_temporal:
+            plot_latent_imp_path = out_dir / f"{self.model_type}_temporal_latent_importance.png"
+            metric_label = "Gain" if "Gain" in df_imp.columns else ("Importance" if "Importance" in df_imp.columns else None)
+            plot_latent_embeddings_importance(
+                df_imp=df_imp,
+                output_path=plot_latent_imp_path,
+                model_name=f"{self.model_type.upper()} (Tuned)",
+                metric_col=metric_label,
+            )
+
         # Save tuned model artifact
         save_path = self.config.experiment.get_model_save_path(self.model_type)
+        if output_dir:
+            save_path = out_dir / Path(save_path).name
         best_model.save(save_path)
 
         # Export Lift & Gains artifacts universally across flags
@@ -462,6 +538,7 @@ class OptunaTuner:
             plot_imp_path=plot_imp_path.name,
             df_imp=df_imp,
             lift_res=lift_res,
+            plot_latent_imp_path=plot_latent_imp_path.name if plot_latent_imp_path else None,
         )
 
         if verbose:
@@ -493,6 +570,7 @@ class OptunaTuner:
         plot_imp_path: str,
         df_imp: pd.DataFrame,
         lift_res: Optional[Dict[str, Any]] = None,
+        plot_latent_imp_path: Optional[str] = None,
     ) -> None:
         """Generates an executive-level Markdown report for the tuning experiment."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -512,6 +590,27 @@ class OptunaTuner:
         ]).to_markdown(index=False)
 
         top15_imp = df_imp.head(15).to_markdown(index=False)
+
+        # Build Temporal Latent Embeddings section if temporal features exist
+        temporal_section = ""
+        temporal_mask = df_imp["Feature"].astype(str).str.startswith("temporal_z")
+        if temporal_mask.any():
+            df_imp_ranked = df_imp.copy()
+            metric_col = "Gain" if "Gain" in df_imp_ranked.columns else ("Importance" if "Importance" in df_imp_ranked.columns else df_imp_ranked.columns[1])
+            if "Overall_Rank" not in df_imp_ranked.columns:
+                df_imp_ranked["Overall_Rank"] = np.arange(1, len(df_imp_ranked) + 1)
+            temp_df = df_imp_ranked[temporal_mask].copy()
+            temp_table = temp_df[["Overall_Rank", "Feature", metric_col]].to_markdown(index=False)
+            
+            latent_img_str = f"![Đặc trưng chuỗi thời gian ẩn]({plot_latent_imp_path})\n\n" if plot_latent_imp_path else ""
+            temporal_section = f"""
+
+### 4.1. Đóng góp của các đặc trưng chuỗi thời gian ẩn (Temporal Latent Embeddings z0 - z15)
+
+Mô hình Bi-GRU Temporal Autoencoder đã trích xuất 16 chiều không gian ẩn đại diện cho chuỗi biến động lịch sử 6 tháng gần nhất (giao dịch, khiếu nại, đăng nhập, số dư). Dưới đây là mức độ đóng góp ({metric_col}) và thứ hạng tổng thể (Overall Rank) của các đặc trưng này trong mô hình {self.model_type.upper()}:
+
+{latent_img_str}{temp_table}
+"""
 
         lift_section = ""
         if lift_res:
@@ -577,7 +676,8 @@ class OptunaTuner:
 
 ![Đặc trưng quan trọng]({plot_imp_path})
 
-{top15_imp}{lift_section}
+{top15_imp}
+{temporal_section}{lift_section}
 
 ---
 *Báo cáo được sinh tự động bởi Optuna Tuner Engine - Digital Bank Churn Prediction.*

@@ -73,6 +73,7 @@ class XGBoostChurnModel:
         self.use_focal_loss = bool(self.params.pop("use_focal_loss", use_focal_loss))
         self.focal_gamma = float(self.params.pop("focal_gamma", focal_gamma))
         self.focal_alpha = float(self.params.pop("focal_alpha", focal_alpha))
+        self.decision_threshold = float(self.params.pop("decision_threshold", kwargs.get("decision_threshold", 0.50)))
 
         self.early_stopping_rounds = early_stopping_rounds
         self.feature_names_: List[str] = []
@@ -136,12 +137,13 @@ class XGBoostChurnModel:
         self.is_fitted = True
         return self
 
-    def predict(self, X: pd.DataFrame, threshold: float = 0.5) -> np.ndarray:
+    def predict(self, X: pd.DataFrame, threshold: Optional[float] = None) -> np.ndarray:
         """Predict binary churn labels using decision threshold."""
         if not self.is_fitted:
             raise RuntimeError("Model is not fitted yet. Call fit() before predict().")
         probs = self.predict_proba(X)
-        return (probs >= threshold).astype(int)
+        th = self.decision_threshold if threshold is None else float(threshold)
+        return (probs >= th).astype(int)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """Predict probability of churn (class 1)."""
@@ -154,13 +156,14 @@ class XGBoostChurnModel:
         self,
         X_test: pd.DataFrame,
         y_test: pd.Series,
-        threshold: float = 0.5,
+        threshold: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Computes a comprehensive suite of classification metrics on test data.
         """
+        th = self.decision_threshold if threshold is None else float(threshold)
         y_prob = self.predict_proba(X_test)
-        y_pred = (y_prob >= threshold).astype(int)
+        y_pred = (y_prob >= th).astype(int)
 
         cm = confusion_matrix(y_test, y_pred)
         tn, fp, fn, tp = cm.ravel()
@@ -226,4 +229,7 @@ class XGBoostChurnModel:
             raise FileNotFoundError(f"Model file not found at {filepath}")
         self.model.load_model(str(filepath))
         self.is_fitted = True
+        booster = self.model.get_booster()
+        if booster and booster.feature_names:
+            self.feature_names_ = booster.feature_names
         return self

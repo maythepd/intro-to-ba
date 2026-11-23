@@ -6,7 +6,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from preprocessing.etl import BankDataETL
+from preprocessing.ingestion.etl import BankDataETL
 from .features import ORIGINAL_FEATURES
 
 START = pd.Timestamp("2026-04-01")

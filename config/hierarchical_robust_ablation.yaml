@@ -1,0 +1,38 @@
+dataset:
+  cv_folds: 5
+  data_path: data/full_bank_data.csv
+  enable_cv: true
+  exclude_cols:
+  - customer_id
+  - churn
+  - country
+  - gender
+  random_state: 42
+  raw_full_dataset_dir: data/full_dataset
+  rebuild_full_dataset: false
+  stratify: true
+  target_col: churn
+  test_size: 0.1
+  val_size: 0.1
+clustering:
+  correlation_threshold: 0.9
+  k_candidates:
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  linkage: ward
+  log_transform: true
+  n_clusters: 4
+  scaler: robust
+  silhouette_sample_size: 2000
+  stability_repeats: 3
+  feature_groups:
+  - rfm
+  - digital
+  - momentum
+  - portfolio
+  experiment_name: no_friction

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -34,12 +35,13 @@ class LogisticRegressionChurnModel:
     Logistic Regression Classifier for Bank Customer Churn Prediction.
 
     Supports:
+      - Automatic feature standardization (StandardScaler) to protect gradient solvers (L-BFGS, SAGA)
       - Flexible initialization via keyword arguments or params dict
       - Native class-imbalance handling via class_weight='balanced'
       - Sample weighting (exponential recency decay + financial value weighting)
       - Custom Focal Loss objective via L-BFGS-B (FocalLossLogisticRegression)
       - Comprehensive business evaluation metrics (ROC-AUC, PR-AUC, F1, Recall, LogLoss)
-      - Coefficient-based feature importance extraction
+      - Standardized coefficient-based feature importance extraction
       - Serialization via pickle
     """
 
@@ -59,6 +61,7 @@ class LogisticRegressionChurnModel:
         use_focal_loss: bool = False,
         focal_gamma: float = 2.0,
         focal_alpha: float = 0.25,
+        scale_features: bool = True,
         **kwargs: Any,
     ):
         self.params = dict(self.DEFAULT_PARAMS)
@@ -70,7 +73,10 @@ class LogisticRegressionChurnModel:
         self.use_focal_loss = bool(self.params.pop("use_focal_loss", use_focal_loss))
         self.focal_gamma = float(self.params.pop("focal_gamma", focal_gamma))
         self.focal_alpha = float(self.params.pop("focal_alpha", focal_alpha))
+        self.scale_features = bool(self.params.pop("scale_features", scale_features))
+        self.decision_threshold = float(self.params.pop("decision_threshold", kwargs.get("decision_threshold", 0.50)))
 
+        self.scaler_: Optional[StandardScaler] = StandardScaler() if self.scale_features else None
         self.feature_names_: List[str] = []
         self.is_fitted: bool = False
 
@@ -99,28 +105,38 @@ class LogisticRegressionChurnModel:
     ) -> "LogisticRegressionChurnModel":
         """
         Train the Logistic Regression classifier with optional sample weighting.
-        X_val / y_val are accepted for API compatibility but not used (LR has no early stopping).
+        Standardizes feature matrix to guarantee solver convergence and meaningful regularization.
         """
         self.feature_names_ = list(X_train.columns)
-        if sample_weight is not None:
-            self.model.fit(X_train, y_train, sample_weight=sample_weight)
+        if self.scaler_ is not None:
+            X_fit = self.scaler_.fit_transform(X_train)
         else:
-            self.model.fit(X_train, y_train)
+            X_fit = X_train
+
+        if sample_weight is not None:
+            self.model.fit(X_fit, y_train, sample_weight=sample_weight)
+        else:
+            self.model.fit(X_fit, y_train)
         self.is_fitted = True
         return self
 
-    def predict(self, X: pd.DataFrame, threshold: float = 0.5) -> np.ndarray:
+    def predict(self, X: pd.DataFrame, threshold: Optional[float] = None) -> np.ndarray:
         """Predict binary churn labels using decision threshold."""
         if not self.is_fitted:
             raise RuntimeError("Model is not fitted yet. Call fit() before predict().")
         probs = self.predict_proba(X)
-        return (probs >= threshold).astype(int)
+        th = self.decision_threshold if threshold is None else float(threshold)
+        return (probs >= th).astype(int)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """Predict probability of churn (class 1)."""
         if not self.is_fitted:
             raise RuntimeError("Model is not fitted yet. Call fit() before predict_proba().")
-        probs = self.model.predict_proba(X)
+        if self.scaler_ is not None:
+            X_eval = self.scaler_.transform(X)
+        else:
+            X_eval = X
+        probs = self.model.predict_proba(X_eval)
         if probs.ndim > 1 and probs.shape[1] > 1:
             return probs[:, 1]
         return probs
@@ -129,11 +145,12 @@ class LogisticRegressionChurnModel:
         self,
         X_test: pd.DataFrame,
         y_test: pd.Series,
-        threshold: float = 0.5,
+        threshold: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Computes a comprehensive suite of classification metrics on test data."""
+        th = self.decision_threshold if threshold is None else float(threshold)
         y_prob = self.predict_proba(X_test)
-        y_pred = (y_prob >= threshold).astype(int)
+        y_pred = (y_prob >= th).astype(int)
 
         cm = confusion_matrix(y_test, y_pred)
         tn, fp, fn, tp = cm.ravel()

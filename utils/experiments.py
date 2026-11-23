@@ -16,6 +16,7 @@ from models import (
     LogisticRegressionChurnModel,
     RandomForestChurnModel,
     XGBoostChurnModel,
+    LinearSVMChurnModel,
 )
 from preprocessing import pipeline
 
@@ -24,10 +25,12 @@ MODEL_REGISTRY = {
     "xgboost": XGBoostChurnModel,
     "lr": LogisticRegressionChurnModel,
     "rf": RandomForestChurnModel,
+    "svm": LinearSVMChurnModel,
+    "linear_svm": LinearSVMChurnModel,
 }
 
 # Type alias for any supported churn model instance
-AnyChurnModel = Union[XGBoostChurnModel, LogisticRegressionChurnModel, RandomForestChurnModel]
+AnyChurnModel = Union[XGBoostChurnModel, LogisticRegressionChurnModel, RandomForestChurnModel, LinearSVMChurnModel]
 
 
 def build_model(
@@ -60,6 +63,11 @@ def build_model(
                 model_cfg.get("lr_params")
                 or (model_cfg.get("params") if model_cfg.get("name") in ("lr", "logistic_regression") else {})
             )
+        elif model_type in ("svm", "linear_svm"):
+            params = copy.deepcopy(
+                model_cfg.get("svm_params")
+                or (model_cfg.get("params") if model_cfg.get("name") in ("svm", "linear_svm") else {})
+            )
         else:  # rf
             params = copy.deepcopy(
                 model_cfg.get("rf_params")
@@ -84,6 +92,9 @@ def build_model(
 
     elif model_type in ("lr", "logistic_regression"):
         return LogisticRegressionChurnModel(params=params if params else None)
+
+    elif model_type in ("svm", "linear_svm"):
+        return LinearSVMChurnModel(params=params if params else None)
 
     else:  # rf
         return RandomForestChurnModel(params=params if params else None)

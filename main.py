@@ -53,7 +53,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--mode",
         type=str,
         default="compare",
-        choices=["ablation", "train", "compare", "tune", "recall", "separability", "eda", "representation", "segmentation"],
+        choices=["ablation", "train", "compare", "tune", "recall", "separability", "eda", "representation", "segmentation", "clustering", "hierarchical"],
         help=(
             "Run mode: "
             "'compare' (LR vs RF vs XGBoost, same pipeline), "
@@ -63,14 +63,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "'recall' (threshold optimization, high-recall analysis & baseline lift comparison), "
             "'separability' (PCA, t-SNE, bar charts, boxplots, KDE distributions & separability metrics), "
             "'representation' (Bi-GRU Temporal Behavioral Sequence Embeddings benchmark), "
-            "'segmentation' (comparative unsupervised K-Means experiments A-D)"
+            "'segmentation' (comparative unsupervised K-Means experiments A-D), "
+            "'clustering' or 'hierarchical' (descriptive Ward hierarchical clustering & feature ablation)"
         ),
     )
     parser.add_argument(
         "--model-type",
+        "--model",
+        dest="model_type",
         type=str,
         default="xgboost",
-        choices=["xgboost", "lr", "rf"],
+        choices=["xgboost", "lr", "rf", "svm", "linear_svm"],
         help="Model to use in 'ablation', 'train', 'tune', or 'recall' mode (ignored in 'compare' mode)",
     )
     parser.add_argument(
@@ -81,6 +84,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--tuning-metric",
+        "--metric",
+        dest="tuning_metric",
         type=str,
         default=None,
         choices=["PR_AUC", "ROC_AUC", "F1_Score", "Recall", "F2_Score", "Precision", "recall"],
@@ -184,6 +189,84 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Top K features to retain when feature selection is enabled",
     )
+    # Clustering & Segmentation feature flags
+    parser.add_argument(
+        "--enable-clustering-features",
+        action="store_true",
+        help="Enable modular customer segmentation / cluster-derived features in feature pipeline",
+    )
+    parser.add_argument(
+        "--disable-clustering-features",
+        action="store_true",
+        help="Explicitly disable cluster-derived features (overriding config.yaml)",
+    )
+    parser.add_argument(
+        "--clustering-algorithm",
+        type=str,
+        default=None,
+        choices=["kmeans", "hierarchical", "both"],
+        help="Clustering algorithm for representation extraction ('kmeans', 'hierarchical', 'both')",
+    )
+    parser.add_argument(
+        "--cluster-count",
+        "--n-clusters",
+        dest="cluster_count",
+        type=int,
+        default=None,
+        help="Number of clusters K for customer segmentation representation",
+    )
+    parser.add_argument(
+        "--cluster-bundle-path",
+        type=str,
+        default=None,
+        help="Custom path to pre-trained cluster_bundle.joblib",
+    )
+    parser.add_argument(
+        "--no-saved-cluster-bundle",
+        action="store_true",
+        help="Force dynamic fitting of KMeans on training data instead of loading saved bundle",
+    )
+    # PCA Manifold Feature flags
+    parser.add_argument(
+        "--enable-pca-features",
+        action="store_true",
+        help="Enable PCA feature projection, reconstruction error, and Mahalanobis distance",
+    )
+    parser.add_argument(
+        "--disable-pca-features",
+        action="store_true",
+        help="Explicitly disable PCA feature extraction (overriding config.yaml)",
+    )
+    parser.add_argument(
+        "--pca-components",
+        type=int,
+        default=None,
+        help="Number of principal components (k) to extract (default from config: 5)",
+    )
+    # LDA Fisher Discriminant Feature flags
+    parser.add_argument(
+        "--enable-lda-features",
+        action="store_true",
+        help="Enable supervised Fisher LDA feature projection, posterior probabilities, log-odds, and centroid distances",
+    )
+    parser.add_argument(
+        "--disable-lda-features",
+        action="store_true",
+        help="Explicitly disable LDA feature extraction (overriding config.yaml)",
+    )
+    parser.add_argument(
+        "--lda-solver",
+        type=str,
+        default=None,
+        choices=["lsqr", "eigen", "svd"],
+        help="LDA solver ('lsqr', 'eigen', 'svd')",
+    )
+    parser.add_argument(
+        "--lda-shrinkage",
+        type=str,
+        default=None,
+        help="LDA shrinkage parameter ('auto', 'none', or float value like 0.1)",
+    )
     # Legacy alias for backward compatibility
     parser.add_argument(
         "--allow-nonlinear-representations",
@@ -200,6 +283,15 @@ def main() -> None:
     if args.mode == "segmentation":
         from segmentation.runner import run_from_config
         run_from_config(args.config, output_dir=args.output_dir)
+        return
+
+    if args.mode in ("clustering", "hierarchical"):
+        from utils.clustering_experiments import run_hierarchical
+        if args.config == "config/config.yaml" or not Path(args.config).exists():
+            args.config = "config/hierarchical_final.yaml"
+        # Map mode to hierarchical sub-mode (train or ablation)
+        args.mode = "ablation" if "ablation" in getattr(args, "config", "") else "train"
+        run_hierarchical(args)
         return
 
     # 1. Load Unified Config
@@ -244,6 +336,63 @@ def main() -> None:
     if args.force_retrain_temporal:
         cfg.features.temporal_force_retrain = True
         print("[INFO] Force re-training enabled for Temporal Sequence Encoders (ignoring checkpoints)")
+
+    # Apply Clustering & Segmentation Features overrides if passed via CLI
+    if args.enable_clustering_features:
+        cfg.features.enable_clustering_features = True
+        print("[INFO] Clustering & Segmentation Features enabled via CLI")
+    elif args.disable_clustering_features:
+        cfg.features.enable_clustering_features = False
+        print("[INFO] Clustering & Segmentation Features disabled via CLI")
+
+    if args.clustering_algorithm is not None:
+        cfg.features.clustering_algorithm = args.clustering_algorithm
+        print(f"[INFO] Clustering algorithm set to: {args.clustering_algorithm}")
+    if args.cluster_count is not None:
+        cfg.features.cluster_count = args.cluster_count
+        print(f"[INFO] Cluster count set to: {args.cluster_count}")
+    if args.cluster_bundle_path is not None:
+        cfg.features.cluster_bundle_path = args.cluster_bundle_path
+        print(f"[INFO] Cluster bundle path set to: {args.cluster_bundle_path}")
+    if args.no_saved_cluster_bundle:
+        cfg.features.cluster_use_saved_bundle = False
+        print("[INFO] Saved cluster bundle bypassed; fitting KMeans dynamically on train data")
+
+    # Apply PCA Features overrides if passed via CLI
+    if args.enable_pca_features:
+        cfg.features.enable_pca_features = True
+        print("[INFO] PCA Manifold Features enabled via CLI")
+    elif args.disable_pca_features:
+        cfg.features.enable_pca_features = False
+        print("[INFO] PCA Manifold Features disabled via CLI")
+
+    if args.pca_components is not None:
+        cfg.features.pca_n_components = args.pca_components
+        print(f"[INFO] PCA n_components set to: {args.pca_components}")
+
+    # Apply LDA Features overrides if passed via CLI
+    if args.enable_lda_features:
+        cfg.features.enable_lda_features = True
+        print("[INFO] Fisher LDA Features enabled via CLI")
+    elif args.disable_lda_features:
+        cfg.features.enable_lda_features = False
+        print("[INFO] Fisher LDA Features disabled via CLI")
+
+    if args.lda_solver is not None:
+        cfg.features.lda_solver = args.lda_solver
+        print(f"[INFO] LDA solver set to: {args.lda_solver}")
+    if args.lda_shrinkage is not None:
+        val = args.lda_shrinkage
+        if val.lower() == "none":
+            cfg.features.lda_shrinkage = None
+        elif val.lower() == "auto":
+            cfg.features.lda_shrinkage = "auto"
+        else:
+            try:
+                cfg.features.lda_shrinkage = float(val)
+            except ValueError:
+                cfg.features.lda_shrinkage = val
+        print(f"[INFO] LDA shrinkage set to: {cfg.features.lda_shrinkage}")
 
     # 2. Ingest / load dataset via pipeline (auto-orchestrates ETL if needed)
     force_rebuild = args.rebuild_dataset or getattr(cfg.features, "rebuild_full_dataset", False)
@@ -409,7 +558,8 @@ def main() -> None:
 
     elif args.mode == "train":
         model_type = args.model_type
-        manual_th = args.threshold if hasattr(args, "threshold") and args.threshold is not None else 0.5
+        default_th = getattr(cfg.model, "decision_threshold", 0.5)
+        manual_th = args.threshold if hasattr(args, "threshold") and args.threshold is not None else default_th
         print("\n=======================================================")
         print(f"TRAINING SINGLE [{model_type.upper()}] MODEL ACCORDING TO CONFIG")
         if manual_th != 0.5:
@@ -468,7 +618,8 @@ def main() -> None:
         tune_metric = args.tuning_metric or getattr(cfg.tuning, "metric", "PR_AUC")
         cv_folds = getattr(cfg.tuning, "cv_folds", 5)
         timeout = getattr(cfg.tuning, "timeout", None)
-        manual_th = args.threshold if hasattr(args, "threshold") and args.threshold is not None else None
+        default_th = getattr(cfg.model, "decision_threshold", None)
+        manual_th = args.threshold if (hasattr(args, "threshold") and args.threshold is not None) else default_th
 
         print("\n=======================================================")
         print(f"HYPERPARAMETER OPTIMIZATION (OPTUNA): [{model_type.upper()}]")
@@ -500,7 +651,8 @@ def main() -> None:
 
         model_type = args.model_type
         target_rec = args.target_recall if hasattr(args, "target_recall") and args.target_recall is not None else 0.75
-        manual_th = args.threshold if hasattr(args, "threshold") else None
+        default_th = getattr(cfg.model, "decision_threshold", None)
+        manual_th = args.threshold if (hasattr(args, "threshold") and args.threshold is not None) else default_th
 
         run_recall_optimization(
             df=df,

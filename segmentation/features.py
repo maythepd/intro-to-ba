@@ -1,7 +1,7 @@
 """Explicit feature lineage: no automatic inclusion of unreviewed columns."""
 import numpy as np
 import pandas as pd
-from preprocessing.behavioral_momentum import BehavioralMomentumEngineer
+from preprocessing.domain.behavioral_momentum import BehavioralMomentumEngineer
 
 ORIGINAL_FEATURES = ["credit_score", "country", "gender", "age", "tenure", "balance",
                      "products_number", "credit_card", "active_member", "estimated_salary"]

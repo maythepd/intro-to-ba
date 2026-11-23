@@ -1,0 +1,11 @@
+{
+  "snapshot_sha256": "1f203ed20ea27753a36e7112db3aadb2bde6c4d9cf13f6e2dbe9ccc52d139c3a",
+  "n_customers": 10000,
+  "n_clusters": 4,
+  "ward_fit_customers": 1500,
+  "silhouette_sample": {
+    "kmeans": 0.16117408247394246,
+    "hierarchical": 0.15335066261834626
+  },
+  "hierarchical_warning": "Nearest-centroid assignment outside the Ward fit sample is approximate"
+}

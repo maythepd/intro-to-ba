@@ -232,7 +232,7 @@ def test_runner_outputs_and_heldout_population(tmp_path):
 
 
 def test_label_free_split_and_cli_defaults():
-    from preprocessing.splitting import DataSplitter
+    from preprocessing.ingestion.splitting import DataSplitter
     from main import build_arg_parser
     frame = analytical_fixture()
     split = DataSplitter(stratify=False, val_size=.1).train_val_test_split(frame.drop(columns="churn"))

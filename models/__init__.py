@@ -7,6 +7,7 @@ OptunaTuner, and Recall/Lift optimization utilities.
 from .logistic_regression import LogisticRegressionChurnModel
 from .random_forest import RandomForestChurnModel
 from .xgboost import XGBoostChurnModel
+from .linear_svm import LinearSVMChurnModel
 from .focal_loss import make_xgboost_focal_loss, FocalLossLogisticRegression
 from .tuner import OptunaTuner, TuningResult
 from .recall_eval import (
@@ -20,6 +21,7 @@ __all__ = [
     "XGBoostChurnModel",
     "LogisticRegressionChurnModel",
     "RandomForestChurnModel",
+    "LinearSVMChurnModel",
     "make_xgboost_focal_loss",
     "FocalLossLogisticRegression",
     "OptunaTuner",

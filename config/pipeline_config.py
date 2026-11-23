@@ -62,6 +62,18 @@ class ModelConfig:
             "n_jobs": -1,
         }
     )
+    svm_params: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "C": 0.1,
+            "penalty": "l2",
+            "loss": "squared_hinge",
+            "dual": "auto",
+            "tol": 1e-4,
+            "max_iter": 5000,
+            "class_weight": "balanced",
+            "random_state": 42,
+        }
+    )
     # Generic params dict for backward compatibility or direct overrides
     params: Dict[str, Any] = field(default_factory=dict)
 
@@ -69,6 +81,9 @@ class ModelConfig:
     use_focal_loss: bool = False
     focal_gamma: float = 2.0
     focal_alpha: float = 0.25
+
+    # Decision threshold for binary classification
+    decision_threshold: float = 0.50
 
     def get_params_for_model(self, model_type: str) -> Dict[str, Any]:
         """
@@ -88,6 +103,10 @@ class ModelConfig:
         elif mtype in ("rf", "random_forest"):
             p = dict(self.rf_params) if self.rf_params else dict(self.params)
             if self.name.lower() in ("rf", "random_forest") and self.params:
+                p.update(self.params)
+        elif mtype in ("svm", "linear_svm"):
+            p = dict(self.svm_params) if self.svm_params else dict(self.params)
+            if self.name.lower() in ("svm", "linear_svm") and self.params:
                 p.update(self.params)
         else:
             p = dict(self.params)
@@ -109,6 +128,8 @@ class ModelConfig:
             filtered["use_focal_loss"] = fl_data.get("enabled", False)
             filtered["focal_gamma"] = fl_data.get("gamma", 2.0)
             filtered["focal_alpha"] = fl_data.get("alpha", 0.25)
+        if "decision_threshold" in data:
+            filtered["decision_threshold"] = float(data["decision_threshold"])
         return cls(**filtered)
 
 
@@ -147,7 +168,7 @@ class ExperimentConfig:
           - lr / rf -> .pkl
         """
         m = model_type.lower()
-        ext_map = {"xgboost": "json", "lr": "pkl", "rf": "pkl"}
+        ext_map = {"xgboost": "json", "lr": "pkl", "rf": "pkl", "svm": "pkl", "linear_svm": "pkl"}
         ext = ext_map.get(m, "pkl")
 
         raw = self.model_save_path
@@ -226,6 +247,9 @@ class PipelineConfig:
     enable_target_encoding: bool = True
     enable_smote: bool = True
     enable_feature_selection: bool = False
+    enable_temporal_embeddings: bool = False
+    enable_gnn_embeddings: bool = False
+    enable_quant_signal_features: bool = False
 
     # Skewness sub-toggles
     transform_trans_amount_log: bool = True
@@ -287,6 +311,21 @@ class PipelineConfig:
 
     # Temporal Behavioral Sequence Representation configuration (Bi-GRU Event Autoencoder)
     enable_temporal_embeddings: bool = False
+    temporal_input_mode: str = "extractors"  # "extractors" | "raw_events"
+    raw_sequence_length: int = 50
+    decision_threshold: float = 0.50
+    temporal_manifold_strategy: str = "unsupervised"
+    temporal_lambda_angular: float = 0.30
+    temporal_margin_churn: float = 0.20
+    temporal_margin_loyal: float = 0.00
+    temporal_angular_scale: float = 4.0
+    temporal_curvature: float = 1.0
+    temporal_lambda_poincare: float = 0.25
+    temporal_lambda_drift: float = 0.20
+    temporal_alpha_fpr: float = 0.10
+    temporal_lambda_np: float = 0.30
+    temporal_tau: float = 0.50
+    temporal_strategy_kwargs: Dict[str, Any] = field(default_factory=dict)
     temporal_latent_dim: int = 16
     temporal_hidden_dim: int = 64
     temporal_num_layers: int = 2
@@ -297,6 +336,77 @@ class PipelineConfig:
     temporal_checkpoint_dir: str = "models/saved/temporal"
     temporal_cache_path: str = "data/processed/temporal_embeddings.csv"
     temporal_force_retrain: bool = False
+
+    # Deep Learning Architecture Operations (Pillars 1-4 from BAREFOOTS)
+    temporal_use_feature_attention: bool = True
+    temporal_use_temporal_attention: bool = True
+    temporal_use_multiscale_conv: bool = True
+    temporal_conv_kernels: List[int] = field(default_factory=lambda: [2, 3])
+    temporal_noise_std: float = 0.02
+    temporal_noise_decay: float = 0.95
+    temporal_lambda_direction: float = 0.10
+    temporal_lambda_correlation: float = 0.05
+    temporal_huber_delta: float = 1.0
+
+    # Graph Neural Network (GNN) Representation configuration (Self-Supervised GAT Autoencoder)
+    gnn_k_neighbors: int = 5
+    gnn_latent_dim: int = 16
+    gnn_hidden_dim: int = 32
+    gnn_heads: int = 2
+    gnn_epochs: int = 20
+    gnn_learning_rate: float = 0.005
+    gnn_dropout: float = 0.20
+    gnn_checkpoint_dir: str = "models/saved/gnn"
+    gnn_cache_path: str = "data/processed/gnn/gnn_embeddings.csv"
+    gnn_force_retrain: bool = False
+
+    # Classical Quantitative & Signal Processing Features (Momentum, MACD, Volatility, Fourier, Exogenous, Lags, Rolling, Cyclic, Interactions)
+    quant_enable_momentum: bool = True
+    quant_enable_macd: bool = True
+    quant_enable_volatility: bool = True
+    quant_enable_fourier: bool = True
+    quant_enable_exogenous: bool = True
+    quant_enable_lags: bool = True
+    quant_enable_rolling: bool = True
+    quant_enable_cyclic_time: bool = True
+    quant_enable_interactions: bool = True
+    quant_enable_multiscale_rolling: bool = True
+    quant_prune_sparse: bool = True
+    quant_max_sparsity_threshold: float = 0.98
+    quant_min_variance_threshold: float = 1e-6
+    quant_outlier_clip_quantile: float = 0.995
+    quant_cache_path: str = "data/processed/quant_signal_features.csv"
+    quant_force_recompute: bool = False
+
+    # Clustering / Customer Segmentation Features (Geometry, Soft Membership, Boundary & Peer Ratios)
+    enable_clustering_features: bool = False
+    clustering_algorithm: str = "kmeans"  # "kmeans" | "hierarchical" | "both"
+    cluster_count: int = 4
+    cluster_use_saved_bundle: bool = True
+    cluster_bundle_path: str = "artifacts/segmentation/cluster_bundle.joblib"
+    cluster_softmax_temperature: float = 1.0
+    cluster_enable_centroid_distances: bool = True
+    cluster_enable_soft_probabilities: bool = True
+    cluster_enable_inertia_boundary: bool = True
+    cluster_enable_risk_affinity: bool = True
+    cluster_enable_relative_ratios: bool = True
+    cluster_enable_cluster_one_hot: bool = True
+    cluster_enable_hierarchical_features: bool = False
+
+    # PCA Manifold Features configuration
+    enable_pca_features: bool = False
+    pca_n_components: int = 5
+    pca_whiten: bool = False
+    pca_enable_reconstruction_error: bool = True
+    pca_enable_mahalanobis: bool = True
+
+    # LDA Fisher Discriminant Features configuration
+    enable_lda_features: bool = False
+    lda_solver: str = "lsqr"
+    lda_shrinkage: Optional[Union[str, float]] = "auto"
+    lda_enable_probabilities: bool = True
+    lda_enable_log_odds: bool = True
+    lda_enable_centroid_distances: bool = True
 
     # Legacy compatibility aliases (deprecated)
     allow_nonlinear_representations: bool = False
@@ -341,6 +451,12 @@ class PipelineConfig:
                 "nonlinear_representations",
                 "nonlinear",
                 "dataset",
+                "clustering_features",
+                "clustering",
+                "pca_features",
+                "pca",
+                "lda_features",
+                "lda",
             ]
             for sec in section_keys:
                 if sec in feature_dict and isinstance(feature_dict[sec], dict):
@@ -354,6 +470,69 @@ class PipelineConfig:
         for k, v in data.items():
             if k not in ["dataset", "features", "model", "experiment"]:
                 flat_data[k] = v
+
+        # Handle PCA mappings
+        pca_source = data.get("pca_features") or data.get("pca") or (feature_dict.get("pca_features") if isinstance(feature_dict, dict) else None) or (feature_dict.get("pca") if isinstance(feature_dict, dict) else None)
+        if isinstance(pca_source, dict):
+            if "enabled" in pca_source:
+                flat_data["enable_pca_features"] = pca_source["enabled"]
+            if "n_components" in pca_source:
+                flat_data["pca_n_components"] = pca_source["n_components"]
+            if "whiten" in pca_source:
+                flat_data["pca_whiten"] = pca_source["whiten"]
+            if "enable_reconstruction_error" in pca_source:
+                flat_data["pca_enable_reconstruction_error"] = pca_source["enable_reconstruction_error"]
+            if "enable_mahalanobis" in pca_source:
+                flat_data["pca_enable_mahalanobis"] = pca_source["enable_mahalanobis"]
+
+        # Handle LDA mappings
+        lda_source = data.get("lda_features") or data.get("lda") or (feature_dict.get("lda_features") if isinstance(feature_dict, dict) else None) or (feature_dict.get("lda") if isinstance(feature_dict, dict) else None)
+        if isinstance(lda_source, dict):
+            if "enabled" in lda_source:
+                flat_data["enable_lda_features"] = lda_source["enabled"]
+            if "solver" in lda_source:
+                flat_data["lda_solver"] = lda_source["solver"]
+            if "shrinkage" in lda_source:
+                flat_data["lda_shrinkage"] = lda_source["shrinkage"]
+            if "enable_probabilities" in lda_source:
+                flat_data["lda_enable_probabilities"] = lda_source["enable_probabilities"]
+            if "enable_log_odds" in lda_source:
+                flat_data["lda_enable_log_odds"] = lda_source["enable_log_odds"]
+            if "enable_centroid_distances" in lda_source:
+                flat_data["lda_enable_centroid_distances"] = lda_source["enable_centroid_distances"]
+
+        # Handle clustering_features mappings
+        clust_source = data.get("clustering_features") or (feature_dict.get("clustering_features") if isinstance(feature_dict, dict) else None)
+        if isinstance(clust_source, dict):
+            if "enabled" in clust_source:
+                flat_data["enable_clustering_features"] = clust_source["enabled"]
+            if "algorithm" in clust_source:
+                flat_data["clustering_algorithm"] = clust_source["algorithm"]
+            if "n_clusters" in clust_source:
+                flat_data["cluster_count"] = clust_source["n_clusters"]
+            if "use_saved_bundle" in clust_source:
+                flat_data["cluster_use_saved_bundle"] = clust_source["use_saved_bundle"]
+            if "bundle_path" in clust_source:
+                flat_data["cluster_bundle_path"] = clust_source["bundle_path"]
+            if "softmax_temperature" in clust_source:
+                flat_data["cluster_softmax_temperature"] = clust_source["softmax_temperature"]
+            
+            sub_feats = clust_source.get("features", {})
+            if isinstance(sub_feats, dict):
+                if "enable_centroid_distances" in sub_feats:
+                    flat_data["cluster_enable_centroid_distances"] = sub_feats["enable_centroid_distances"]
+                if "enable_soft_probabilities" in sub_feats:
+                    flat_data["cluster_enable_soft_probabilities"] = sub_feats["enable_soft_probabilities"]
+                if "enable_cluster_inertia_boundary" in sub_feats:
+                    flat_data["cluster_enable_inertia_boundary"] = sub_feats["enable_cluster_inertia_boundary"]
+                if "enable_risk_affinity_ratio" in sub_feats:
+                    flat_data["cluster_enable_risk_affinity"] = sub_feats["enable_risk_affinity_ratio"]
+                if "enable_cluster_relative_ratios" in sub_feats:
+                    flat_data["cluster_enable_relative_ratios"] = sub_feats["enable_cluster_relative_ratios"]
+                if "enable_cluster_one_hot" in sub_feats:
+                    flat_data["cluster_enable_cluster_one_hot"] = sub_feats["enable_cluster_one_hot"]
+                if "enable_hierarchical_features" in sub_feats:
+                    flat_data["cluster_enable_hierarchical_features"] = sub_feats["enable_hierarchical_features"]
 
         # Handle sample_weighting mappings
         sw_source = data.get("sample_weighting") or (feature_dict.get("sample_weighting") if isinstance(feature_dict, dict) else None)
@@ -394,6 +573,40 @@ class PipelineConfig:
         if isinstance(temp_source, dict):
             if "enabled" in temp_source:
                 flat_data["enable_temporal_embeddings"] = temp_source["enabled"]
+            if "temporal_input_mode" in temp_source:
+                flat_data["temporal_input_mode"] = temp_source["temporal_input_mode"]
+            elif "input_mode" in temp_source:
+                flat_data["temporal_input_mode"] = temp_source["input_mode"]
+            elif "use_raw_event_logs" in temp_source:
+                flat_data["temporal_input_mode"] = "raw_events" if temp_source["use_raw_event_logs"] else "extractors"
+            if "raw_sequence_length" in temp_source:
+                flat_data["raw_sequence_length"] = temp_source["raw_sequence_length"]
+            elif "raw_seq_len" in temp_source:
+                flat_data["raw_sequence_length"] = temp_source["raw_seq_len"]
+            if "manifold_strategy" in temp_source:
+                flat_data["temporal_manifold_strategy"] = temp_source["manifold_strategy"]
+            if "lambda_angular" in temp_source:
+                flat_data["temporal_lambda_angular"] = temp_source["lambda_angular"]
+            if "margin_churn" in temp_source:
+                flat_data["temporal_margin_churn"] = temp_source["margin_churn"]
+            if "margin_loyal" in temp_source:
+                flat_data["temporal_margin_loyal"] = temp_source["margin_loyal"]
+            if "angular_scale" in temp_source:
+                flat_data["temporal_angular_scale"] = temp_source["angular_scale"]
+            if "curvature" in temp_source:
+                flat_data["temporal_curvature"] = temp_source["curvature"]
+            if "lambda_poincare" in temp_source:
+                flat_data["temporal_lambda_poincare"] = temp_source["lambda_poincare"]
+            if "lambda_drift" in temp_source:
+                flat_data["temporal_lambda_drift"] = temp_source["lambda_drift"]
+            if "alpha_fpr" in temp_source:
+                flat_data["temporal_alpha_fpr"] = temp_source["alpha_fpr"]
+            if "lambda_np" in temp_source:
+                flat_data["temporal_lambda_np"] = temp_source["lambda_np"]
+            if "tau" in temp_source:
+                flat_data["temporal_tau"] = temp_source["tau"]
+            if "strategy_kwargs" in temp_source and isinstance(temp_source["strategy_kwargs"], dict):
+                flat_data["temporal_strategy_kwargs"] = temp_source["strategy_kwargs"]
             if "latent_dim" in temp_source:
                 flat_data["temporal_latent_dim"] = temp_source["latent_dim"]
             if "hidden_dim" in temp_source:
@@ -414,6 +627,88 @@ class PipelineConfig:
                 flat_data["temporal_cache_path"] = temp_source["cache_path"]
             if "force_retrain" in temp_source:
                 flat_data["temporal_force_retrain"] = temp_source["force_retrain"]
+            if "use_feature_attention" in temp_source:
+                flat_data["temporal_use_feature_attention"] = temp_source["use_feature_attention"]
+            if "use_temporal_attention" in temp_source:
+                flat_data["temporal_use_temporal_attention"] = temp_source["use_temporal_attention"]
+            if "use_multiscale_conv" in temp_source:
+                flat_data["temporal_use_multiscale_conv"] = temp_source["use_multiscale_conv"]
+            if "conv_kernels" in temp_source:
+                flat_data["temporal_conv_kernels"] = temp_source["conv_kernels"]
+            if "noise_std" in temp_source:
+                flat_data["temporal_noise_std"] = temp_source["noise_std"]
+            if "noise_decay" in temp_source:
+                flat_data["temporal_noise_decay"] = temp_source["noise_decay"]
+            if "lambda_direction" in temp_source:
+                flat_data["temporal_lambda_direction"] = temp_source["lambda_direction"]
+            if "lambda_correlation" in temp_source:
+                flat_data["temporal_lambda_correlation"] = temp_source["lambda_correlation"]
+            if "huber_delta" in temp_source:
+                flat_data["temporal_huber_delta"] = temp_source["huber_delta"]
+
+        # Handle gnn_embeddings mappings
+        gnn_source = data.get("gnn_embeddings") or (feature_dict.get("gnn_embeddings") if isinstance(feature_dict, dict) else None)
+        if isinstance(gnn_source, dict):
+            if "enabled" in gnn_source:
+                flat_data["enable_gnn_embeddings"] = gnn_source["enabled"]
+            if "k_neighbors" in gnn_source:
+                flat_data["gnn_k_neighbors"] = gnn_source["k_neighbors"]
+            if "latent_dim" in gnn_source:
+                flat_data["gnn_latent_dim"] = gnn_source["latent_dim"]
+            if "hidden_dim" in gnn_source:
+                flat_data["gnn_hidden_dim"] = gnn_source["hidden_dim"]
+            if "heads" in gnn_source:
+                flat_data["gnn_heads"] = gnn_source["heads"]
+            if "epochs" in gnn_source:
+                flat_data["gnn_epochs"] = gnn_source["epochs"]
+            if "learning_rate" in gnn_source:
+                flat_data["gnn_learning_rate"] = gnn_source["learning_rate"]
+            if "dropout" in gnn_source:
+                flat_data["gnn_dropout"] = gnn_source["dropout"]
+            if "checkpoint_dir" in gnn_source:
+                flat_data["gnn_checkpoint_dir"] = gnn_source["checkpoint_dir"]
+            if "cache_path" in gnn_source:
+                flat_data["gnn_cache_path"] = gnn_source["cache_path"]
+            if "force_retrain" in gnn_source:
+                flat_data["gnn_force_retrain"] = gnn_source["force_retrain"]
+
+        # Parse Classical Quantitative & Signal Processing Features
+        quant_source = data.get("quant_signals") or (feature_dict.get("quant_signals") if isinstance(feature_dict, dict) else None)
+        if isinstance(quant_source, dict):
+            if "enabled" in quant_source:
+                flat_data["enable_quant_signal_features"] = quant_source["enabled"]
+            if "enable_momentum" in quant_source:
+                flat_data["quant_enable_momentum"] = quant_source["enable_momentum"]
+            if "enable_macd" in quant_source:
+                flat_data["quant_enable_macd"] = quant_source["enable_macd"]
+            if "enable_volatility" in quant_source:
+                flat_data["quant_enable_volatility"] = quant_source["enable_volatility"]
+            if "enable_fourier" in quant_source:
+                flat_data["quant_enable_fourier"] = quant_source["enable_fourier"]
+            if "enable_exogenous" in quant_source:
+                flat_data["quant_enable_exogenous"] = quant_source["enable_exogenous"]
+            if "enable_lags" in quant_source:
+                flat_data["quant_enable_lags"] = quant_source["enable_lags"]
+            if "enable_rolling" in quant_source:
+                flat_data["quant_enable_rolling"] = quant_source["enable_rolling"]
+            if "enable_cyclic_time" in quant_source:
+                flat_data["quant_enable_cyclic_time"] = quant_source["enable_cyclic_time"]
+            if "enable_interactions" in quant_source:
+                flat_data["quant_enable_interactions"] = quant_source["enable_interactions"]
+            if "enable_multiscale_rolling" in quant_source:
+                flat_data["quant_enable_multiscale_rolling"] = quant_source["enable_multiscale_rolling"]
+            if "prune_sparse_features" in quant_source:
+                flat_data["quant_prune_sparse"] = quant_source["prune_sparse_features"]
+            if "max_sparsity_threshold" in quant_source:
+                flat_data["quant_max_sparsity_threshold"] = quant_source["max_sparsity_threshold"]
+            if "min_variance_threshold" in quant_source:
+                flat_data["quant_min_variance_threshold"] = quant_source["min_variance_threshold"]
+            if "outlier_clip_quantile" in quant_source:
+                flat_data["quant_outlier_clip_quantile"] = quant_source["outlier_clip_quantile"]
+            if "cache_path" in quant_source:
+                flat_data["quant_cache_path"] = quant_source["cache_path"]
+            if "force_recompute" in quant_source:
+                flat_data["quant_force_recompute"] = quant_source["force_recompute"]
 
         # Handle legacy nonlinear_representations mappings (backward compatibility)
         nl_source = data.get("nonlinear_representations") or (feature_dict.get("nonlinear_representations") if isinstance(feature_dict, dict) else None)
@@ -505,7 +800,12 @@ class UnifiedConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "UnifiedConfig":
         features_cfg = PipelineConfig.from_dict(data)
-        model_cfg = ModelConfig.from_dict(data.get("model", {}))
+        model_data = dict(data.get("model", {}))
+        dt = data.get("decision_threshold") or model_data.get("decision_threshold")
+        if dt is not None:
+            model_data["decision_threshold"] = float(dt)
+            features_cfg.decision_threshold = float(dt)
+        model_cfg = ModelConfig.from_dict(model_data)
         experiment_cfg = ExperimentConfig.from_dict(data.get("experiment", {}))
         tuning_cfg = TuningConfig.from_dict(data.get("tuning", {}))
         return cls(features=features_cfg, model=model_cfg, experiment=experiment_cfg, tuning=tuning_cfg)
@@ -525,8 +825,14 @@ class UnifiedConfig:
         raw_dict = {
             "dataset": {
                 "data_path": self.features.data_path,
+                "raw_full_dataset_dir": self.features.raw_full_dataset_dir,
+                "rebuild_full_dataset": self.features.rebuild_full_dataset,
                 "target_col": self.features.target_col,
+                "group_col": self.features.group_col,
                 "test_size": self.features.test_size,
+                "val_size": self.features.val_size,
+                "enable_cv": self.features.enable_cv,
+                "cv_folds": self.features.cv_folds,
                 "random_state": self.features.random_state,
                 "stratify": self.features.stratify,
                 "exclude_cols": self.features.exclude_cols,
@@ -534,6 +840,7 @@ class UnifiedConfig:
             "features": asdict(self.features),
             "model": asdict(self.model),
             "experiment": asdict(self.experiment),
+            "tuning": asdict(self.tuning),
         }
         with open(str(path), "w", encoding="utf-8") as f:
             yaml.dump(raw_dict, f, sort_keys=False, allow_unicode=True)

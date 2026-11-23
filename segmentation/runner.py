@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from threadpoolctl import threadpool_limits
 
-from preprocessing.splitting import DataSplitter
+from preprocessing.ingestion.splitting import DataSplitter
 from .config import load_config
 from .data import load_segmentation_data
 from .features import (ORIGINAL_FEATURES, SYNTHETIC_FEATURES, REDUCED_FEATURES,
