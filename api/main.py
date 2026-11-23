@@ -596,6 +596,12 @@ def predict_segments(payload: CustomerInput, algorithm: Literal["kmeans", "hiera
         raise HTTPException(422, "Invalid segmentation features") from exc
 
 
+if demo_dir := os.getenv("DEMO_DATA_DIR"):
+    from demo_data.serve import demo_router
+
+    app.include_router(demo_router(Path(demo_dir)))
+
+
 # Serve static production frontend when built (for single-container cloud deploy or static serving)
 if FRONTEND_DIST.is_dir():
     from fastapi.staticfiles import StaticFiles

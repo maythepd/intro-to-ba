@@ -58,6 +58,13 @@ def assemble(root: Path, base_path: Path = BASE) -> pd.DataFrame:
     # Verify all six tables from the dataset release, not the older synthetic feature CSV.
     tables = {k: read_table(find_table(root, k)) for k in
               ("account", "transaction", "login", "complaint", "savingscycle", "customercontext")}
+    return assemble_profiles(out, tables)
+
+
+def assemble_profiles(base: pd.DataFrame, tables: dict[str, pd.DataFrame], *,
+                      demo: bool = False) -> pd.DataFrame:
+    """Project relational events onto the inputs of the deployed clustering bundle."""
+    out = base.copy()
     accounts = tables["account"].copy()
     trans = tables["transaction"].copy()
     login = tables["login"].copy()
@@ -95,6 +102,9 @@ def assemble(root: Path, base_path: Path = BASE) -> pd.DataFrame:
         trans["channel"].ne("system") &
         ~trans["transaction_type"].isin(["interest_credit", "bank_fee"])
     ].copy()
+    if demo:
+        initiated = initiated.loc[initiated.direction.eq("out") |
+                                  initiated.transaction_type.eq("cash_deposit")].copy()
     # Count linked internal transfer records once within each customer's activity.
     if "transfer_id" in initiated:
         transfer_key = initiated["transfer_id"].astype("string")
@@ -128,8 +138,12 @@ def assemble(root: Path, base_path: Path = BASE) -> pd.DataFrame:
     login_last = login.groupby("customer_id")["sign_in_datetime"].max()
     last_activity = pd.concat([trans_last.rename("transactions"),login_last.rename("logins")],axis=1).max(axis=1)
     out["last_activity"] = out["customer_id"].map(last_activity)
-    out["recency_days"] = ((BOUNDARY - out["last_activity"].fillna(out["exposure_start"]))
-                           .dt.days.clip(1, 180)).astype(int)
+    elapsed = BOUNDARY - out["last_activity"].fillna(out["exposure_start"])
+    out["recency_days"] = elapsed.dt.days.clip(1, 180).astype(int)
+    if demo:
+        # The fitted table uses whole days and a 180-day cap. Preserve actual
+        # elapsed time for sub-day observations where the display floor overstates it.
+        out["recency_days"] = np.minimum(out["recency_days"], elapsed.dt.total_seconds() / 86400)
     last30 = login.loc[login["sign_in_datetime"] >= "2026-09-01"]
     out = merge_metric(out, last30.groupby("customer_id").size(), "app_logins_monthly")
     out["app_logins_monthly"] = out["app_logins_monthly"].astype(int)
