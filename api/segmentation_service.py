@@ -30,7 +30,7 @@ BEHAVIORAL_NUMERIC = ("recency_days", "monthly_transactions", "trans_amount_3m",
 FEATURES = ORIGINAL_NUMERIC + ORIGINAL_CATEGORICAL + BEHAVIORAL_NUMERIC
 ALGORITHMS = ("kmeans", "hierarchical")
 MODEL_DIR = Path(os.getenv("SEGMENTATION_MODEL_DIR", "artifacts/segmentation"))
-DATA_PATH = Path(os.getenv("CUSTOMERS_CSV_PATH", "data/official/customer_features.csv"))
+DATA_PATH = Path(os.getenv("SEGMENTATION_CUSTOMERS_CSV_PATH", "data/official/customer_features.csv"))
 
 
 def signed_log1p(values):

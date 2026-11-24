@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sklearn.metrics import (average_precision_score, confusion_matrix, f1_score,
+from sklearn.metrics import (accuracy_score, average_precision_score, confusion_matrix, f1_score,
                              precision_score, recall_score, roc_auc_score)
 
 
@@ -8,13 +8,17 @@ def evaluate(events: list[dict], reference: dict, cfg: dict, *, as_of: str) -> d
     mature = [event for event in events if event["horizon_end"] <= as_of]
     labeled = [event for event in mature if event.get("label") is not None
                and event.get("observed_at", "") <= as_of]
+    sources = sorted({event.get("label_source", "unknown") for event in labeled})
     result = {"status": "awaiting_labels" if mature else "awaiting_outcome_horizon",
               "sample_count": len(events), "mature_samples": len(mature), "labeled_samples": len(labeled),
               "label_coverage": len(labeled) / len(mature) if mature else 0.0,
               "positive_samples": sum(int(event["label"]) for event in labeled),
               "negative_samples": sum(int(event["label"]) == 0 for event in labeled),
               "threshold": reference["decision_threshold"], "metrics": None,
-              "baseline": reference["performance"], "trigger_candidate": False, "drops": {}}
+              "baseline": reference["performance"], "trigger_candidate": False, "drops": {},
+              "label_sources": sources, "simulated": "synthetic_stress" in sources,
+              "churn_rate": sum(int(event["label"]) for event in labeled) / len(labeled) if labeled else None,
+              "baseline_note": "Study holdout labels; synthetic outcomes are a different label source"}
     if not labeled:
         return result
     y = [int(event["label"]) for event in labeled]
@@ -22,6 +26,7 @@ def evaluate(events: list[dict], reference: dict, cfg: dict, *, as_of: str) -> d
     predicted = [value >= reference["decision_threshold"] for value in p]
     both = len(set(y)) == 2
     metrics = {"roc_auc": float(roc_auc_score(y, p)) if both else None,
+               "accuracy": float(accuracy_score(y, predicted)),
                "average_precision": float(average_precision_score(y, p)) if both else None,
                "precision": float(precision_score(y, predicted, zero_division=0)),
                "recall": float(recall_score(y, predicted, zero_division=0)),

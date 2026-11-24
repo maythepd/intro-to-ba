@@ -75,7 +75,7 @@ def demo_router(output: Path) -> APIRouter:
         if include_predictions:
             result["predictions"] = [
                 {"customer_id": int(customer_id), "churn_probability": probability,
-                 "predicted_churn": probability >= threshold, "risk_level": risk_level(probability, threshold),
+                 "predicted_churn": probability >= threshold, "risk_level": risk_level(probability),
                  **{name: int(values[index]) for name, values in clusters.items()}}
                 for index, (customer_id, probability) in enumerate(zip(rows.customer_id, probabilities.tolist()))
             ]

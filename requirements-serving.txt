@@ -1,0 +1,19 @@
+# Versions verified with the private synthetic serving bundle (Python 3.11).
+# Offline research/test packages such as torch and optuna are not required to serve.
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.4
+pandas==2.3.3
+numpy==2.4.6
+scikit-learn==1.9.1
+imbalanced-learn==0.14.2
+xgboost==3.2.0
+PyYAML==6.0.4
+joblib==1.6.0
+kagglehub==0.4.3
+scipy==1.17.1
+SQLAlchemy==2.0.52
+psycopg[binary]==3.3.9
+python-dotenv==1.2.4
+# Lightweight API-parity validation during synthetic builds; no research training stack.
+httpx==0.28.1

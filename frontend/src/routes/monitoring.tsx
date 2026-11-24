@@ -19,7 +19,7 @@ const names: Record<string, string> = {
   missing_data: "Missing values", unavailable: "Unavailable",
 };
 const pretty = (value: string) => names[value] ?? value.replaceAll("_", " ");
-const number = (value: number | null | undefined, digits = 3) => value == null ? "—" : value.toFixed(digits);
+const number = (value: number | null | undefined, digits = 3) => value == null ? "N/A" : value.toFixed(digits);
 const percent = (value: number | null | undefined) => value == null ? "—" : `${(value * 100).toFixed(1)}%`;
 const date = (value: string) => new Date(value).toLocaleString();
 const control = "h-10 max-w-full rounded-xl border bg-background px-3 text-sm";
@@ -59,7 +59,15 @@ function Monitoring() {
   const features = report?.drift.features ?? [];
   const feature = features.find((item) => item.name === selectedFeature) ?? features[0];
   const history = data?.history ?? [];
-  const chart = history.map((run) => ({ window: new Date(run.window_end).toLocaleDateString(),
+  const synthetic = scenario.startsWith("synthetic_demo");
+  const scenarios = Array.from(new Set(["stable", "behavior_drift", "performance_drop", ...(data?.scenarios ?? []),
+    ...((data?.scenarios ?? []).some((name) => name.startsWith("synthetic_demo")) ? [] : ["synthetic_demo"])]));
+  const scenarioName = (name: string) => {
+    const info = data?.scenario_details?.find((item) => item.name === name);
+    return name.startsWith("synthetic_demo") ? `Synthetic Demo · ${info?.outcome_kind === "simulated" ? `Simulated labels (seed ${info.label_seed})` : "Drift only"} · ${name.slice(15) || "No reports"}`
+      : ({ stable: "Stable population", behavior_drift: "Behavioral drift", performance_drop: "Performance deterioration" }[name] ?? name);
+  };
+  const chart = history.map((run) => ({ window: run.synthetic_replay?.batch_id ?? new Date(run.window_end).toLocaleDateString(),
     roc_auc: run.performance.metrics?.roc_auc ?? null, average_precision: run.performance.metrics?.average_precision ?? null,
     recall: run.performance.metrics?.recall ?? null }));
   const resetSelection = () => { setSelectedId(""); setSelectedFeature(""); };
@@ -76,7 +84,7 @@ function Monitoring() {
         </select></label>
       <label className="grid gap-2 text-xs font-medium">Scenario
         <select className={control} value={scenario} disabled={source !== "study_replay"} onChange={(e) => { setScenario(e.target.value); resetSelection(); }}>
-          <option value="stable">Stable population</option><option value="behavior_drift">Behavioral drift</option><option value="performance_drop">Performance deterioration</option>
+          {scenarios.map((name) => <option key={name} value={name}>{scenarioName(name)}</option>)}
         </select></label>
       <label className="grid gap-2 text-xs font-medium">Model version
         <select className={control} value={modelId} onChange={(e) => { setModelId(e.target.value); resetSelection(); }}>
@@ -95,7 +103,7 @@ function Monitoring() {
         {data.storage_ready && !data.storage_persistent && <Notice tone="warning" title="Local monitoring history">This environment stores history locally. A cloud deployment needs persistent storage to retain it across restarts.</Notice>}
         {data.last_ingest_error && <div className="mt-3"><Notice tone="warning" title="Monitoring collection needs attention">Some telemetry could not be saved. {data.last_error_at && <>Last failure: {date(data.last_error_at)}.</>} The report retains its original measurement time.</Notice></div>}
         {source === "study_replay" && <div className="mt-3"><Notice tone="warning" title="Simulated study replay">
-          Timestamps are synthetic. Held-out customers are reused across scenarios and are distinct within each scenario's windows.
+          {synthetic ? "Five newly synthesized customer batches share the 2026-10-01 feature snapshot. Window dates are simulated ingestion times. Optional outcomes use an independent illustrative policy and do not measure accuracy on real customers. Alerts are demonstrations." : "Timestamps are synthetic. Held-out customers are reused across scenarios and are distinct within each scenario's windows."}
           {scenario === "performance_drop" && " This stress test deliberately replaces study labels with adversarial synthetic outcomes."}
         </Notice></div>}
         {source === "snapshot_batch" && <div className="mt-3"><Notice title="Fixed study snapshot">Repeated scoring of the same snapshot is deduplicated. This is not a stream of newly observed customers.</Notice></div>}
@@ -117,8 +125,8 @@ function Monitoring() {
             <div className="flex flex-wrap items-end justify-between gap-4">
               <label className="grid min-w-0 max-w-full gap-2 text-xs font-medium">Select a completed window
                 <select className={control} value={selectedId} onChange={(e) => { setSelectedId(e.target.value); setSelectedFeature(""); }}>
-                  <option value="">Latest · {date(data.latest.window_end)}</option>
-                  {history.map((run) => <option key={run.id} value={run.id}>{date(run.window_start)} → {date(run.window_end)} · {pretty(run.status)}</option>)}
+                  <option value="">Latest · {data.latest.synthetic_replay?.batch_id ?? date(data.latest.window_end)}</option>
+                  {history.map((run) => <option key={run.id} value={run.id}>{run.synthetic_replay ? `${run.synthetic_replay.batch_index}/5 · ${run.synthetic_replay.batch_id} · ` : ""}{date(run.window_start)} → {date(run.window_end)} · {pretty(run.status)}</option>)}
                 </select></label>
               {report && <div className="flex gap-2"><Button size="sm" variant="outline" asChild><a href={download("html")}><Download /> HTML report</a></Button>
                 <Button size="sm" variant="outline" asChild><a href={download("json")}><Download /> JSON</a></Button></div>}
@@ -128,6 +136,13 @@ function Monitoring() {
             {data.stale && <p className="mt-3 text-xs text-warning">The latest report is more than two monitoring periods old. Its original timestamp is retained.</p>}
           </Panel>
           {report && <>
+            {report.synthetic_replay && <Panel className="mt-6" title={`Batch ${report.synthetic_replay.batch_index}/5 · ${report.synthetic_replay.batch_id}`} subtitle="Simulated time and outcomes; measured model probabilities and drift.">
+              <p className="break-all text-xs text-muted-foreground">Dataset {report.synthetic_replay.dataset_sha256} · Generation seed {report.synthetic_replay.generation_seed} · Feature snapshot {report.synthetic_replay.feature_snapshot}.</p>
+              <p className="mt-3 text-sm">{report.synthetic_replay.label_policy_version ? `Simulated outcomes: ${report.synthetic_replay.label_policy_version} · seed ${report.synthetic_replay.label_seed}.` : "N/A — no outcomes supplied. Only drift is measured."}</p>
+              <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[820px] text-left text-xs"><thead className="border-b"><tr>{["Batch", "N", "Critical share", "Labels", "ROC-AUC", "AP", "Accuracy", "F1", "State"].map((label) => <th className="p-2" key={label}>{label}</th>)}</tr></thead>
+                <tbody>{history.map((run) => <tr key={run.id} className="border-b"><td className="p-2"><button className="text-primary underline" onClick={() => setSelectedId(run.id)}>{run.synthetic_replay?.batch_id}</button></td><td className="p-2">{run.sample_count}</td><td className="p-2">{percent(run.drift.critical_share)}</td><td className="p-2">{percent(run.performance.label_coverage)}</td>{(["roc_auc", "average_precision", "accuracy", "f1"] as const).map((key) => <td className="p-2" key={key}>{number(run.performance.metrics?.[key])}</td>)}<td className="p-2"><State value={run.status} /></td></tr>)}</tbody>
+              </table></div>
+            </Panel>}
             {report.alerts.length > 0 && <Panel className="mt-6" title="Alerts and next actions" subtitle="Signals use this model, source and adjacent non-overlapping windows.">
               <div className="grid gap-3">{report.alerts.map((alert) => <Notice key={alert.id} tone={alert.status === "retraining_required" ? "danger" : "warning"} title={pretty(alert.status)}>
                 <p>{alert.action}</p><p className="mt-2 text-xs">Evidence: {JSON.stringify(alert.evidence)}</p>
@@ -152,9 +167,10 @@ function Monitoring() {
               {report.performance.trigger_candidate && <p className="mt-3 text-xs text-warning">Qualifying performance-drop windows: {report.consecutive_candidates?.performance ?? 1} / {(report.policy ?? data.policy).consecutive_windows} required for a retraining recommendation.</p>}
               <p className="mt-3 text-xs text-muted-foreground">{report.performance.labeled_samples} outcomes · {report.performance.positive_samples} positive / {report.performance.negative_samples} negative · Coverage {percent(report.performance.label_coverage)}.
                 Alerts require {(report.policy ?? data.policy).min_labeled_samples} labels, {(report.policy ?? data.policy).min_class_samples} per class and {percent((report.policy ?? data.policy).min_label_coverage)} coverage.</p>
-              <div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="border-b"><tr><th className="p-3">Metric</th><th className="p-3">Study baseline</th><th className="p-3">Window</th></tr></thead>
-                <tbody className="divide-y">{([['ROC-AUC', 'ROC_AUC', 'roc_auc'], ['Average Precision', 'PR_AUC', 'average_precision'], ['Recall', 'Recall', 'recall'], ['Precision', 'Precision', 'precision'], ['F1', 'F1_Score', 'f1']] as const).map(([label, key, metric]) =>
-                  <tr key={key}><td className="p-3">{label}</td><td className="p-3 tabular-nums">{number(report.performance.baseline[key])}</td><td className="p-3 tabular-nums">{number(report.performance.metrics?.[metric])}</td></tr>)}</tbody></table></div>
+              <p className="mt-3 text-xs text-muted-foreground">{report.performance.baseline_note} · {report.performance.simulated ? "Simulated" : "Labeled"} churn rate {report.performance.churn_rate == null ? "N/A" : percent(report.performance.churn_rate)}.</p>
+              <div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="border-b"><tr><th className="p-3">Metric</th><th className="p-3">Study baseline (different labels)</th>{synthetic && <th className="p-3">Normal synthetic baseline</th>}<th className="p-3">Window</th></tr></thead>
+                <tbody className="divide-y">{([['ROC-AUC', 'ROC_AUC', 'roc_auc'], ['Average Precision', 'PR_AUC', 'average_precision'], ['Accuracy', 'Accuracy', 'accuracy'], ['Recall', 'Recall', 'recall'], ['Precision', 'Precision', 'precision'], ['F1', 'F1_Score', 'f1']] as const).map(([label, key, metric]) =>
+                  <tr key={key}><td className="p-3">{label}</td><td className="p-3 tabular-nums">{number(report.performance.baseline[key])}</td>{synthetic && <td className="p-3 tabular-nums">{number(report.performance.synthetic_baseline?.metrics[metric])}</td>}<td className="p-3 tabular-nums">{number(report.performance.metrics?.[metric])}</td></tr>)}</tbody></table></div>
               {report.performance.metrics && <p className="mt-4 text-xs text-muted-foreground">Confusion matrix [[TN, FP], [FN, TP]]: {JSON.stringify(report.performance.metrics.confusion_matrix)} · Threshold {report.performance.threshold}.</p>}
               {chart.some((row) => row.roc_auc != null) && <div className="mt-6 h-64"><ResponsiveContainer width="100%" height="100%"><LineChart data={chart}>
                 <CartesianGrid stroke="var(--color-border)" vertical={false} /><XAxis dataKey="window" tick={{ fontSize: 11 }} /><YAxis domain={[0, 1]} tick={{ fontSize: 11 }} /><Tooltip /><Legend />
@@ -165,7 +181,7 @@ function Monitoring() {
               <Panel title="Prediction distribution" subtitle="Prediction shift is a diagnostic signal; quality is measured separately with labels.">
                 {report.prediction_drift ? <><State value={report.prediction_drift.status} /><Distribution data={report.prediction_drift.distribution} /></> : <p className="text-sm text-muted-foreground">Not enough scored samples.</p>}
               </Panel>
-              <Panel title="Data quality and runtime" subtitle="Request errors include rejected inputs; model metrics deduplicate customer lookups.">
+              <Panel title="Data quality and runtime" subtitle={report.quality.note ?? "Request errors include rejected inputs; model metrics deduplicate customer lookups."}>
                 <dl className="grid grid-cols-2 gap-4 text-sm">{[
                   ["Requests", report.quality.request_count.toLocaleString()], ["Rejected / failed", report.quality.invalid_requests.toLocaleString()],
                   ["Error rate", percent(report.quality.error_rate)], ["Missingness above baseline", percent(report.quality.max_missing_excess)],

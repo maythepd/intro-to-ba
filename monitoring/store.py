@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 import os
 import re
 from pathlib import Path
@@ -99,6 +101,7 @@ class Store:
                            connect_args={"connect_timeout": 5, "prepare_threshold": None,
                                          "options": "-c statement_timeout=5000"})
         self.engine = create_engine(url, **options)
+        self._active_connection = ContextVar("monitoring_connection", default=None)
         if self.is_sqlite:
             @event.listens_for(self.engine, "connect")
             def configure(connection, _):
@@ -118,7 +121,7 @@ class Store:
                     connection.exec_driver_sql(f'SET LOCAL ROLE "{role}"')
 
     def migrate(self):
-        with self.engine.begin() as connection:
+        with self.connection(write=True) as connection:
             if not self.is_sqlite:
                 connection.execute(CreateSchema("bank_monitoring", if_not_exists=True))
             metadata.create_all(connection)
@@ -132,12 +135,58 @@ class Store:
     def close(self):
         self.engine.dispose()
 
+    @contextmanager
+    def transaction(self):
+        """Share one transaction across events, immutable outcomes, reports and alerts."""
+        with self.connection(write=True) as connection:
+            token = self._active_connection.set(connection)
+            try:
+                yield connection
+            finally:
+                self._active_connection.reset(token)
+
+    @contextmanager
+    def connection(self, *, write=False):
+        current = self._active_connection.get()
+        if current is not None:
+            yield current
+        else:
+            with (self.engine.begin() if write else self.engine.connect()) as connection:
+                yield connection
+
+    def lock_scope(self, scope: str):
+        """Serialize the same replay scope across PostgreSQL workers until commit."""
+        connection = self._active_connection.get()
+        if connection is None:
+            raise ValueError("Replay scope locks require a transaction")
+        if not self.is_sqlite:
+            from monitoring.settings import digest
+            key = int(digest(scope)[:15], 16)
+            connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+
+    def list_scenarios(self, model_id: str) -> list[str]:
+        with self.connection() as connection:
+            return list(connection.execute(select(runs.c.scenario).where(
+                runs.c.model_id == model_id, runs.c.source == "study_replay").distinct().order_by(runs.c.scenario)).scalars())
+
+    def scenario_details(self, model_id: str) -> list[dict]:
+        result = {}
+        with self.connection() as connection:
+            reports = connection.execute(select(runs.c.report).where(
+                runs.c.model_id == model_id, runs.c.source == "study_replay").order_by(runs.c.computed_at.desc()).limit(1000)).scalars()
+            for report in reports:
+                if report["scenario"] not in result:
+                    meta = report.get("synthetic_replay", {})
+                    result[report["scenario"]] = {"name": report["scenario"], "outcome_kind": meta.get("outcome_kind"),
+                                                  "label_seed": meta.get("label_seed")}
+        return list(result.values())
+
     def ping(self):
-        with self.engine.connect() as connection:
+        with self.connection() as connection:
             return connection.execute(select(versions.c.version)).scalar_one() == 1
 
     def register_model(self, model_id: str, reference: dict, details: dict, reference_hash: str):
-        with self.engine.begin() as connection:
+        with self.connection(write=True) as connection:
             connection.execute(self.insert(models).values(id=model_id, created_at=timestamp(now_utc()),
                 reference_sha256=reference_hash, reference=reference, details=details).on_conflict_do_nothing(index_elements=["id"]))
             existing = connection.execute(select(models.c.reference_sha256).where(models.c.id == model_id)).scalar_one()
@@ -145,12 +194,12 @@ class Store:
                 raise ValueError("Model registry reference mismatch")
 
     def list_models(self) -> list[dict]:
-        with self.engine.connect() as connection:
+        with self.connection() as connection:
             rows = connection.execute(select(models).order_by(models.c.created_at.desc()).limit(100)).mappings()
             return [{"id": row["id"], "created_at": row["created_at"], **row["details"]} for row in rows]
 
     def get_model(self, model_id: str) -> dict | None:
-        with self.engine.connect() as connection:
+        with self.connection() as connection:
             row = connection.execute(select(models).where(models.c.id == model_id)).mappings().first()
             return dict(row) if row else None
 
@@ -158,7 +207,7 @@ class Store:
         if any(row["source"] not in SOURCES for row in rows):
             raise ValueError("Unsupported monitoring source")
         inserted = 0
-        with self.engine.begin() as connection:
+        with self.connection(write=True) as connection:
             for offset in range(0, len(rows), 250):
                 result = connection.execute(self.insert(events).values(rows[offset:offset + 250])
                                             .on_conflict_do_nothing(index_elements=["id"]).returning(events.c.id))
@@ -169,7 +218,7 @@ class Store:
         as_of = as_of or timestamp(now_utc())
         if len({row["event_id"] for row in rows}) != len(rows):
             raise ValueError("Duplicate prediction IDs in outcome upload")
-        with self.engine.begin() as connection:
+        with self.connection(write=True) as connection:
             found = connection.execute(select(events).where(events.c.id.in_([r["event_id"] for r in rows]))).mappings()
             lookup = {row["id"]: row for row in found}
             existing = connection.execute(select(outcomes).where(outcomes.c.event_id.in_([r["event_id"] for r in rows]))).mappings()
@@ -203,14 +252,14 @@ class Store:
                  .where(events.c.model_id == model_id, events.c.source == source, events.c.scenario == scenario,
                         events.c.occurred_at >= start, events.c.occurred_at < end)
                  .order_by(events.c.occurred_at, events.c.id).limit(limit + 1))
-        with self.engine.connect() as connection:
+        with self.connection() as connection:
             result = [dict(row) for row in connection.execute(query).mappings()]
         if len(result) > limit:
             raise ValueError("Window exceeds max_window_events; choose smaller windows")
         return result
 
     def previous_run(self, model_id: str, source: str, scenario: str, start: str, config_hash: str) -> dict | None:
-        with self.engine.connect() as connection:
+        with self.connection() as connection:
             return connection.execute(select(runs.c.report).where(runs.c.model_id == model_id,
                 runs.c.source == source, runs.c.scenario == scenario, runs.c.window_end == start,
                 runs.c.config_sha256 == config_hash).order_by(runs.c.computed_at.desc()).limit(1)).scalar_one_or_none()
@@ -218,7 +267,7 @@ class Store:
     def save_run(self, report: dict):
         row = {key: report[key] for key in ("id", "model_id", "source", "scenario", "window_start", "window_end", "config_sha256", "computed_at")}
         row["report"] = report
-        with self.engine.begin() as connection:
+        with self.connection(write=True) as connection:
             stmt = self.insert(runs).values(row)
             connection.execute(stmt.on_conflict_do_update(index_elements=["id"],
                 set_={"report": stmt.excluded.report, "computed_at": stmt.excluded.computed_at}))
@@ -234,20 +283,20 @@ class Store:
         query = select(runs.c.report).where(runs.c.model_id == model_id, runs.c.source == source, runs.c.scenario == scenario)
         if since:
             query = query.where(runs.c.window_end >= since)
-        with self.engine.connect() as connection:
+        with self.connection() as connection:
             return connection.execute(query.order_by(runs.c.window_end.desc(), runs.c.computed_at.desc()).limit(limit)).scalars().all()
 
     def get_run(self, identifier: str) -> dict | None:
-        with self.engine.connect() as connection:
+        with self.connection() as connection:
             return connection.execute(select(runs.c.report).where(runs.c.id == identifier)).scalar_one_or_none()
 
     def prediction_scopes(self, identifiers: list[str]) -> list[dict]:
-        with self.engine.connect() as connection:
+        with self.connection() as connection:
             rows = connection.execute(select(events.c.model_id, events.c.source, events.c.scenario, events.c.occurred_at)
                                       .where(events.c.id.in_(identifiers))).mappings()
             return [dict(row) for row in rows]
 
     def prune(self, before: str) -> int:
         # Called only by an explicit operator command; report/model history is retained.
-        with self.engine.begin() as connection:
+        with self.connection(write=True) as connection:
             return connection.execute(delete(events).where(events.c.occurred_at < before)).rowcount

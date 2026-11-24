@@ -17,8 +17,8 @@ from demo_data.synthesize import (
     match_profiles,
     synthesize,
 )
-from preprocessing.domain.behavioral_momentum import BehavioralMomentumEngineer
-from preprocessing.domain.customer_friction import CustomerFrictionEngineer
+from model_development.preprocessing.behavioral_momentum import BehavioralMomentumEngineer
+from model_development.preprocessing.customer_friction import CustomerFrictionEngineer
 from preprocessing.ingestion.etl import BankDataETL
 from segmentation.data import REQUIRED, SNAPSHOT, START, guard_tables
 
@@ -203,7 +203,8 @@ def aggregate(tables, input_columns):
     # Use only the classifier's committed inputs so profile formulas match its serving path.
     main = raw.loc[:, input_columns]
     profiles = CustomerFrictionEngineer().transform(BehavioralMomentumEngineer().transform(main))
-    raw["monthly_logins"] = profiles.monthly_logins
+    # Diagnostic successful engagement is independent of the legacy serving formula.
+    raw["monthly_logins"] = raw.successful_logins / raw.exposure_months
     raw["login_failure_rate"] = raw.failed_logins / raw.total_logins.replace(0, np.nan)
     for name in set(module5.PROFILE_COLUMNS) - set(raw) - {"customer_id"}:
         raw[name] = profiles[name]

@@ -89,16 +89,21 @@ export interface MonitoringAlert {
 export interface PerformanceReport {
   status: string; sample_count: number; mature_samples: number; labeled_samples: number;
   label_coverage: number; positive_samples: number; negative_samples: number;
-  metrics: { roc_auc: number | null; average_precision: number | null; precision: number; recall: number; f1: number; confusion_matrix: number[][] } | null;
+  metrics: { roc_auc: number | null; average_precision: number | null; accuracy?: number; precision: number; recall: number; f1: number; confusion_matrix: number[][] } | null;
   baseline: Record<string, number>; threshold: number; trigger_candidate: boolean; drops: Record<string, number>;
+  label_sources?: string[]; simulated?: boolean; churn_rate?: number | null; baseline_note?: string;
+  synthetic_baseline?: { batches: string[]; sample_count: number; metrics: Record<string, number> } | null;
 }
 export interface MonitoringRun {
   id: string; model_id: string; source: MonitoringSource; scenario: string;
   window_start: string; window_end: string; computed_at: string; status: string; sample_count: number;
   data_kind?: string; reference_sha256?: string;
+  synthetic_replay?: { run_identity: string; batch_id: string; batch_index: number; batch_count: number;
+    dataset_sha256: string; generation_seed: number; feature_snapshot: string; anchor: string;
+    label_policy_version: string | null; label_seed: number | null; outcome_kind: string; time_kind: string };
   drift: { status: string; sample_count: number; minimum_samples: number; critical_share: number | null; trigger_candidate: boolean; features?: DriftFeature[] };
   prediction_drift?: DriftFeature | null; performance: PerformanceReport;
-  quality: { request_count: number; valid_requests: number; invalid_requests: number; error_rate: number; max_missing_excess: number; trigger_candidate: boolean };
+  quality: { request_count: number; valid_requests: number; invalid_requests: number; error_rate: number; max_missing_excess: number; trigger_candidate: boolean; note?: string };
   latency?: { p50_ms: number | null; p95_ms: number | null };
   segments?: { status: string; coverage: number; sample_count?: number; model_id?: string; distribution?: DistributionBin[]; note?: string };
   consecutive_candidates?: Record<string, number>; alerts: MonitoringAlert[];
@@ -109,6 +114,8 @@ export interface MonitoringSummary {
   reference_available: boolean; last_ingest_error: string | null; last_error_at: string | null; last_write_at: string | null;
   source: MonitoringSource; scenario: string; window_hours: number; outcome_horizon_days: number; minimum_drift_samples: number;
   latest: MonitoringRun | null; history: MonitoringRun[]; models: Array<{ id: string; name: string; created_at: string }>;
+  scenarios?: string[];
+  scenario_details?: Array<{ name: string; outcome_kind?: string | null; label_seed?: number | null }>;
   drift_available: boolean; performance_tracking_available: boolean; stale: boolean;
   policy: { min_labeled_samples: number; min_class_samples: number; min_label_coverage: number; consecutive_windows: number; psi_critical: number; js_critical: number; performance_drop: number; quality_error_rate: number };
 }

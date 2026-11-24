@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from uuid import uuid4
 
 import numpy as np
@@ -28,7 +28,8 @@ class MonitoringService:
         self.last_error = None
         self.last_error_at = None
         self.last_write_at = None
-        self.lock = Lock()
+        self.lock = RLock()
+        self.segmentation = segmentation
         self.segment_lookup = {}
         self.segment_model_id = None
         self.reference = None
@@ -169,6 +170,8 @@ class MonitoringService:
             return result
         reports = self.store.list_runs(result["model_id"], source, scenario, since=since)
         result["models"] = self.store.list_models()
+        result["scenarios"] = self.store.list_scenarios(result["model_id"])
+        result["scenario_details"] = self.store.scenario_details(result["model_id"])
         result["history"] = [summarize(report) for report in reversed(reports)]
         result["latest"] = reports[0] if reports else None
         if reports:

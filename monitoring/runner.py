@@ -20,14 +20,14 @@ def closed_window(at: datetime, hours: int) -> tuple[str, str]:
 
 def summarize(report: dict) -> dict:
     return {key: report[key] for key in ("id", "model_id", "source", "scenario", "window_start", "window_end",
-            "computed_at", "status", "sample_count", "drift", "performance", "quality", "alerts")
-            if key not in ("drift", "performance")} | {
+            "computed_at", "status", "sample_count", "drift", "performance", "quality", "alerts", "synthetic_replay")
+            if key not in ("drift", "performance") and key in report} | {
         "drift": {key: value for key, value in report["drift"].items() if key != "features"},
         "performance": report["performance"]}
 
 
 def run_window(store, model_id: str, cfg: dict, *, source: str, scenario: str = "",
-               start: str, end: str, as_of: str | None = None) -> dict:
+               start: str, end: str, as_of: str | None = None, replay_metadata: dict | None = None) -> dict:
     if source not in SOURCES or (source == "study_replay" and not scenario) or (source != "study_replay" and scenario):
         raise ValueError("Use an explicit scenario only for study_replay")
     start, end, as_of = timestamp(start), timestamp(end), timestamp(as_of or now_utc())
@@ -40,6 +40,9 @@ def run_window(store, model_id: str, cfg: dict, *, source: str, scenario: str = 
         raise ValueError("Unknown model version")
     reference = model["reference"]
     config_hash = digest(cfg)
+    identifier = digest([model_id, source, scenario, start, end, config_hash])
+    existing = store.get_run(identifier)
+    replay_metadata = replay_metadata or (existing or {}).get("synthetic_replay")
     window = store.window_events(model_id, source, scenario, start, end, cfg["max_window_events"])
     # Request-level quality includes rejections; feature/performance cohorts take the
     # last successful prediction per subject, not repeated lookups of one customer.
@@ -57,8 +60,20 @@ def run_window(store, model_id: str, cfg: dict, *, source: str, scenario: str = 
                "eligible": len(window) >= cfg["min_quality_samples"]}
     quality["trigger_candidate"] = quality["eligible"] and max(quality["error_rate"], quality["max_missing_excess"]) > cfg["quality_error_rate"]
     measured = performance.evaluate(cohort, reference, cfg, as_of=as_of)
+    if replay_metadata:
+        # Compare synthetic batches with earlier normal batches using the same outcome policy.
+        # A study-label AP/recall difference is not a measured real-world degradation.
+        baseline = replay_metadata.get("synthetic_baseline")
+        measured["synthetic_baseline"] = baseline
+        measured["drops"] = {}
+        measured["trigger_candidate"] = False
+        measured["baseline_note"] = "Study baseline has different labels; alerts use eligible normal synthetic batches only"
+        if baseline and measured["status"] == "ready":
+            measured["drops"] = {name: baseline["metrics"][name] - measured["metrics"][name]
+                                  for name in ("recall", "average_precision")}
+            measured["trigger_candidate"] = any(value >= cfg["performance_drop"] for value in measured["drops"].values())
     durations = [event["latency_ms"] for event in window]
-    report = {"id": digest([model_id, source, scenario, start, end, config_hash]), "model_id": model_id,
+    report = {"id": identifier, "model_id": model_id,
               "source": source, "scenario": scenario, "window_start": start, "window_end": end,
               "config_sha256": config_hash, "computed_at": as_of, "sample_count": len(cohort),
               "policy": cfg,
@@ -69,13 +84,20 @@ def run_window(store, model_id: str, cfg: dict, *, source: str, scenario: str = 
               "quality": quality, "latency": {"p50_ms": float(np.percentile(durations, 50)) if durations else None,
                                              "p95_ms": float(np.percentile(durations, 95)) if durations else None},
               "segments": {"status": "unavailable", "coverage": 0.0}, "alerts": []}
+    if replay_metadata:
+        report["synthetic_replay"] = replay_metadata
+        report["data_kind"] = "Synthetic demo customers, simulated UTC windows and optional independent simulated outcomes"
+        report["quality"]["note"] = "Validated successful replay rows only; excludes real request rejection/error rates"
+        report["latency"] = {"p50_ms": None, "p95_ms": None,
+                             "note": "Offline replay; not a measurement of deployed serving latency"}
     segment_reference = reference.get("segments")
     if segment_reference:
         eligible = [event for event in cohort if event["segment"] is not None
                     and event["segment_model_id"] == segment_reference["model_id"]]
         report["segments"] = {"status": "insufficient_data", "coverage": len(eligible) / len(cohort) if cohort else 0.0,
                               "model_id": segment_reference["model_id"], "sample_count": len(eligible),
-                              "note": "Fixed KMeans memberships from the separate segmentation snapshot; unknown customers excluded"}
+                              "note": ("Fitted KMeans prediction for new synthetic customers; fixed bundle, no refit" if replay_metadata
+                                       else "Fixed KMeans memberships from the separate segmentation snapshot; unknown customers excluded")}
         if len(eligible) >= cfg["min_drift_samples"]:
             report["segments"].update(drift.compare([event["segment"] for event in eligible], segment_reference["reference"],
                                                     cfg, name="KMeans cluster distribution"))
@@ -102,6 +124,8 @@ def run_window(store, model_id: str, cfg: dict, *, source: str, scenario: str = 
     if quality["trigger_candidate"]:
         candidates.append(("data_quality", "data_quality_alert", "Inspect rejected inputs and unexpected missingness before retraining.", quality))
     for rule, status, action, evidence in candidates:
+        if replay_metadata:
+            action = "Simulation demonstration only. " + action
         report["alerts"].append({"id": digest([report["id"], rule]), "rule": rule, "status": status,
                                  "action": action, "evidence": evidence})
     report["status"] = ("retraining_required" if any(item[1] == "retraining_required" for item in candidates)

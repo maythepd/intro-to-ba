@@ -4,14 +4,22 @@ on:
     paths:
       - 'api/**'
       - 'monitoring/**'
+      - 'demo_data/**'
+      - 'tools/demo_artifact.py'
+      - 'tools/prepare_demo_source.py'
+      - 'tools/prepare_serving.py'
+      - 'config/synthetic_outcome_v1.json'
       - 'config/monitoring.yaml'
       - 'frontend/**'
       - 'tests/**'
       - 'requirements.txt'
+      - 'requirements-demo.txt'
+      - 'requirements-serving.txt'
       - 'render.yaml'
       - '.github/workflows/monitoring-ci.yml'
   push:
-    branches: [feature/module7-monitoring]
+    branches: [feature/module7-monitoring, demo]
+  workflow_dispatch:
 jobs:
   monitoring-and-ui:
     runs-on: ubuntu-latest
@@ -32,16 +40,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install -r requirements.txt httpx httpx2
+      - run: python -m pip install -r requirements-serving.txt -r requirements-demo.txt httpx2
       - uses: actions/cache@v4
         with:
           path: ~/.cache/kagglehub/datasets/maythepd/full-dataset-intro2ba
           key: kaggle-babank-release-3
       - run: python -m api.prepare_module5 --download
-      - run: python -m unittest discover -s tests -v
+      - run: python -m tools.prepare_demo_source
+      - run: python -m api.official_data --source data/full_dataset
+      - run: python -m api.segmentation_service
+      - run: python -m demo_data.generate --multiplier 10 --max-samples 10000 --seed 42
+      - run: python -m demo_data.validate
+        env:
+          DATABASE_URL: sqlite:///artifacts/monitoring/ci-validation.sqlite3
+      - run: python -m pytest tests -q
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # Preserve this fork's existing choice until its reviewed lockfile is committed.
       - run: npm install
         working-directory: frontend
       - run: npm run build

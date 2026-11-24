@@ -6,6 +6,8 @@ The upstream project covers Churn Prediction and Segmentation Modules 1 2 and 3,
 
 Bank-staff analytics interface for customer churn risk, with an XGBoost API. The `demo` branch is isolated from the group's `main` branch.
 
+Five-batch synthetic monitoring is implemented: independent optional outcomes, versioned replay, fixed-reference drift, transactional reports, authenticated admin API and dashboard batch history. See [the implementation, execution plan and reproducible commands](docs/synthetic-demo-monitoring.md). Synthetic performance is illustrative and does not measure real-customer accuracy.
+
 ## Official dataset
 
 The project's **source of truth** is [Full Dataset Intro2BA on Kaggle](https://www.kaggle.com/datasets/maythepd/full-dataset-intro2ba), as referenced in the current `main` README and `synth_data_dict.md`. It contains six related behavioral tables (`accounts`, `login`, `transactions`, `savings_cycles`, `complaints`, `customer_context`) and uses a **2026-10-01 exclusive snapshot boundary**. The original Bank Customer Churn Prediction table provides customer profiles and labels.

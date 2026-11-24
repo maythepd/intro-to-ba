@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
@@ -13,7 +14,6 @@ import numpy as np
 import pandas as pd
 
 from api import module5, segmentation_service
-from api.main import BATCH_CUSTOMER_ADAPTER, SEGMENTATION_DATA_PATH, CustomerInput
 from api.scoring import score_probabilities
 from demo_data.generate import (
     AUDIT_COLUMNS,
@@ -30,6 +30,8 @@ from demo_data.generate import (
     summarize,
 )
 from segmentation.features import ORIGINAL_FEATURES
+
+SEGMENTATION_DATA_PATH = Path(os.getenv("SEGMENTATION_CUSTOMERS_CSV_PATH", "data/official/customer_features.csv"))
 
 NULLABLE = {
     "avg_resolution_delay_days", "initiated_failure_rate", "login_failure_rate",
@@ -55,6 +57,7 @@ def json_scalar(value):
 
 
 def request_for(record, input_columns, *, segmentation=False):
+    from api.main import CustomerInput
     profile = {name: json_scalar(record[name]) for name in module5.PROFILE_COLUMNS}
     if segmentation:
         profile.update({name: json_scalar(record[f"seg_{name}"]) for name in SEG_BEHAVIOR})
@@ -99,6 +102,7 @@ def check_novelty(frame, reference, input_columns):
 
 
 def check_dataset(frame, examples, manifest, source_ids):
+    from api.main import BATCH_CUSTOMER_ADAPTER
     def require(condition, reason):
         if not condition:
             raise ValueError(reason)

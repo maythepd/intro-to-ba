@@ -23,6 +23,10 @@ def main():
     parser.add_argument("--deploy", action="store_true")
     parser.add_argument("--commit", help="Exact already-pushed demo commit to deploy")
     parser.add_argument("--enable-demo", action="store_true")
+    parser.add_argument("--generate-synthetic", action="store_true", help="Generate and validate the pinned demo dataset during build")
+    parser.add_argument("--relink-fork", action="store_true", help="Relink only the known upstream demo services to the working fork")
+    parser.add_argument("--target", choices=("backend", "frontend", "all"), default="all", help="Which service to deploy after configuration")
+    parser.add_argument("--manual-deploys", action="store_true", help="Temporarily disable push-triggered deploys for backend-first rollout")
     args = parser.parse_args()
     if args.deploy and (not args.apply or not args.commit):
         parser.error("Deployment requires --apply and an explicit --commit")
@@ -69,10 +73,28 @@ def main():
         for service in targets]))
     if not args.apply:
         return
+    # Preserve the previous commit and nonsecret settings for a concrete rollback.
+    rollback = []
     for service in targets:
-        if (service.get("repo", "").removesuffix(".git").lower() != EXPECTED_REPOSITORY.lower()
-                or service.get("branch") != "demo"):
-            raise SystemExit("Review required: the service is not linked to the approved fork demo branch; no configuration changed")
+        latest = request(f"/services/{service['id']}/deploys?limit=1")
+        rollback.append({"id": service["id"], "repo": service.get("repo"), "branch": service.get("branch"),
+                         "rootDir": service.get("rootDir"), "serviceDetails": service.get("serviceDetails"),
+                         "autoDeploy": service.get("autoDeploy"), "autoDeployTrigger": service.get("autoDeployTrigger"),
+                         "latest_deploy": latest})
+    snapshot = ROOT / "artifacts/monitoring/render-before-synthetic.json"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    if not snapshot.exists():
+        snapshot.write_text(json.dumps(rollback, indent=2), encoding="utf-8")
+    for service in targets:
+        repository = service.get("repo", "").removesuffix(".git").lower()
+        if (repository != EXPECTED_REPOSITORY.lower() or service.get("branch") != "demo"):
+            if args.relink_fork and repository == "https://github.com/maythepd/intro-to-ba" and service.get("branch") == "demo":
+                request("/services/" + service["id"], method="PATCH", payload={"repo": EXPECTED_REPOSITORY, "branch": "demo",
+                    **({"autoDeployTrigger": "off"} if args.manual_deploys else {})})
+            else:
+                raise SystemExit("Review required: the service is not linked to the approved fork demo branch; no configuration changed")
+        if args.manual_deploys:
+            request("/services/" + service["id"], method="PATCH", payload={"autoDeployTrigger": "off"})
     if not values.get("DATABASE_URL") or not values.get("MONITORING_ADMIN_TOKEN"):
         raise SystemExit("DATABASE_URL and MONITORING_ADMIN_TOKEN are required")
     blueprint = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))["services"][0]
@@ -103,6 +125,9 @@ def main():
         "MONITORING_DATABASE_ROLE":"bank_monitoring_writer", "ENABLE_MONITORING_DEMO":"true" if args.enable_demo else "false",
         "SUPABASE_URL":values.get("SUPABASE_URL", ""), "CUSTOMERS_CSV_PATH":"data/official/module5_customer_features.csv",
         "SEGMENTATION_CUSTOMERS_CSV_PATH":"data/official/customer_features.csv"}
+    env["PYTHON_VERSION"] = "3.11.15"
+    if args.generate_synthetic:
+        env.update(DEMO_DATA_DIR="data/demo", DEMO_BUILD_MODE="generate", DEMO_ARTIFACT_URL="", DEMO_ARTIFACT_SHA256="")
     for key, value in env.items():
         set_env(backend, key, value)
     cors = request(f"/services/{backend['id']}/env-vars/CORS_ORIGINS", missing_ok=True) or {}
@@ -122,8 +147,9 @@ def main():
                 payload={"type":"rewrite", "source":"/*", "destination":"/index.html"})
     output = {"updated_services":[service["id"] for service in targets], "spa_rewrite":"configured", "secret_values":"not displayed"}
     if args.deploy:
+        deploy_targets = [backend] if args.target == "backend" else [frontend] if args.target == "frontend" else targets
         output["deploys"] = [{"service_id":service["id"], "deploy_id":request(f"/services/{service['id']}/deploys",
-            method="POST", payload={"clearCache":"do_not_clear", "commitId":args.commit})["id"]} for service in targets]
+            method="POST", payload={"clearCache":"do_not_clear", "commitId":args.commit})["id"]} for service in deploy_targets]
     print(json.dumps(output))
 
 
