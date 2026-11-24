@@ -9,3 +9,4 @@ frontend/dist/
 *.log
 artifacts/
 data/official/
+/data/demo/

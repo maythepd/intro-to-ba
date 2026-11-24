@@ -101,19 +101,25 @@ def load() -> Module5Model | None:
 
 
 def prediction_inputs(model: Module5Model, payload: dict, customers: pd.DataFrame | None) -> pd.DataFrame:
+    """Resolve raw demo aggregates without accidentally mixing in an official customer row."""
+    extra = payload.get("raw_features") or {}
+    required = set(model.input_columns)
+    unknown = set(extra) - required
+    if unknown:
+        raise Module5InputError("Unsupported Module 5 raw features: " + ", ".join(sorted(unknown)))
+    overrides = {key: value for key, value in payload.items()
+                 if key in required and value is not None}
+    if required == set(extra):
+        return pd.DataFrame([{**extra, **overrides}]).loc[:, model.input_columns]
     row = {}
     identifier = payload.get("customer_id")
     if customers is not None and identifier is not None:
         match = customers.loc[customers.customer_id == identifier]
         if not match.empty:
             row.update(match.iloc[0].to_dict())
-    extra = payload.get("raw_features") or {}
-    unknown = set(extra) - set(model.input_columns)
-    if unknown:
-        raise Module5InputError("Unsupported Module 5 raw features: " + ", ".join(sorted(unknown)))
     row.update(extra)
-    row.update({key: value for key, value in payload.items() if key in model.input_columns})
-    missing = set(model.input_columns) - set(row)
+    row.update(overrides)
+    missing = required - set(row)
     if missing:
         raise Module5InputError("Module 5 requires a customer from the snapshot or complete raw_features. Missing: "
                          + ", ".join(sorted(missing)))
