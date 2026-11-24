@@ -465,7 +465,8 @@ class FeatureEngineeringPipeline:
         out = self.domain_engineer.transform(out)
 
         # Step 2b: Psychology Features
-        out = self.psychology_engineer.transform(out)
+        if hasattr(self, "psychology_engineer") and self.psychology_engineer is not None:
+            out = self.psychology_engineer.transform(out)
 
         # Step 3: Scaling
         out = self.scaler.transform(out)
