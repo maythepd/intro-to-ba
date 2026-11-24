@@ -1,10 +1,12 @@
 """Batch scoring API contract tests with deterministic, fake model outputs only."""
 import unittest
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 from fastapi.testclient import TestClient
 
-from api.main import app
+from api.main import app, module5, segmentation_service
 
 
 class ProbabilityModel:
@@ -32,27 +34,26 @@ def customer(cid, age):
 
 class BatchRiskTests(unittest.TestCase):
     def setUp(self):
-        self.client_context = TestClient(app)
-        self.client = self.client_context.__enter__()
+        self.enterContext(patch.object(module5, "load", return_value=None))
+        self.enterContext(patch.object(segmentation_service, "load", return_value=None))
+        self.client = self.enterContext(TestClient(app))
         self.model = ProbabilityModel()
         app.state.churn_model = self.model
         app.state.customers = pd.DataFrame([customer(1, 18), customer(2, 45), customer(3, 80), customer(4, 90)])
-        app.state.risk_summary = None
-        app.state.batch_predictions = None
-
-    def tearDown(self):
-        self.client_context.__exit__(None, None, None)
 
     def test_counts_match_individual_predictions_and_are_cached(self):
-        self.assertEqual(self.client.get("/api/dashboard/risk-summary").status_code, 503)
+        summary = self.client.get("/api/dashboard/risk-summary")
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertNotIn("predictions", summary.json())
         result = self.client.post("/api/predict/batch?include_predictions=true&batch_size=2")
         self.assertEqual(result.status_code, 200, result.text)
         payload = result.json()
-        self.assertEqual(payload["counts"], {"low": 1, "medium": 1, "high": 2})
+        self.assertEqual(payload["counts"], {"low": 1, "medium": 1, "high": 2, "predicted_churn": 2})
         self.assertEqual(payload["customers_requiring_attention"], 2)
         self.assertEqual(payload["total_customers"], 4)
         self.assertEqual(len(payload["predictions"]), 4)
-        self.assertEqual(self.client.get("/api/dashboard/risk-summary").json()["counts"], payload["counts"])
+        self.assertEqual(summary.json()["counts"], payload["counts"])
+        self.assertEqual(self.model.calls, 1)
         for person, batch_item in zip(app.state.customers.to_dict("records"), payload["predictions"]):
             one = self.client.post("/api/predict", json=person).json()
             self.assertAlmostEqual(one["churn_probability"], batch_item["churn_probability"])
@@ -64,7 +65,7 @@ class BatchRiskTests(unittest.TestCase):
         self.assertEqual(self.model.calls, before)
         forced = self.client.post("/api/predict/batch?force=true").json()
         self.assertFalse(forced["cached"])
-        self.assertEqual(sum(forced["counts"].values()), 4)
+        self.assertEqual(forced["counts"], payload["counts"])
         self.assertGreater(self.model.calls, before)
 
     def test_missing_model_and_dataset_fail_without_fake_summary(self):
@@ -80,11 +81,24 @@ class BatchRiskTests(unittest.TestCase):
         response = self.client.post("/api/predict/batch?batch_size=2")
         self.assertEqual(response.status_code, 503)
         self.assertIsNone(app.state.risk_summary)
+        self.assertEqual(self.model.calls, 0)
 
     def test_duplicate_ids_rejected(self):
         app.state.customers.loc[1, "customer_id"] = 1
         self.assertEqual(self.client.post("/api/predict/batch").status_code, 503)
         self.assertIsNone(app.state.risk_summary)
+        self.assertEqual(self.model.calls, 0)
+
+    def test_invalid_snapshot_cannot_reuse_cached_scores(self):
+        response = self.client.post("/api/predict/batch")
+        self.assertEqual(response.status_code, 200, response.text)
+        summary = app.state.risk_summary
+
+        app.state.customers.loc[1, "country"] = "Atlantis"
+        response = self.client.post("/api/predict/batch")
+        self.assertEqual(response.status_code, 503)
+        self.assertIs(app.state.risk_summary, summary)
+        self.assertEqual(self.model.calls, 1)
 
     def test_invalid_model_scores_cannot_be_published(self):
         class BrokenModel(ProbabilityModel):
@@ -92,7 +106,9 @@ class BatchRiskTests(unittest.TestCase):
                 return np.full(len(x), float("nan"))
         app.state.churn_model = BrokenModel()
         self.assertEqual(self.client.post("/api/predict/batch").status_code, 500)
-        self.assertEqual(self.client.get("/api/dashboard/risk-summary").status_code, 503)
+        self.assertEqual(self.client.get("/api/dashboard/risk-summary").status_code, 500)
+        self.assertIsNone(app.state.risk_summary)
+        self.assertEqual(app.state.batch_cache, {})
 
     def test_ground_truth_churn_not_used_for_inference(self):
         app.state.customers["churn"] = [0, 1, 0, 1]

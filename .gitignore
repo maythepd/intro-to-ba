@@ -6,6 +6,7 @@ __pycache__/
 *.env
 eda/
 data/*
+/data/demo/
 !data/official/
 !data/full_bank_data.csv
 node_modules/

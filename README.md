@@ -10,6 +10,7 @@
 1. [Project Overview](#project-overview)
 2. [Repository Structure](#repository-structure)
 3. [Installation & Requirements](#installation--requirements)
+   - [Generate Demo Data](#generate-demo-data)
 4. [CLI Entrypoint & Run Modes](#cli-entrypoint--run-modes)
 5. [Configuration Guide (`config/config.yaml`)](#configuration-guide-configconfigyaml)
 6. [Preprocessing & Leak-Free Pipeline](#preprocessing--leak-free-pipeline)
@@ -189,6 +190,24 @@ python -m unittest discover -s test -p "test_*.py"
 # Or run the full end-to-end pipeline smoke test
 python test/test_pipeline.py
 ```
+
+### Generate Demo Data
+
+Run from the repository root with the project Python environment active. The generator reads the seven source CSVs in `data/full_dataset/` and uses the existing serving artifacts for inference checks.
+
+```powershell
+python -m demo_data.generate --multiplier 10 --max-samples 10000 --seed 42
+```
+
+The generated dataset is `data/demo/customer_features.csv`. With the current source, it contains 10,000 synthetic customers across five batches. The `batch_id` column identifies the normal and drift scenarios.
+
+Run the validator to check the generated files and compare sample predictions with the local API.
+
+```powershell
+python -m demo_data.validate
+```
+
+For the generation method and API examples, see the [Vietnamese demo data guide](docs/demo_data.md).
 
 ---
 

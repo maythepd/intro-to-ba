@@ -230,16 +230,20 @@ def customer_membership(bundle, customer_id):
     }
 
 
-def predict(bundle, values, algorithm):
+def predict_clusters(bundle, frame, algorithm):
+    """Assign new observations using only fitted preprocessing and centers."""
     if algorithm not in ALGORITHMS:
         raise ValueError("Unknown clustering model")
-    encoded = bundle["preprocessor"].transform(feature_frame(pd.DataFrame([values])))
+    encoded = bundle["preprocessor"].transform(feature_frame(frame))
     if algorithm == "kmeans":
-        cluster = int(bundle["kmeans"].predict(encoded)[0])
-        method = "kmeans_predict"
-    else:
-        cluster = int(np.square(bundle["hierarchical_centers"] - encoded[0]).sum(axis=1).argmin())
-        method = "nearest_centroid_surrogate_not_ward_prediction"
+        return bundle["kmeans"].predict(encoded)
+    return np.square(bundle["hierarchical_centers"] - encoded[:, None, :]).sum(axis=2).argmin(axis=1)
+
+
+def predict(bundle, values, algorithm):
+    cluster = int(predict_clusters(bundle, pd.DataFrame([values]), algorithm)[0])
+    method = ("kmeans_predict" if algorithm == "kmeans" else
+              "nearest_centroid_surrogate_not_ward_prediction")
     return {"algorithm": algorithm, "cluster_id": cluster, "method": method,
         "warning": (None if algorithm == "kmeans" else
             "Ward agglomerative clustering cannot assign new points directly; nearest-centroid approximation used.")}
