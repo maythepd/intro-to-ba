@@ -92,6 +92,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Target metric for Optuna tuning (PR_AUC | ROC_AUC | F1_Score | Recall | F2_Score | Precision)",
     )
     parser.add_argument(
+        "--cv-folds",
+        "--folds",
+        dest="cv_folds",
+        type=int,
+        default=None,
+        help="Number of cross-validation folds for training/tuning (default: from config)",
+    )
+    parser.add_argument(
         "--target-recall",
         type=float,
         default=0.75,
@@ -169,6 +177,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--force-retrain-temporal",
         action="store_true",
         help="Force re-training of Bi-GRU temporal sequence encoders from scratch, ignoring cached checkpoints",
+    )
+    # GNN Topological Embedding flags
+    parser.add_argument(
+        "--enable-gnn-embeddings",
+        action="store_true",
+        help="Enable self-supervised k-NN Graph Attention Network (GNN) topological embeddings",
+    )
+    parser.add_argument(
+        "--disable-gnn-embeddings",
+        action="store_true",
+        help="Explicitly disable GNN topological embeddings (overriding config.yaml)",
+    )
+    parser.add_argument(
+        "--force-retrain-gnn",
+        action="store_true",
+        help="Force re-training of GNN autoencoders from scratch, ignoring cached checkpoints",
     )
     parser.add_argument(
         "--feature-selection-metric",
@@ -336,6 +360,17 @@ def main() -> None:
     if args.force_retrain_temporal:
         cfg.features.temporal_force_retrain = True
         print("[INFO] Force re-training enabled for Temporal Sequence Encoders (ignoring checkpoints)")
+
+    # Apply GNN Topological Embeddings overrides if passed via CLI
+    if args.enable_gnn_embeddings:
+        cfg.features.enable_gnn_embeddings = True
+        print("[INFO] GNN Topological Embeddings (k-NN Graph Attention Network) enabled via CLI")
+    elif args.disable_gnn_embeddings:
+        cfg.features.enable_gnn_embeddings = False
+        print("[INFO] GNN Topological Embeddings disabled via CLI")
+    if args.force_retrain_gnn:
+        cfg.features.gnn_force_retrain = True
+        print("[INFO] Force re-training enabled for GNN Autoencoders (ignoring checkpoints)")
 
     # Apply Clustering & Segmentation Features overrides if passed via CLI
     if args.enable_clustering_features:
@@ -616,7 +651,11 @@ def main() -> None:
         model_type = args.model_type
         trials_count = args.n_trials or getattr(cfg.tuning, "n_trials", 30)
         tune_metric = args.tuning_metric or getattr(cfg.tuning, "metric", "PR_AUC")
-        cv_folds = getattr(cfg.tuning, "cv_folds", 5)
+        cv_folds = (
+            args.cv_folds
+            if (hasattr(args, "cv_folds") and args.cv_folds is not None)
+            else (getattr(cfg.features, "cv_folds", None) or getattr(cfg.tuning, "cv_folds", 9))
+        )
         timeout = getattr(cfg.tuning, "timeout", None)
         default_th = getattr(cfg.model, "decision_threshold", None)
         manual_th = args.threshold if (hasattr(args, "threshold") and args.threshold is not None) else default_th

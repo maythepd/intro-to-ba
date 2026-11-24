@@ -136,7 +136,8 @@ class TestConfigLoading(unittest.TestCase):
 
         # Sample weighting
         raw_sw = raw_f["sample_weighting"]
-        self.assertEqual(feat.enable_sample_weighting, raw_sw["enabled"])
+        expected_sw = raw_sw.get("enabled", raw_f.get("enable_sample_weighting", False))
+        self.assertEqual(feat.enable_sample_weighting, expected_sw)
         self.assertEqual(feat.weight_decay_mode, raw_sw["decay_mode"])
         self.assertEqual(feat.weight_recency_col, raw_sw["recency_col"])
         self.assertEqual(feat.weight_decay_half_life_days, raw_sw["decay_half_life_days"])
@@ -155,7 +156,8 @@ class TestConfigLoading(unittest.TestCase):
 
         # Temporal embeddings
         raw_temp = raw_f["temporal_embeddings"]
-        self.assertEqual(feat.enable_temporal_embeddings, raw_temp["enabled"])
+        expected_temp = raw_temp.get("enabled", raw_f.get("enable_temporal_embeddings", False))
+        self.assertEqual(feat.enable_temporal_embeddings, expected_temp)
         self.assertEqual(feat.temporal_latent_dim, raw_temp["latent_dim"])
         self.assertEqual(feat.temporal_hidden_dim, raw_temp["hidden_dim"])
         self.assertEqual(feat.temporal_num_layers, raw_temp["num_layers"])
@@ -231,7 +233,8 @@ class TestConfigLoading(unittest.TestCase):
         self.assertEqual(tune.n_trials, raw_t["n_trials"])
         self.assertEqual(tune.timeout, raw_t["timeout"])
         self.assertEqual(tune.metric, raw_t["metric"])
-        self.assertEqual(tune.cv_folds, raw_t["cv_folds"])
+        expected_cv = raw_t.get("cv_folds", self.raw["dataset"]["cv_folds"])
+        self.assertEqual(tune.cv_folds, expected_cv)
         self.assertEqual(tune.study_name, raw_t["study_name"])
         self.assertEqual(tune.direction, raw_t["direction"])
         self.assertEqual(tune.random_state, raw_t["random_state"])

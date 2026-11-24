@@ -1,16 +1,17 @@
 """
-Modular Cluster-Based Feature Extractor for Digital Bank Churn Prediction.
+Independent Behavioral & Psychological Cluster Feature Extractor.
+Completely decoupled from Module 5 (Segmentation Service).
 
-Extracts rich, interpretable, anti-leakage customer segmentation features:
-  1. Centroid Distances (Euclidean & Cosine distances to each cluster center)
-  2. Soft Membership Probabilities & Assignment Entropy (Uncertainty on cluster boundary)
-  3. Atypicality, Inertia & Boundary Margin (Distance to closest, 2nd closest, silhouette margin)
-  4. Risk Affinity & Churn Persona Contrast (Distance ratio between safe vs risky cluster prototypes)
-  5. Peer-Relative Deviation Ratios (Customer metrics relative to cluster baseline means)
+Enriches customer representations with unsupervised cluster geometry, soft memberships,
+boundary margins, and peer-relative deviation ratios computed over a joint
+Demographic + Behavioral + Psychological feature space:
+  1. Centroid Distances (Euclidean & Cosine distances to each cluster prototype)
+  2. Soft Membership Probabilities & Assignment Entropy (Softmax over distance)
+  3. Atypicality, Inertia & Boundary Margin (Silhouette-like distance margins)
+  4. Risk Affinity & Churn Archetype Contrast (Distance ratio to safe vs risky prototype)
+  5. Peer-Relative Deviation Ratios (Customer metrics relative to cluster archetype means)
   6. Discrete Cluster IDs & One-Hot Encoding
-  7. Hierarchical Linkage Features (Distances to Ward hierarchical medoids & agreement flag)
-
-All feature sub-groups are independently toggleable via config.yaml and CLI flags.
+  7. Hierarchical Linkage Features (Ward agglomerative medoids & agreement flag)
 """
 
 from dataclasses import dataclass, field
@@ -20,45 +21,56 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, AgglomerativeClustering
 from sklearn.preprocessing import StandardScaler
 
-# Support cross-platform unpickling if needed
-try:
-    import pathlib
-    if not hasattr(pathlib, "PosixPath"):
-        pathlib.PosixPath = pathlib.WindowsPath
-except Exception:
-    pass
+# Curated demographic & financial wealth attributes
+CORE_DEMOGRAPHIC_FEATURES: List[str] = [
+    "credit_score",
+    "age",
+    "tenure",
+    "balance",
+    "products_number",
+    "credit_card",
+    "active_member",
+    "estimated_salary",
+]
 
-# Ensure BalancedFeatures is available for unpickling cluster_bundle.joblib
-try:
-    from api.segmentation_service import (
-        BalancedFeatures,
-        FEATURES as SEG_FEATURES,
-        ORIGINAL_NUMERIC,
-        BEHAVIORAL_NUMERIC,
-        ORIGINAL_CATEGORICAL,
-    )
-except ImportError:
-    BalancedFeatures = None
-    SEG_FEATURES = [
-        "credit_score", "age", "tenure", "balance", "products_number", "credit_card",
-        "active_member", "estimated_salary", "country", "gender", "recency_days",
-        "monthly_transactions", "trans_amount_3m", "trans_trend_ratio",
-        "app_logins_monthly", "customer_service_complaints", "has_unresolved_complaint",
-    ]
+# Curated behavioral engagement & operational velocity attributes
+CORE_BEHAVIORAL_FEATURES: List[str] = [
+    "recency_days",
+    "monthly_transactions",
+    "trans_amount_3m",
+    "trans_trend_ratio",
+    "app_logins_monthly",
+    "customer_service_complaints",
+]
+
+# Core consumer & behavioral psychology dimensions
+CORE_PSYCHOLOGY_DIMENSIONS: List[str] = [
+    "psych_savings_commitment_ratio",       # Mental accounting: commitment in savings
+    "psych_early_break_propensity",         # Mental accounting: early penalty breaking
+    "psych_renewal_inertia_status",         # Status quo bias: auto vs manual broken inertia
+    "psych_phantom_login_ratio",            # Anxiety: surveillance without financial action
+    "psych_anxious_checking_index",         # Anxiety: high logins with falling spend
+    "psych_fee_retaliation_score",          # Pain of paying: spending curtailment post fee
+    "psych_cash_detachment_ratio",          # Decoupling: physical cash extraction
+    "psych_exponential_recency_complaint",  # Peak-End: time-decayed dispute severity
+    "psych_terminal_failure_shock",         # Catastrophe: unresolved complaint + fail shock
+    "psych_financial_runway_months",        # Scarcity: survival buffer in months
+    "psych_hand_to_mouth_burn_rate",        # Scarcity: outflow / inflow burn speed
+]
 
 
 @dataclass
 class ClusterFeatureConfig:
-    """Configuration container for cluster feature extraction."""
+    """Configuration container for independent cluster feature extraction."""
 
     enabled: bool = False
     algorithm: str = "kmeans"  # "kmeans" | "hierarchical" | "both"
     n_clusters: int = 4
-    use_saved_bundle: bool = True
-    bundle_path: str = "artifacts/segmentation/cluster_bundle.joblib"
+    use_saved_bundle: bool = False
+    bundle_path: Optional[str] = None
     
     # Sub-feature group toggles
     enable_centroid_distances: bool = True
@@ -75,9 +87,9 @@ class ClusterFeatureConfig:
 
 class ClusterFeatureExtractor(BaseEstimator, TransformerMixin):
     """
-    Scikit-learn compatible transformer that enriches tabular customer data
-    with unsupervised cluster geometry, soft memberships, boundary margins,
-    and peer-relative deviation ratios.
+    Independent Scikit-learn transformer that clusters customers over a joint
+    Demographic + Behavioral + Psychological representation space.
+    Completely decoupled from external segmentation services.
     """
 
     def __init__(
@@ -85,8 +97,8 @@ class ClusterFeatureExtractor(BaseEstimator, TransformerMixin):
         enabled: bool = False,
         algorithm: str = "kmeans",
         n_clusters: int = 4,
-        use_saved_bundle: bool = True,
-        bundle_path: Union[str, Path] = "artifacts/segmentation/cluster_bundle.joblib",
+        use_saved_bundle: bool = False,
+        bundle_path: Optional[Union[str, Path]] = None,
         enable_centroid_distances: bool = True,
         enable_soft_probabilities: bool = True,
         enable_inertia_boundary: bool = True,
@@ -101,7 +113,7 @@ class ClusterFeatureExtractor(BaseEstimator, TransformerMixin):
         self.algorithm = algorithm.lower() if algorithm else "kmeans"
         self.n_clusters = n_clusters
         self.use_saved_bundle = use_saved_bundle
-        self.bundle_path = str(bundle_path)
+        self.bundle_path = str(bundle_path) if bundle_path else None
         self.enable_centroid_distances = enable_centroid_distances
         self.enable_soft_probabilities = enable_soft_probabilities
         self.enable_inertia_boundary = enable_inertia_boundary
@@ -114,78 +126,105 @@ class ClusterFeatureExtractor(BaseEstimator, TransformerMixin):
 
         # Fitted state
         self.is_fitted_ = False
-        self.preprocessor_ = None
+        self.selected_features_: List[str] = []
+        self.preprocessor_ = StandardScaler()
         self.kmeans_ = None
-        self.cluster_centers_ = None  # Shape (K, D)
-        self.hierarchical_centers_ = None  # Shape (K, D) if available
-        self.cluster_churn_rates_ = {}  # {cluster_id: churn_rate}
-        self.safe_cluster_id_ = 0
-        self.risky_cluster_id_ = 1
-        self.cluster_mean_distances_ = {}  # {cluster_id: mean_dist}
-        self.cluster_peer_stats_ = {}  # {col: {cluster_id: mean_val}}
+        self.cluster_centers_ = None             # Shape (K, D)
+        self.hierarchical_centers_ = None         # Shape (K, D)
+        self.cluster_churn_rates_: Dict[int, float] = {}
+        self.safe_cluster_id_: int = 0
+        self.risky_cluster_id_: int = 1
+        self.cluster_mean_distances_: Dict[int, float] = {}
+        self.cluster_peer_stats_: Dict[str, Dict[int, float]] = {}
         self.feature_names_out_: List[str] = []
 
-    def _resolve_bundle_path(self) -> Path:
-        """Finds cluster bundle file across working directory and project root."""
-        p = Path(self.bundle_path)
-        if p.is_absolute() and p.exists():
-            return p
-        candidates = [
-            Path.cwd() / p,
-            Path(__file__).resolve().parent.parent.parent / p,
-            Path(__file__).resolve().parent.parent / p,
-        ]
-        for cand in candidates:
-            if cand.exists():
-                return cand.resolve()
-        return p
+    def _select_clustering_features(self, X: pd.DataFrame) -> List[str]:
+        """
+        Dynamically selects the richest possible feature subspace:
+        prioritizes Demographic + Behavioral + newly generated Psychology features.
+        """
+        target_features: List[str] = []
+
+        # 1. Add demographic features present
+        for f in CORE_DEMOGRAPHIC_FEATURES:
+            if f in X.columns and pd.api.types.is_numeric_dtype(X[f]):
+                target_features.append(f)
+
+        # 2. Add behavioral features present
+        for f in CORE_BEHAVIORAL_FEATURES:
+            if f in X.columns and pd.api.types.is_numeric_dtype(X[f]):
+                target_features.append(f)
+
+        # 3. Add psychology dimensions present
+        for f in CORE_PSYCHOLOGY_DIMENSIONS:
+            if f in X.columns and pd.api.types.is_numeric_dtype(X[f]):
+                target_features.append(f)
+
+        # Also capture any other psych_* features present in X
+        for col in X.columns:
+            if col.startswith("psych_") and col not in target_features:
+                if pd.api.types.is_numeric_dtype(X[col]):
+                    target_features.append(col)
+
+        # If none of the curated features matched, fallback to all numeric features excluding ID/target
+        if not target_features:
+            numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+            target_features = [c for c in numeric_cols if c not in ("customer_id", "churn", "is_churn")]
+
+        return target_features
 
     def fit(self, X: pd.DataFrame, y: Optional[pd.Series] = None) -> "ClusterFeatureExtractor":
         """
-        Fits or loads clustering models and computes peer baseline statistics.
-        Unsupervised for geometry; strictly anti-leakage.
+        Fits independent KMeans and Ward Agglomerative models on training partition.
+        Learns cluster centers, risk affinity archetypes, and peer baseline statistics.
         """
         if not self.enabled:
             return self
 
-        bundle_loaded = False
-        resolved_bundle = self._resolve_bundle_path()
+        # 1. Feature Subspace Selection (Demographic + Behavioral + Psychology)
+        self.selected_features_ = self._select_clustering_features(X)
+        if self.verbose:
+            psych_count = sum(1 for f in self.selected_features_ if f.startswith("psych_"))
+            print(f"[OK] Independent ClusterFeatureExtractor fitting on {len(self.selected_features_)} features ({psych_count} psychology dimensions)")
 
-        if self.use_saved_bundle and resolved_bundle.exists():
-            try:
-                import joblib
-                bundle = joblib.load(resolved_bundle)
-                if isinstance(bundle, dict) and "kmeans" in bundle and "preprocessor" in bundle:
-                    self.kmeans_ = bundle["kmeans"]
-                    self.preprocessor_ = bundle["preprocessor"]
-                    self.cluster_centers_ = self.kmeans_.cluster_centers_
-                    self.n_clusters = self.cluster_centers_.shape[0]
-                    self.hierarchical_centers_ = bundle.get("hierarchical_centers")
-                    bundle_loaded = True
-                    if self.verbose:
-                        print(f"[OK] ClusterFeatureExtractor loaded bundle from {resolved_bundle} (K={self.n_clusters})")
-            except Exception as e:
-                if self.verbose:
-                    print(f"[WARN] Could not load cluster bundle ({e}), fitting dynamically.")
+        # 2. Leakage-free Standard Scaling
+        X_sub = X[self.selected_features_].fillna(0.0).to_numpy(dtype=float)
+        scaled_X = self.preprocessor_.fit_transform(X_sub)
 
-        if not bundle_loaded:
-            # Fit dynamic preprocessor and KMeans on numeric columns
-            numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
-            # Exclude identifiers and targets
-            cols_to_fit = [c for c in numeric_cols if c not in ("customer_id", "churn", "is_churn")]
-            self.preprocessor_ = StandardScaler()
-            scaled_X = self.preprocessor_.fit_transform(X[cols_to_fit].fillna(0))
-            self.kmeans_ = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10)
-            self.kmeans_.fit(scaled_X)
-            self.cluster_centers_ = self.kmeans_.cluster_centers_
-            self._fit_columns = cols_to_fit
+        # 3. Fit Independent KMeans Archetypes
+        self.kmeans_ = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10)
+        self.kmeans_.fit(scaled_X)
+        self.cluster_centers_ = self.kmeans_.cluster_centers_
 
-        # Predict cluster memberships on fit data for peer statistics
-        prep_X = self._preprocess(X)
-        dists = self._compute_euclidean_dists(prep_X, self.cluster_centers_)
+        # Predict cluster memberships on fit data for peer & boundary statistics
+        dists = self._compute_euclidean_dists(scaled_X, self.cluster_centers_)
         cluster_ids = np.argmin(dists, axis=1)
 
-        # 1. Cluster mean distance for inertia ratio
+        # 4. Fit Independent Hierarchical Linkage (Ward Medoids) if enabled
+        if self.enable_hierarchical_features:
+            # Use up to 3000 points to keep hierarchical fitting responsive
+            n_samples = len(scaled_X)
+            if n_samples > 3000:
+                np.random.seed(42)
+                sample_idx = np.random.choice(n_samples, size=3000, replace=False)
+                hier_sub = scaled_X[sample_idx]
+            else:
+                hier_sub = scaled_X
+
+            agg = AgglomerativeClustering(n_clusters=self.n_clusters, linkage="ward")
+            agg_labels = agg.fit_predict(hier_sub)
+
+            # Compute Ward cluster medoid centers as centroids of hierarchical partitions
+            hier_centers = []
+            for k in range(self.n_clusters):
+                mask_k = (agg_labels == k)
+                if np.any(mask_k):
+                    hier_centers.append(np.mean(hier_sub[mask_k], axis=0))
+                else:
+                    hier_centers.append(self.cluster_centers_[k])
+            self.hierarchical_centers_ = np.array(hier_centers)
+
+        # 5. Cluster Mean Distance (Inertia baseline)
         for k in range(self.n_clusters):
             mask = (cluster_ids == k)
             if np.any(mask):
@@ -193,9 +232,7 @@ class ClusterFeatureExtractor(BaseEstimator, TransformerMixin):
             else:
                 self.cluster_mean_distances_[k] = 1.0
 
-        # 2. Risk affinity cluster resolution
-        # Known banking personas: Cluster 0 is Active Digital (14.5% churn), Cluster 1 is Dormant (25.8% churn)
-        # If training target y is provided, compute empirical cluster churn rate on train set
+        # 6. Risk Affinity Resolution (Identifies Safe vs Risky Archetypes)
         if y is not None:
             y_arr = np.asarray(y)
             for k in range(self.n_clusters):
@@ -204,26 +241,26 @@ class ClusterFeatureExtractor(BaseEstimator, TransformerMixin):
                     self.cluster_churn_rates_[k] = float(np.mean(y_arr[mask]))
                 else:
                     self.cluster_churn_rates_[k] = 0.20
-            # Identify safe (lowest churn) and risky (highest churn) clusters
             sorted_clusters = sorted(self.cluster_churn_rates_.items(), key=lambda kv: kv[1])
             self.safe_cluster_id_ = sorted_clusters[0][0]
             self.risky_cluster_id_ = sorted_clusters[-1][0]
         else:
-            # Fallback to known cluster bundle profile
-            self.cluster_churn_rates_ = {0: 0.1445, 1: 0.2582, 2: 0.2308, 3: 0.1808}
+            self.cluster_churn_rates_ = {k: 0.20 for k in range(self.n_clusters)}
             self.safe_cluster_id_ = 0
-            self.risky_cluster_id_ = 1
+            self.risky_cluster_id_ = max(1, self.n_clusters - 1)
 
-        # 3. Peer-relative statistics (means per cluster for key behavioral and financial columns)
+        # 7. Peer-Relative Statistics (means per cluster for key financial & psychological dimensions)
         key_peer_cols = [
             "balance", "monthly_transactions", "app_logins_monthly",
             "trans_amount_3m", "trans_trend_ratio", "customer_service_complaints",
             "estimated_salary", "credit_score", "recency_days",
+            "psych_financial_runway_months", "psych_phantom_login_ratio",
+            "psych_savings_commitment_ratio", "psych_fee_retaliation_score",
         ]
         self.cluster_peer_stats_ = {}
         for col in key_peer_cols:
             if col in X.columns and pd.api.types.is_numeric_dtype(X[col]):
-                col_vals = pd.to_numeric(X[col], errors="coerce").fillna(0).to_numpy()
+                col_vals = pd.to_numeric(X[col], errors="coerce").fillna(0.0).to_numpy()
                 self.cluster_peer_stats_[col] = {}
                 for k in range(self.n_clusters):
                     mask = (cluster_ids == k)
@@ -236,31 +273,26 @@ class ClusterFeatureExtractor(BaseEstimator, TransformerMixin):
         return self
 
     def _preprocess(self, X: pd.DataFrame) -> np.ndarray:
-        """Transforms input DataFrame to representation space expected by cluster centers."""
-        if hasattr(self.preprocessor_, "transform"):
-            if isinstance(self.preprocessor_, BalancedFeatures) or hasattr(self.preprocessor_, "original_"):
-                # BalancedFeatures expects list of SEG_FEATURES
-                seg_cols = list(SEG_FEATURES)
-                missing = [c for c in seg_cols if c not in X.columns]
-                if missing:
-                    # Provide defaults for missing columns to prevent pipeline crash
-                    X_work = X.copy()
-                    for m in missing:
-                        X_work[m] = 0.0 if m not in ("country", "gender") else "Unknown"
-                    return self.preprocessor_.transform(X_work[seg_cols])
-                return self.preprocessor_.transform(X[seg_cols])
-            elif hasattr(self, "_fit_columns"):
-                return self.preprocessor_.transform(X[self._fit_columns].fillna(0))
-            else:
-                numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
-                cols = [c for c in numeric_cols if c not in ("customer_id", "churn", "is_churn")]
-                return self.preprocessor_.transform(X[cols].fillna(0))
-        return np.asarray(X.select_dtypes(include=[np.number]).fillna(0), dtype=float)
+        """Transforms input DataFrame using strictly fitted StandardScaler."""
+        if not self.selected_features_:
+            return np.zeros((len(X), 1), dtype=float)
+
+        # Fill missing columns defensively if unseen
+        cols = self.selected_features_
+        missing = [c for c in cols if c not in X.columns]
+        if missing:
+            X_work = X.copy()
+            for m in missing:
+                X_work[m] = 0.0
+            X_sub = X_work[cols].fillna(0.0).to_numpy(dtype=float)
+        else:
+            X_sub = X[cols].fillna(0.0).to_numpy(dtype=float)
+
+        return self.preprocessor_.transform(X_sub)
 
     @staticmethod
     def _compute_euclidean_dists(X_prep: np.ndarray, centers: np.ndarray) -> np.ndarray:
         """Vectorized Euclidean distance calculation (N x K)."""
-        # diff shape: (N, K, D)
         diff = X_prep[:, np.newaxis, :] - centers[np.newaxis, :, :]
         return np.linalg.norm(diff, axis=2)
 
@@ -343,7 +375,7 @@ class ClusterFeatureExtractor(BaseEstimator, TransformerMixin):
             assigned_means = cluster_means[assigned_cluster]
             feature_dict["cluster_inertia_ratio"] = min_dist / (assigned_means + 1e-6)
 
-        # Group 4: Risk Affinity & Churn Persona Contrast
+        # Group 4: Risk Affinity & Churn Archetype Contrast
         if self.enable_risk_affinity:
             safe_k = self.safe_cluster_id_
             risky_k = self.risky_cluster_id_
@@ -364,7 +396,7 @@ class ClusterFeatureExtractor(BaseEstimator, TransformerMixin):
         if self.enable_relative_ratios and self.cluster_peer_stats_:
             for col, stats in self.cluster_peer_stats_.items():
                 if col in X.columns and pd.api.types.is_numeric_dtype(X[col]):
-                    col_vals = pd.to_numeric(X[col], errors="coerce").fillna(0).to_numpy()
+                    col_vals = pd.to_numeric(X[col], errors="coerce").fillna(0.0).to_numpy()
                     means_arr = np.array([stats.get(k, 1.0) for k in range(K)])
                     assigned_col_mean = means_arr[assigned_cluster]
                     
@@ -390,7 +422,7 @@ class ClusterFeatureExtractor(BaseEstimator, TransformerMixin):
                 feature_dict[f"hier_dist_{hk}"] = hier_dists[:, hk]
             feature_dict["hier_min_dist"] = np.min(hier_dists, axis=1)
             feature_dict["hier_cluster_id"] = hier_assigned.astype(np.int32)
-            # Agreement between KMeans persona and Hierarchical persona
+            # Agreement between KMeans prototype and Hierarchical prototype
             feature_dict["hier_kmeans_agreement"] = (assigned_cluster == hier_assigned).astype(np.float32)
 
         # Assemble new DataFrame and concatenate

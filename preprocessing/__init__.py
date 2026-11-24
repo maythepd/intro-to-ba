@@ -37,6 +37,14 @@ from .gnn import (
     GNNEmbeddingManager,
 )
 from .quant_signals import QuantSignalFeatureExtractor
+from .psychology import (
+    PsychologyFeatureEngineer,
+    MentalAccountingEngineer,
+    AnxietyMonitoringEngineer,
+    PainOfPayingEngineer,
+    PeakEndFrictionEngineer,
+    ScarcityMindsetEngineer,
+)
 
 __all__ = [
     "pipeline",
@@ -69,4 +77,10 @@ __all__ = [
     "BiGRUTemporalAutoencoder",
     "TemporalAutoencoderTrainer",
     "TemporalEmbeddingManager",
+    "PsychologyFeatureEngineer",
+    "MentalAccountingEngineer",
+    "AnxietyMonitoringEngineer",
+    "PainOfPayingEngineer",
+    "PeakEndFrictionEngineer",
+    "ScarcityMindsetEngineer",
 ]

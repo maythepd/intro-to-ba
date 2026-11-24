@@ -242,15 +242,20 @@ class OptunaTuner:
             )
             smote_str = f"ENABLED ({getattr(feat_cfg, 'smote_sampling_strategy', 'auto')})" if getattr(feat_cfg, "enable_smote", False) else "DISABLED"
             temporal_str = f"ENABLED (16-dim Bi-GRU [{getattr(feat_cfg, 'temporal_manifold_strategy', 'asymmetric_arcface').upper()}])" if enable_temporal else "DISABLED"
+            enable_gnn = getattr(feat_cfg, "enable_gnn_embeddings", False)
+            gnn_str = f"ENABLED ({getattr(feat_cfg, 'gnn_latent_dim', 16)}-dim GAT k-NN)" if enable_gnn else "DISABLED"
             print(f"  • Feature Selection: {feat_sel_str}")
             print(f"  • SMOTE Balancing:   {smote_str}")
             print(f"  • Temporal Vectors:  {temporal_str}")
+            print(f"  • GNN Vectors:       {gnn_str}")
             print("-------------------------------------------------------")
 
         for fold in splitter.get_cv_folds(cv_train_pool, target_col=target, n_splits=self.cv_folds):
             p_fold = FeatureEngineeringPipeline(copy.deepcopy(feat_cfg), fold_id=fold.fold, verbose=False)
             if hasattr(p_fold, "temporal_manager") and p_fold.temporal_manager is not None:
                 p_fold.temporal_manager.verbose = verbose
+            if hasattr(p_fold, "gnn_manager") and p_fold.gnn_manager is not None:
+                p_fold.gnn_manager.verbose = verbose
             p_fold.fit(fold.train_df, target_col=target)
 
             # Transform partitions
@@ -374,6 +379,8 @@ class OptunaTuner:
         final_pipe = FeatureEngineeringPipeline(copy.deepcopy(self.config.features), fold_id="final", verbose=False)
         if hasattr(final_pipe, "temporal_manager") and final_pipe.temporal_manager is not None:
             final_pipe.temporal_manager.verbose = verbose
+        if hasattr(final_pipe, "gnn_manager") and final_pipe.gnn_manager is not None:
+            final_pipe.gnn_manager.verbose = verbose
         final_pipe.fit(cv_train_pool, target_col=target)
 
         tr_full = final_pipe.transform(cv_train_pool)
@@ -636,6 +643,9 @@ Mô hình Bi-GRU Temporal Autoencoder đã trích xuất 16 chiều không gian 
 {df_comp.to_markdown(index=False) if df_comp is not None else ""}
 """
 
+        test_n = int(test_metrics.get("TP", 0) + test_metrics.get("FN", 0) + test_metrics.get("TN", 0) + test_metrics.get("FP", 0))
+        test_desc = f"{test_n} mẫu" if test_n > 0 else "10% dữ liệu"
+
         md = f"""# BÁO CÁO TỐI ƯU HÓA SIÊU THAM SỐ (OPTUNA TUNING REPORT)
 ## MÔ HÌNH: {self.model_type.upper()} CHURN PREDICTION
 
@@ -660,7 +670,7 @@ Mô hình Bi-GRU Temporal Autoencoder đã trích xuất 16 chiều không gian 
 
 ## 3. HIỆU NĂNG ĐÁNH GIÁ TRÊN TẬP TEST ĐỘC LẬP (GENERALIZATION TEST SET)
 
-Được đánh giá trên tập kiểm thử độc lập (20% dữ liệu) hoàn toàn không rò rỉ trong quá trình tuning:
+Được đánh giá trên tập kiểm thử độc lập ({test_desc}) hoàn toàn không rò rỉ trong quá trình tuning:
 
 {test_table}
 

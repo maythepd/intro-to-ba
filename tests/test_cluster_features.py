@@ -127,6 +127,42 @@ class TestClusterFeatures(unittest.TestCase):
         self.assertEqual(args.clustering_algorithm, "both")
         self.assertEqual(args.cluster_count, 4)
 
+    def test_07_psychology_augmented_clustering(self):
+        """Verify that ClusterFeatureExtractor incorporates psychology dimensions into its vector space."""
+        from preprocessing.psychology import PsychologyFeatureEngineer
+
+        psych_eng = PsychologyFeatureEngineer(enabled=True)
+        df_psych = psych_eng.fit_transform(self.df)
+
+        ext = ClusterFeatureExtractor(
+            enabled=True,
+            algorithm="both",
+            n_clusters=4,
+            enable_hierarchical_features=True,
+            enable_relative_ratios=True,
+        )
+        ext.fit(df_psych, self.target)
+        out = ext.transform(df_psych)
+
+        # 1. Verify psychology dimensions entered the clustering space
+        psych_in_cluster = [f for f in ext.selected_features_ if f.startswith("psych_")]
+        self.assertGreater(len(psych_in_cluster), 5, "Psychology dimensions should be included in clustering space.")
+        self.assertIn("psych_financial_runway_months", ext.selected_features_)
+        self.assertIn("psych_phantom_login_ratio", ext.selected_features_)
+
+        # 2. Verify output columns
+        added = ext.get_feature_names_out()
+        self.assertIn("cluster_dist_0", added)
+        self.assertIn("hier_dist_0", added)
+        self.assertIn("hier_kmeans_agreement", added)
+        self.assertIn("cluster_rel_psych_financial_runway_months", added)
+        self.assertIn("cluster_rel_psych_phantom_login_ratio", added)
+
+        # 3. Cleanliness: no NaNs, finite values
+        self.assertFalse(out[added].isna().any().any())
+        self.assertTrue(np.all(np.isfinite(out[added].to_numpy())))
+        print(f"\n[PASS] Test 7: Independent clustering successfully enriched with {len(psych_in_cluster)} psychology dimensions.")
+
 
 if __name__ == "__main__":
     unittest.main()

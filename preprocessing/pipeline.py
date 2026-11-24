@@ -31,6 +31,7 @@ from .transforms.skewness_transform import SkewnessTransformer
 from .transforms.scaling import FeatureScaler
 from .transforms.categorical_encoding import CategoricalEncoder
 from .domain.domain_features import DomainFeatureEngineer
+from .psychology.orchestrator import PsychologyFeatureEngineer
 from .selection.balancing import ClassBalancer
 from .selection.feature_selector import FeatureSelector
 from .selection.sample_weighting import SampleWeightConfig, SampleWeightGenerator
@@ -197,6 +198,22 @@ class FeatureEngineeringPipeline:
         self.friction_engineer = self.domain_engineer.friction_engineer
         self.portfolio_engineer = self.domain_engineer.portfolio_engineer
         self.risk_engineer = self.domain_engineer.risk_engineer
+
+        # 3b. Psychology Features (Behavioral Economics & Consumer Psychology)
+        self.psychology_engineer = PsychologyFeatureEngineer(
+            enabled=getattr(cfg, "enable_psychology_features", True),
+            enable_mental_accounting=getattr(cfg, "enable_mental_accounting", True),
+            enable_anxiety_monitoring=getattr(cfg, "enable_anxiety_monitoring", True),
+            enable_pain_of_paying=getattr(cfg, "enable_pain_of_paying", True),
+            enable_peak_end_friction=getattr(cfg, "enable_peak_end_friction", True),
+            enable_scarcity_mindset=getattr(cfg, "enable_scarcity_mindset", True),
+            recency_half_life_days=getattr(cfg, "psych_recency_half_life_days", 30.0),
+            login_recency_scale=getattr(cfg, "psych_login_recency_scale", 15.0),
+            outlier_clip_quantile=getattr(cfg, "psych_outlier_clip_quantile", 0.995),
+            prune_sparse=getattr(cfg, "psych_prune_sparse", True),
+            max_sparsity_threshold=getattr(cfg, "psych_max_sparsity_threshold", 0.98),
+            min_variance_threshold=getattr(cfg, "psych_min_variance_threshold", 1e-6),
+        )
 
         # 4. Categorical Encoding
         self.categorical_encoder = CategoricalEncoder(
@@ -384,6 +401,10 @@ class FeatureEngineeringPipeline:
         self.domain_engineer.fit(current, y)
         current = self.domain_engineer.transform(current)
 
+        # Step 2b: Psychology Features (Behavioral Economics & Consumer Psychology)
+        self.psychology_engineer.fit(current, y)
+        current = self.psychology_engineer.transform(current)
+
         # Step 3: Scaling (Properly scales raw and domain features like monthly_transactions, trans_trend_ratio, app_logins_monthly)
         self.scaler.fit(current, y)
         current = self.scaler.transform(current)
@@ -406,6 +427,8 @@ class FeatureEngineeringPipeline:
         if getattr(self.config, "enable_gnn_embeddings", False):
             self.gnn_manager.fit(current, y=None)
             current = self.gnn_manager.transform(current)
+            if self.verbose and hasattr(self.gnn_manager, "embeddings_df_") and self.gnn_manager.embeddings_df_ is not None:
+                print(f"[OK] GNNEmbeddingManager fitted {self.gnn_manager.latent_dim} latent dimensions (k={self.gnn_manager.k_neighbors})")
 
         # Step 8: Classical Quantitative & Signal Processing Features (Pure Classical ML)
         if getattr(self.config, "enable_quant_signal_features", False):
@@ -440,6 +463,9 @@ class FeatureEngineeringPipeline:
 
         # Step 2: Domain Features
         out = self.domain_engineer.transform(out)
+
+        # Step 2b: Psychology Features
+        out = self.psychology_engineer.transform(out)
 
         # Step 3: Scaling
         out = self.scaler.transform(out)

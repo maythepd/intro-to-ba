@@ -243,6 +243,8 @@ class PipelineConfig:
     enable_skewness: bool = True
     enable_scaling: bool = True
     enable_domain_features: bool = True
+    enable_psychology_features: bool = True
+    enable_quant_signals: bool = True
     enable_one_hot_encoding: bool = True
     enable_target_encoding: bool = True
     enable_smote: bool = True
@@ -282,6 +284,19 @@ class PipelineConfig:
     vulnerable_age_min: int = 45
     vulnerable_age_max: int = 60
     high_risk_country: str = "Germany" 
+
+    # Psychology features sub-toggles & parameters (Consumer & Behavioral Psychology)
+    enable_mental_accounting: bool = True
+    enable_anxiety_monitoring: bool = True
+    enable_pain_of_paying: bool = True
+    enable_peak_end_friction: bool = True
+    enable_scarcity_mindset: bool = True
+    psych_recency_half_life_days: float = 30.0
+    psych_login_recency_scale: float = 15.0
+    psych_outlier_clip_quantile: float = 0.995
+    psych_prune_sparse: bool = True
+    psych_max_sparsity_threshold: float = 0.98
+    psych_min_variance_threshold: float = 1e-6 
 
     # Categorical encoding configuration
     categorical_cols: Optional[List[str]] = None
@@ -457,6 +472,8 @@ class PipelineConfig:
                 "pca",
                 "lda_features",
                 "lda",
+                "psychology_features",
+                "psychology",
             ]
             for sec in section_keys:
                 if sec in feature_dict and isinstance(feature_dict[sec], dict):
@@ -471,10 +488,13 @@ class PipelineConfig:
             if k not in ["dataset", "features", "model", "experiment"]:
                 flat_data[k] = v
 
+        if "enable_quant_signals" in flat_data and "enable_quant_signal_features" not in flat_data:
+            flat_data["enable_quant_signal_features"] = flat_data["enable_quant_signals"]
+
         # Handle PCA mappings
         pca_source = data.get("pca_features") or data.get("pca") or (feature_dict.get("pca_features") if isinstance(feature_dict, dict) else None) or (feature_dict.get("pca") if isinstance(feature_dict, dict) else None)
         if isinstance(pca_source, dict):
-            if "enabled" in pca_source:
+            if "enabled" in pca_source and "enable_pca_features" not in flat_data:
                 flat_data["enable_pca_features"] = pca_source["enabled"]
             if "n_components" in pca_source:
                 flat_data["pca_n_components"] = pca_source["n_components"]
@@ -488,7 +508,7 @@ class PipelineConfig:
         # Handle LDA mappings
         lda_source = data.get("lda_features") or data.get("lda") or (feature_dict.get("lda_features") if isinstance(feature_dict, dict) else None) or (feature_dict.get("lda") if isinstance(feature_dict, dict) else None)
         if isinstance(lda_source, dict):
-            if "enabled" in lda_source:
+            if "enabled" in lda_source and "enable_lda_features" not in flat_data:
                 flat_data["enable_lda_features"] = lda_source["enabled"]
             if "solver" in lda_source:
                 flat_data["lda_solver"] = lda_source["solver"]
@@ -504,7 +524,7 @@ class PipelineConfig:
         # Handle clustering_features mappings
         clust_source = data.get("clustering_features") or (feature_dict.get("clustering_features") if isinstance(feature_dict, dict) else None)
         if isinstance(clust_source, dict):
-            if "enabled" in clust_source:
+            if "enabled" in clust_source and "enable_clustering_features" not in flat_data:
                 flat_data["enable_clustering_features"] = clust_source["enabled"]
             if "algorithm" in clust_source:
                 flat_data["clustering_algorithm"] = clust_source["algorithm"]
@@ -537,7 +557,7 @@ class PipelineConfig:
         # Handle sample_weighting mappings
         sw_source = data.get("sample_weighting") or (feature_dict.get("sample_weighting") if isinstance(feature_dict, dict) else None)
         if isinstance(sw_source, dict):
-            if "enabled" in sw_source:
+            if "enabled" in sw_source and "enable_sample_weighting" not in flat_data:
                 flat_data["enable_sample_weighting"] = sw_source["enabled"]
             if "decay_mode" in sw_source:
                 flat_data["weight_decay_mode"] = sw_source["decay_mode"]
@@ -571,7 +591,7 @@ class PipelineConfig:
         # Handle temporal_embeddings mappings
         temp_source = data.get("temporal_embeddings") or (feature_dict.get("temporal_embeddings") if isinstance(feature_dict, dict) else None)
         if isinstance(temp_source, dict):
-            if "enabled" in temp_source:
+            if "enabled" in temp_source and "enable_temporal_embeddings" not in flat_data:
                 flat_data["enable_temporal_embeddings"] = temp_source["enabled"]
             if "temporal_input_mode" in temp_source:
                 flat_data["temporal_input_mode"] = temp_source["temporal_input_mode"]
@@ -649,7 +669,7 @@ class PipelineConfig:
         # Handle gnn_embeddings mappings
         gnn_source = data.get("gnn_embeddings") or (feature_dict.get("gnn_embeddings") if isinstance(feature_dict, dict) else None)
         if isinstance(gnn_source, dict):
-            if "enabled" in gnn_source:
+            if "enabled" in gnn_source and "enable_gnn_embeddings" not in flat_data:
                 flat_data["enable_gnn_embeddings"] = gnn_source["enabled"]
             if "k_neighbors" in gnn_source:
                 flat_data["gnn_k_neighbors"] = gnn_source["k_neighbors"]
@@ -675,7 +695,7 @@ class PipelineConfig:
         # Parse Classical Quantitative & Signal Processing Features
         quant_source = data.get("quant_signals") or (feature_dict.get("quant_signals") if isinstance(feature_dict, dict) else None)
         if isinstance(quant_source, dict):
-            if "enabled" in quant_source:
+            if "enabled" in quant_source and "enable_quant_signal_features" not in flat_data:
                 flat_data["enable_quant_signal_features"] = quant_source["enabled"]
             if "enable_momentum" in quant_source:
                 flat_data["quant_enable_momentum"] = quant_source["enable_momentum"]
@@ -709,6 +729,34 @@ class PipelineConfig:
                 flat_data["quant_cache_path"] = quant_source["cache_path"]
             if "force_recompute" in quant_source:
                 flat_data["quant_force_recompute"] = quant_source["force_recompute"]
+
+        # Parse Psychology Features (Consumer & Behavioral Psychology)
+        psych_source = data.get("psychology_features") or (feature_dict.get("psychology_features") if isinstance(feature_dict, dict) else None)
+        if isinstance(psych_source, dict):
+            if "enabled" in psych_source and "enable_psychology_features" not in flat_data:
+                flat_data["enable_psychology_features"] = psych_source["enabled"]
+            if "enable_mental_accounting" in psych_source:
+                flat_data["enable_mental_accounting"] = psych_source["enable_mental_accounting"]
+            if "enable_anxiety_monitoring" in psych_source:
+                flat_data["enable_anxiety_monitoring"] = psych_source["enable_anxiety_monitoring"]
+            if "enable_pain_of_paying" in psych_source:
+                flat_data["enable_pain_of_paying"] = psych_source["enable_pain_of_paying"]
+            if "enable_peak_end_friction" in psych_source:
+                flat_data["enable_peak_end_friction"] = psych_source["enable_peak_end_friction"]
+            if "enable_scarcity_mindset" in psych_source:
+                flat_data["enable_scarcity_mindset"] = psych_source["enable_scarcity_mindset"]
+            if "recency_half_life_days" in psych_source:
+                flat_data["psych_recency_half_life_days"] = psych_source["recency_half_life_days"]
+            if "login_recency_scale" in psych_source:
+                flat_data["psych_login_recency_scale"] = psych_source["login_recency_scale"]
+            if "outlier_clip_quantile" in psych_source:
+                flat_data["psych_outlier_clip_quantile"] = psych_source["outlier_clip_quantile"]
+            if "prune_sparse" in psych_source:
+                flat_data["psych_prune_sparse"] = psych_source["prune_sparse"]
+            if "max_sparsity_threshold" in psych_source:
+                flat_data["psych_max_sparsity_threshold"] = psych_source["max_sparsity_threshold"]
+            if "min_variance_threshold" in psych_source:
+                flat_data["psych_min_variance_threshold"] = psych_source["min_variance_threshold"]
 
         # Handle legacy nonlinear_representations mappings (backward compatibility)
         nl_source = data.get("nonlinear_representations") or (feature_dict.get("nonlinear_representations") if isinstance(feature_dict, dict) else None)
@@ -807,7 +855,12 @@ class UnifiedConfig:
             features_cfg.decision_threshold = float(dt)
         model_cfg = ModelConfig.from_dict(model_data)
         experiment_cfg = ExperimentConfig.from_dict(data.get("experiment", {}))
-        tuning_cfg = TuningConfig.from_dict(data.get("tuning", {}))
+        
+        tuning_data = dict(data.get("tuning", {}))
+        # Centralized single source of truth: inherit cv_folds from dataset if not explicitly in tuning
+        if "cv_folds" not in tuning_data and hasattr(features_cfg, "cv_folds"):
+            tuning_data["cv_folds"] = features_cfg.cv_folds
+        tuning_cfg = TuningConfig.from_dict(tuning_data)
         return cls(features=features_cfg, model=model_cfg, experiment=experiment_cfg, tuning=tuning_cfg)
 
     @classmethod

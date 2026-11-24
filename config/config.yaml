@@ -30,7 +30,7 @@ dataset:
   test_size: 0.10                   # 10% tập Test độc lập
   val_size: 0.10                    # 10% tập Validation
   enable_cv: true                   # Kích hoạt K-Fold Cross-Validation
-  cv_folds: 5                       # Số fold cho Stratified K-Fold CV
+  cv_folds: 10                    # Số fold cho Stratified K-Fold CV
   random_state: 42
   stratify: true
   exclude_cols:
@@ -42,18 +42,22 @@ dataset:
 # 2. CẤU HÌNH KỸ NGHỆ ĐẶC TRƯNG (Feature Engineering Settings)
 features:
   # Bật/tắt các mô-đun chính (High-level Module Toggles for Ablation)
+  # (Chỉ đặt cờ bật/tắt tập trung ở đây để quản lý, tránh lặp lại ở từng mục con)
   enable_skewness: true             # Biến đổi Log1p, Zero-balance hurdle, Yeo-Johnson
   enable_scaling: true              # Chuẩn hóa RobustScaler & StandardScaler
   enable_domain_features: true      # Tạo các đặc trưng nghiệp vụ ngân hàng
+  enable_psychology_features: true  # Tạo các đặc trưng tâm lý học tiêu dùng & chi tiêu (Mental Accounting, Anxiety, Pain of Paying, Peak-End, Scarcity)
+  enable_quant_signals: false        # Đặc trưng định lượng & tín hiệu chuỗi (Momentum, Volatility, Rolling, Exogenous)
   enable_one_hot_encoding: true     # One-Hot Encoding cho các cột phân loại
   enable_target_encoding: true      # Smoothed Target Encoding (m-estimate)
-  enable_smote: false                # Cân bằng mẫu thiểu số bằng SMOTE trên tập Train
-  enable_feature_selection: true   # Lọc đặc trưng Top-K theo độ quan trọng
-  enable_temporal_embeddings: false   # Biểu diễn chuỗi sự kiện thời gian (Multi-snapshot Bi-GRU Autoencoder)
-  enable_gnn_embeddings: false        # Biểu diễn cấu trúc ngữ cảnh mạng lưới đồ thị (Self-Supervised k-NN Graph Attention Network)
-  enable_clustering_features: true   # Đặc trưng phân cụm khách hàng (Geometry, Soft Membership, Boundary & Peer Ratios)
-  enable_pca_features: false          # Biểu diễn đa tạp trực giao toàn cục (PCA Manifold & Residual Error)
-  enable_lda_features: true          # Biểu diễn biệt thức có giám sát (Fisher LDA Projection & Log-Odds)
+  enable_smote: false               # Cân bằng mẫu thiểu số bằng SMOTE trên tập Train
+  enable_feature_selection: true    # Lọc đặc trưng Top-K theo độ quan trọng
+  enable_sample_weighting: true     # Trọng số mẫu suy giảm theo thời gian & số dư (Phương án 1)
+  enable_clustering_features: true # Đặc trưng phân cụm khách hàng (Geometry, Soft Membership, Boundary & Peer Ratios)
+  enable_pca_features: true        # Biểu diễn đa tạp trực giao toàn cục (PCA Manifold & Residual Error)
+  enable_lda_features: false        # Biểu diễn biệt thức có giám sát (Fisher LDA Projection & Log-Odds)
+  enable_temporal_embeddings: false # Biểu diễn chuỗi sự kiện thời gian (Multi-snapshot Bi-GRU Autoencoder)
+  enable_gnn_embeddings: false      # Biểu diễn cấu trúc ngữ cảnh mạng lưới đồ thị (Self-Supervised k-NN Graph Attention Network)
 
   # Chi tiết biến đổi phân phối lệch (Skewness sub-toggles)
   skewness_transform:
@@ -105,6 +109,19 @@ features:
     vulnerable_age_max: 60
     high_risk_country: "Germany" 
 
+  # Chi tiết đặc trưng tâm lý học tiêu dùng & chi tiêu (Consumer & Behavioral Psychology)
+  psychology_features:
+    enable_mental_accounting: true    # Kế toán tâm lý & Vi phạm cam kết (Savings commitment, Early break)
+    enable_anxiety_monitoring: true   # Bất an & Giám sát ảo (Phantom login, Panic channel migration)
+    enable_pain_of_paying: true       # Nỗi đau chi trả & Trả đũa phí phạt (Fee retaliation, Cash detachment)
+    enable_peak_end_friction: true    # Quy luật Đỉnh - Điểm kết (Exponential recency decay, Terminal failure)
+    enable_scarcity_mindset: true     # Tâm lý khan hiếm & Áp lực sinh tồn (Financial runway, Hand-to-mouth burn)
+    recency_half_life_days: 30.0      # Chu kỳ bán rã thời gian cho khiếu nại (Peak-End rule)
+    login_recency_scale: 15.0         # Chu kỳ bán rã độ mới đăng nhập (Anxiety monitoring)
+    outlier_clip_quantile: 0.995      # Ngưỡng nén ngoại lai cực đoan (Winsorization)
+    prune_sparse: true                # Tự động loại bỏ đặc trưng suy biến / thưa thớt
+    max_sparsity_threshold: 0.98      # Ngưỡng tỷ lệ 0 tối đa cho phép
+
   # Chi tiết mã hóa danh mục (Categorical encoding)
   categorical_encoding:
     categorical_cols:
@@ -122,7 +139,6 @@ features:
 
   # Chi tiết trọng số mẫu (Sample Weighting / Recency Decay / Value Weighting - Phương án 1)
   sample_weighting:
-    enabled: true                  # Bật/tắt phương án 1
     decay_mode: "exponential"       # "exponential" | "linear" | "none"
     recency_col: "recency_days"     # Cột tính độ mới
     decay_half_life_days: 30.0     # Chu kỳ bán rã (ngày)
@@ -139,13 +155,11 @@ features:
     hybrid_pearson_weight: 0.50          # Trọng số cho Pearson trong MI_Pearson_Hybrid (0.0 đến 1.0)
     compute_feature_importance: true
 
-  # Chi tiết đặc trưng phân cụm & phân khúc khách hàng (Clustering & Segmentation Features)
+  # Chi tiết đặc trưng phân cụm Hành vi & Tâm lý độc lập (Independent Behavioral & Psychological Clustering)
   clustering_features:
-    enabled: true                      # Bật/tắt toàn bộ nhóm đặc trưng trích xuất từ phân cụm
     algorithm: "both"                 # "kmeans" | "hierarchical" | "both"
-    n_clusters: 4                       # Số cụm persona
-    use_saved_bundle: true              # Ưu tiên tái sử dụng artifacts/segmentation/cluster_bundle.joblib nếu có
-    bundle_path: "artifacts/segmentation/cluster_bundle.joblib"
+    n_clusters: 4                      # Số cụm hình mẫu (K=4)
+    use_saved_bundle: false             # Huấn luyện độc lập trên tập train (không phụ thuộc module 5)
     softmax_temperature: 1.0            # Nhiệt độ Softmax tính xác suất mềm
     features:
       enable_centroid_distances: true   # Khoảng cách Euclidean & Cosine tới từng tâm cụm (cluster_dist_*, cluster_cos_dist_*)
@@ -153,20 +167,18 @@ features:
       enable_cluster_inertia_boundary: true # Khoảng cách gần nhất, nhì & Silhouette-like margin (cluster_min_dist, cluster_silhouette_margin)
       enable_risk_affinity_ratio: true  # Tỷ lệ rủi ro Churn Persona Contrast (cluster_risk_affinity_ratio, cluster_risk_dist_diff)
       enable_cluster_relative_ratios: true # Tỷ lệ lệch chuẩn so với giá trị trung bình cụm (cluster_rel_balance, cluster_diff_trans_trend)
-      enable_cluster_one_hot: true      # Mã hóa nhãn cụm One-Hot (cluster_id, is_cluster_*)
+      enable_cluster_one_hot: false      # Mã hóa nhãn cụm One-Hot (cluster_id, is_cluster_*)
       enable_hierarchical_features: true # Đặc trưng phân cụm phân cấp Ward (hier_dist_*, hier_kmeans_agreement)
 
   # Chi tiết đặc trưng phân tích thành phần chính (PCA Manifold Features)
   pca_features:
-    enabled: false                      # Bật/tắt toàn bộ nhóm đặc trưng PCA
-    n_components: 10                     # Số thành phần trực giao chính (PC1..PC5)
+    n_components: 20                     # Số thành phần trực giao chính (PC1..PC5)
     whiten: false                       # Chuẩn hóa phương sai các thành phần về 1
     enable_reconstruction_error: true   # Sai số tái tạo Euclid & sai số tương đối (Residual Anomaly Score)
     enable_mahalanobis: true            # Khoảng cách Mahalanobis trong không gian đa tạp PCA
 
   # Chi tiết đặc trưng biệt thức tuyến tính có giám sát (Fisher LDA Features)
   lda_features:
-    enabled: true                      # Bật/tắt toàn bộ nhóm đặc trưng LDA
     solver: "lsqr"                      # "lsqr" | "eigen" | "svd" (lsqr hỗ trợ co ma trận shrinkage)
     shrinkage: "auto"                   # Ledoit-Wolf shrinkage chống quá khớp
     enable_probabilities: true          # Xác suất hậu nghiệm Bayes Churn
@@ -175,20 +187,19 @@ features:
 
   # Chi tiết biểu diễn chuỗi hành vi thời gian (Temporal Multi-Snapshot Sequence Embeddings)
   temporal_embeddings:
-    enabled: false                      # Bật/tắt khai thác chuỗi sự kiện thô từ transactions, logins, complaints
     temporal_input_mode: "raw_events"   # Chế độ đầu vào: "extractors" (37 kênh gom cụm 6 snapshot) | "raw_events" (chuỗi log thô 26 kênh End-to-End DL)
     raw_sequence_length: 50             # Độ dài chuỗi sự kiện thô gần nhất (Tokens L=50) khi bật temporal_input_mode: "raw_events"
-    manifold_strategy: "hyperbolic_poincare"  # "unsupervised" | "asymmetric_arcface" | "hyperbolic_poincare" | "optimal_transport" | "neyman_pearson" | "temporal_attention"
+    manifold_strategy: "temporal_attention"  # "unsupervised" | "asymmetric_arcface" | "hyperbolic_poincare" | "optimal_transport" | "neyman_pearson" | "temporal_attention"
     latent_dim: 16                      # Kích thước vector ẩn nén hành vi z (nối vào bảng đặc trưng)
     hidden_dim: 64                      # Số nơ-ron hidden trong Bi-GRU Encoder & Decoder
     num_layers: 2                       # Số lớp Bi-GRU
-    epochs: 30                          # Số epoch huấn luyện Sequence Autoencoder
+    epochs: 10                          # Số epoch huấn luyện Sequence Autoencoder
     batch_size: 256                     # Kích thước mini-batch
     learning_rate: 0.001                # Tốc độ học AdamW
     dropout: 0.20                       # Dropout chống quá khớp
     checkpoint_dir: "models/saved/temporal" # Thư mục lưu checkpoint trọng số mô hình PyTorch
     cache_path: "data/processed/temporal/temporal_embeddings.csv" # Cache vector embeddings để load tức thì
-    force_retrain: false
+    force_retrain: true
 
     # Tham số Chiến lược 1: Asymmetric ArcFace (Hyperspherical Margin)
     lambda_angular: 0.50                # Trọng số lề góc bất đối xứng (cân chỉnh chống nổ gradient)
@@ -221,7 +232,6 @@ features:
 
   # Chi tiết biểu diễn đồ thị mạng lưới khách hàng (Self-Supervised GNN Embeddings)
   gnn_embeddings:
-    enabled: false                      # Bật/tắt khai thác cấu trúc quan hệ đồ thị k-NN
     k_neighbors: 5                      # Số láng giềng k kết nối trên mỗi khách hàng
     latent_dim: 16                      # Kích thước vector ẩn z_gnn (nối vào bảng đặc trưng)
     hidden_dim: 32                      # Số nơ-ron hidden trong các tầng GAT
@@ -235,7 +245,6 @@ features:
 
   # Đặc trưng Định lượng & Xử lý Tín hiệu Chuỗi Thời gian (Pure Classical ML - Không dùng Deep Learning)
   quant_signals:
-    enabled: true                       # Bật/tắt khai thác đặc trưng Momentum, MACD, Volatility, Fourier, Exogenous
     enable_momentum: true               # Chỉ số động lượng: Velocity, Acceleration, ROC, RSI-like Cash Flow, Negative Streaks
     enable_macd: true                   # Chỉ số MACD: MACD Line, Signal Line, Histogram trên Net Flow & Login
     enable_volatility: true             # Chỉ số biến động: Độ lệch chuẩn, CV, Downside semi-variance, Inter-event jitter
@@ -328,7 +337,7 @@ tuning:
   n_trials: 30                      # Số lượng trials tối ưu
   timeout: null                      # Giới hạn thời gian (giây), null nếu không giới hạn
   metric: "PR_AUC"                  # Mục tiêu tối ưu ("PR_AUC" | "ROC_AUC" | "F1_Score")
-  cv_folds: 5                       # Số fold Cross-Validation trên tập Train
+  # cv_folds được kế thừa tập trung duy nhất từ dataset.cv_folds ở Mục 1 (để tránh lặp cấu hình)
   study_name: "bank_churn_tuning"
   direction: "maximize"
   random_state: 42

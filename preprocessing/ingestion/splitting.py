@@ -119,10 +119,11 @@ class DataSplitter:
 
         stratify_series = df[target_col] if self.stratify else None
 
-        # 1. Split off independent test set first
+        # 1. Split off independent test set first (exact sample counts to prevent floating point drift)
+        test_n = int(round(self.test_size * len(df))) if self.test_size < 1.0 else int(self.test_size)
         train_val_df, test_df = train_test_split(
             df,
-            test_size=self.test_size,
+            test_size=test_n,
             random_state=self.random_state,
             stratify=stratify_series,
             shuffle=self.shuffle,
@@ -130,13 +131,11 @@ class DataSplitter:
 
         # 2. If val_size is requested, split train_val into train and validation
         if self.val_size > 0.0:
-            adjusted_val_ratio = self.val_size / (1.0 - self.test_size)
-            adjusted_val_ratio = min(max(adjusted_val_ratio, 0.01), 0.50)
-
+            val_n = int(round(self.val_size * len(df))) if self.val_size < 1.0 else int(self.val_size)
             val_stratify = train_val_df[target_col] if self.stratify else None
             train_df, val_df = train_test_split(
                 train_val_df,
-                test_size=adjusted_val_ratio,
+                test_size=val_n,
                 random_state=self.random_state,
                 stratify=val_stratify,
                 shuffle=self.shuffle,
