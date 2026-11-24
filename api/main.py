@@ -47,6 +47,8 @@ class CustomerInput(BaseModel):
     primary_device: str = Field(min_length=1,max_length=60)
     raw_features: dict[str, float | str | None] | None = None
 
+BATCH_CUSTOMER_ADAPTER = TypeAdapter(list[CustomerInput])
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.churn_model = module5.load()
@@ -345,3 +347,10 @@ def predict_segments(payload: CustomerInput, algorithm: Literal["kmeans", "hiera
         return segmentation_service.predict(require_segmentation(), payload.model_dump(), algorithm)
     except (ValueError, KeyError) as exc:
         raise HTTPException(422, "Invalid segmentation features") from exc
+
+
+# Optional synthetic customer data API; disabled unless a dataset path is configured.
+if demo_dir := os.getenv("DEMO_DATA_DIR"):
+    from demo_data.serve import demo_router
+
+    app.include_router(demo_router(Path(demo_dir)))

@@ -144,3 +144,15 @@ curl -X POST 'http://localhost:8000/api/predict/batch?force=true'
 The `/monitoring` dashboard now uses measured reference/current distributions, labeled window metrics and persistent alert history. It distinguishes incoming API requests, fixed snapshot batches and controlled study replay. Configure `DATABASE_URL` and `MONITORING_ADMIN_TOKEN`, run `python -m monitoring.migrate`, and generate the course demo with `python -m monitoring.simulate`.
 
 See [the complete monitoring guide](docs/module-7-monitoring.md) for rules, delayed-label import, PostgreSQL/RLS setup, API/report downloads, scheduler installation, retention and retraining actions. The [submission notebook](notebooks/module7_monitoring.ipynb) explains the controlled scenarios. Monitoring does not fill missing labels or turn a simulated time series into a live bank measurement.
+
+
+## Synthetic Demo Data
+
+The optional five-batch synthetic customer generator from upstream `main` is available on this branch. Generate and validate it locally using the source relational tables and fitted artifacts:
+
+```bash
+python -m demo_data.generate --multiplier 10 --max-samples 10000 --seed 42
+python -m demo_data.validate
+```
+
+Set `DEMO_DATA_DIR=data/demo` to enable `/api/demo/*` on the FastAPI server. The normal dashboard and `/api/predict/batch` continue using the official snapshot by default. See [demo data guide](docs/demo_data.md). Install development extras from `requirements-demo.txt` for the upstream preprocessing test suite.
