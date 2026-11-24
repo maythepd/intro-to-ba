@@ -40,7 +40,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install -r requirements-serving.txt -r requirements-demo.txt httpx2
+      - run: python -m pip install -r requirements-serving.txt pytest httpx2
       - uses: actions/cache@v4
         with:
           path: ~/.cache/kagglehub/datasets/maythepd/full-dataset-intro2ba
