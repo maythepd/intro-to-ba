@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class TrustedCheckpointLoader(pickle.Unpickler):
     def find_class(self, module, name):
-        if module in ("models.logistic_regression", "models.random_forest", "models.focal_loss"):
+        if module.startswith(("models.", "preprocessing.", "config.")) or module in ("models", "preprocessing", "config"):
             module = "model_development." + module
         return super().find_class(module, name)
 
