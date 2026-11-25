@@ -43,14 +43,27 @@ function Distribution({ data }: { data: DistributionBin[] }) {
 }
 
 function Monitoring() {
-  const [source, setSource] = useState<MonitoringSource>("live");
-  const [scenario, setScenario] = useState("stable");
+  const [dataset, setDataset] = useState<"live" | "snapshot_batch" | "synthetic" | "stress">("live");
+  const [stressScenario, setStressScenario] = useState("stable");
+  const [replayId, setReplayId] = useState("");
   const [days, setDays] = useState(30);
   const [selectedId, setSelectedId] = useState("");
   const [selectedFeature, setSelectedFeature] = useState("");
+  // Discover persisted replay scenarios independently of the selected report.
+  const catalog = useQuery({ queryKey: ["monitoring-catalog"],
+    queryFn: ({ signal }) => api.monitoring({ source: "live", days: 7 }, signal),
+    enabled: isApiConfigured && (dataset === "synthetic" || dataset === "stress"),
+    refetchInterval: 30000, retry: 1 });
+  const availableScenarios = catalog.data?.scenarios ?? [];
+  const syntheticReplays = availableScenarios.filter((name) => name.startsWith("synthetic_demo"));
+  const activeReplay = syntheticReplays.includes(replayId) ? replayId
+    : syntheticReplays.find((name) => catalog.data?.scenario_details?.find((item) => item.name === name)?.outcome_kind === "simulated")
+      ?? syntheticReplays[0] ?? "";
+  const source: MonitoringSource = dataset === "synthetic" || dataset === "stress" ? "study_replay" : dataset;
+  const scenario = dataset === "synthetic" ? activeReplay : dataset === "stress" ? stressScenario : "";
   const query = useQuery({ queryKey: ["monitoring", source, scenario, days],
     queryFn: ({ signal }) => api.monitoring({ source, scenario: source === "study_replay" ? scenario : undefined, days }, signal),
-    enabled: isApiConfigured, refetchInterval: 30000, retry: 1 });
+    enabled: isApiConfigured && (source !== "study_replay" || !!scenario), refetchInterval: 30000, retry: 1 });
   const data = query.data;
   const servingModel = data?.models.find((model) => model.id === data.model_id);
   const servingModelLabel = data?.model_id
@@ -62,14 +75,16 @@ function Monitoring() {
   const features = report?.drift.features ?? [];
   const feature = features.find((item) => item.name === selectedFeature) ?? features[0];
   const history = data?.history ?? [];
-  const synthetic = scenario.startsWith("synthetic_demo");
-  const scenarios = Array.from(new Set(["stable", "behavior_drift", "performance_drop", ...(data?.scenarios ?? []),
-    ...((data?.scenarios ?? []).some((name) => name.startsWith("synthetic_demo")) ? [] : ["synthetic_demo"])]));
-  const scenarioName = (name: string) => {
-    const info = data?.scenario_details?.find((item) => item.name === name);
-    return name.startsWith("synthetic_demo") ? `Synthetic Demo · ${info?.outcome_kind === "simulated" ? `Simulated labels (seed ${info.label_seed})` : "Drift only"} · ${name.slice(15) || "No reports"}`
-      : ({ stable: "Stable population", behavior_drift: "Behavioral drift", performance_drop: "Performance deterioration" }[name] ?? name);
+  const synthetic = dataset === "synthetic";
+  const stressScenarios = Array.from(new Set(["stable", "behavior_drift", "performance_drop",
+    ...availableScenarios.filter((name) => !name.startsWith("synthetic_demo"))]));
+  const replayName = (name: string) => {
+    const info = catalog.data?.scenario_details?.find((item) => item.name === name);
+    return `${info?.outcome_kind === "simulated" ? `Simulated labels (seed ${info.label_seed})` : "Drift only"} · ${name.slice("synthetic_demo_".length) || name}`;
   };
+  const stressName = (name: string) =>
+    ({ stable: "Stable population", behavior_drift: "Behavioral drift", performance_drop: "Performance deterioration" }[name] ?? name)
+    + (catalog.isSuccess && !availableScenarios.includes(name) ? " · No reports" : "");
   const chart = history.map((run) => ({ window: run.synthetic_replay?.batch_id ?? new Date(run.window_end).toLocaleDateString(),
     roc_auc: run.performance.metrics?.roc_auc ?? null, average_precision: run.performance.metrics?.average_precision ?? null,
     recall: run.performance.metrics?.recall ?? null }));
@@ -79,16 +94,25 @@ function Monitoring() {
   return <>
     <PageHeader eyebrow="Monitoring" title="Model Monitoring"
       description="Compare populations with the frozen training reference, track labeled outcomes and inspect retraining signals."
-      actions={<Button variant="outline" onClick={() => query.refetch()} disabled={!isApiConfigured || query.isFetching}><RefreshCw className={query.isFetching ? "animate-spin" : ""} /> Refresh</Button>} />
+      actions={<Button variant="outline" onClick={() => { if (source === "study_replay") void catalog.refetch(); if (source !== "study_replay" || scenario) void query.refetch(); }} disabled={!isApiConfigured || query.isFetching || catalog.isFetching}><RefreshCw className={query.isFetching ? "animate-spin" : ""} /> Refresh</Button>} />
     <div className="mb-6 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 min-[1900px]:grid-cols-4">
-      <label className="grid min-w-0 gap-2 text-xs font-medium">Data source
-        <select className={control} value={source} onChange={(e) => { setSource(e.target.value as MonitoringSource); resetSelection(); }}>
-          <option value="live">Incoming API requests</option><option value="snapshot_batch">Study snapshot batch</option><option value="study_replay">Study replay / stress tests</option>
+      <label className="grid min-w-0 gap-2 text-xs font-medium">Dataset
+        <select className={control} value={dataset} onChange={(e) => { setDataset(e.target.value as typeof dataset); resetSelection(); }}>
+          <option value="live">Incoming API requests (live)</option>
+          <option value="snapshot_batch">Fixed study snapshot</option>
+          <option value="synthetic">Synthetic Demo · 5 batches</option>
+          <option value="stress">Held-out study / stress tests</option>
         </select></label>
-      <label className="grid min-w-0 gap-2 text-xs font-medium">Scenario
-        <select className={control} title={scenarioName(scenario)} value={scenario} disabled={source !== "study_replay"} onChange={(e) => { setScenario(e.target.value); resetSelection(); }}>
-          {scenarios.map((name) => <option key={name} value={name}>{scenarioName(name)}</option>)}
-        </select></label>
+      {dataset === "synthetic" ? <label className="grid min-w-0 gap-2 text-xs font-medium">Replay / outcome mode
+        <select className={control} title={activeReplay ? replayName(activeReplay) : "No synthetic replay available"} value={activeReplay} disabled={!syntheticReplays.length} onChange={(e) => { setReplayId(e.target.value); resetSelection(); }}>
+          {!syntheticReplays.length && <option value="">{catalog.isPending ? "Loading replays…" : "No replay available"}</option>}
+          {syntheticReplays.map((name) => <option key={name} value={name}>{replayName(name)}</option>)}
+        </select></label> : dataset === "stress" ? <label className="grid min-w-0 gap-2 text-xs font-medium">Stress-test scenario
+        <select className={control} value={stressScenario} onChange={(e) => { setStressScenario(e.target.value); resetSelection(); }}>
+          {stressScenarios.map((name) => <option key={name} value={name}>{stressName(name)}</option>)}
+        </select></label> : <div className="grid min-w-0 gap-2 text-xs font-medium">Scenario
+        <div className={`${control} flex items-center text-muted-foreground`}>Not applicable</div>
+      </div>
       <div className="grid min-w-0 gap-2 text-xs font-medium">Model version
         <div className={`${control} flex items-center`} title={data?.model_id ? `${servingModelLabel} (${data.model_id})` : servingModelLabel}>
           <span className="min-w-0 truncate">{servingModelLabel}</span>
@@ -99,6 +123,8 @@ function Monitoring() {
         </select></label>
     </div>
     {!isApiConfigured ? <Notice tone="warning" title="API not connected">Connect the model API to view monitoring history.</Notice>
+      : dataset === "synthetic" && catalog.isError && !activeReplay ? <ErrorState message={describeError(catalog.error)} onRetry={() => catalog.refetch()} retrying={catalog.isFetching} />
+      : dataset === "synthetic" && catalog.isSuccess && !activeReplay ? <Panel title="No synthetic replay available"><p className="text-sm text-muted-foreground">An operator must run the synthetic demo replay before its reports can be viewed. No measurements are fabricated.</p></Panel>
       : query.isPending ? <Panel><div className="flex items-center gap-3 py-8 text-sm text-muted-foreground"><Activity className="animate-pulse" />Loading monitoring history. A sleeping server may take about a minute to start.</div></Panel>
       : query.isError ? <ErrorState message={describeError(query.error)} onRetry={() => query.refetch()} retrying={query.isFetching} />
       : data && <>
@@ -122,7 +148,7 @@ function Monitoring() {
         </div>
         {!data.latest ? <Panel title="No completed monitoring window">
           <p className="text-sm text-muted-foreground">No report is available for this source and model. The scheduled monitoring job evaluates closed windows. A cohort below the minimum remains marked as insufficient data.</p>
-          <p className="mt-3 text-sm text-muted-foreground">Live performance requires outcomes after the {data.outcome_horizon_days}-day horizon. Select Study replay to inspect demonstration scenarios after an operator has generated them.</p>
+          <p className="mt-3 text-sm text-muted-foreground">Live performance requires outcomes after the {data.outcome_horizon_days}-day horizon. Select Synthetic Demo or Held-out study / stress tests to inspect reports after an operator has generated them.</p>
         </Panel> : <>
           <Panel title="Measurement window" subtitle="Window boundaries use UTC; displayed timestamps use your local timezone.">
             <div className="flex flex-wrap items-end justify-between gap-4">
