@@ -10,3 +10,8 @@ data/*
 !data/official/
 !data/full_bank_data.csv
 node_modules/
+.venv/
+.pytest_cache/
+.matplotlib_cache/
+results/segmentation/
+models/saved/segmentation/
