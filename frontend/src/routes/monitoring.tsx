@@ -7,7 +7,7 @@ import { ErrorState, Notice, PageHeader, Panel } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { api, API_BASE_URL, describeError, isApiConfigured, type DistributionBin, type MonitoringSource } from "@/lib/api";
 import { pageMeta } from "@/lib/seo";
-import { MultiModelMonitoring } from "@/components/MultiModelMonitoring";
+import { MultiModelMonitoring, monitoringModelNames, type MonitoringModel } from "@/components/MultiModelMonitoring";
 
 export const Route = createFileRoute("/monitoring")({
   head: () => pageMeta("Monitoring", "Measured data drift, labeled performance and retraining alerts."), component: Monitoring,
@@ -44,11 +44,22 @@ function Distribution({ data }: { data: DistributionBin[] }) {
 }
 
 function Monitoring() {
-  const [view, setView] = useState("champion");
-  return <><div className="mb-6 flex flex-wrap gap-2" aria-label="Monitoring mode">
-    <Button variant={view === "champion" ? "default" : "outline"} onClick={() => setView("champion")}>Serving champion</Button>
-    <Button variant={view === "comparison" ? "default" : "outline"} onClick={() => setView("comparison")}>Multi-model study replay</Button>
-  </div>{view === "comparison" ? <MultiModelMonitoring /> : <ChampionMonitoring />}</>;
+  const [view, setView] = useState("comparison");
+  const [model, setModel] = useState<MonitoringModel>("all");
+  return <><div className="mb-6 grid min-w-0 gap-4 lg:grid-cols-2">
+    <div className="flex flex-wrap items-end gap-2" aria-label="Monitoring mode">
+      <Button variant={view === "comparison" ? "default" : "outline"} onClick={() => setView("comparison")}>Multi-model study replay</Button>
+      <Button variant={view === "champion" ? "default" : "outline"} onClick={() => setView("champion")}>Serving champion</Button>
+    </div>
+    <label className="grid min-w-0 gap-2 text-xs font-medium" htmlFor="monitoring-model">Model
+      <select id="monitoring-model" className={control} value={view === "champion" ? "xgboost" : model}
+        onChange={(e) => {setModel(e.target.value as MonitoringModel); setView("comparison");}}>
+        <option value="all">All five models · comparison</option>
+        {Object.entries(monitoringModelNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select>
+      <span className="font-normal text-muted-foreground">{view === "champion" ? "Incoming requests use XGBoost. Select another model to view its study replay." : "Choose one model or compare all five on the same synthetic batches."}</span>
+    </label>
+  </div>{view === "comparison" ? <MultiModelMonitoring model={model} /> : <ChampionMonitoring />}</>;
 }
 
 function ChampionMonitoring() {
