@@ -10,6 +10,7 @@ on:
       - 'tools/prepare_serving.py'
       - 'config/synthetic_outcome_v1.json'
       - 'config/monitoring.yaml'
+      - 'config/multi_model_monitoring.yaml'
       - 'frontend/**'
       - 'tests/**'
       - 'requirements.txt'
@@ -49,6 +50,7 @@ jobs:
       - run: python -m tools.prepare_demo_source
       - run: python -m api.official_data --source data/full_dataset
       - run: python -m api.segmentation_service
+      - run: python -m api.prepare_challengers --models lr rf --verify-study
       - run: python -m demo_data.generate --multiplier 10 --max-samples 10000 --seed 42
       - run: python -m demo_data.validate
         env:

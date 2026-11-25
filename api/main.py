@@ -18,6 +18,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from api import module5, segmentation_service
 from api.monitoring_routes import router as monitoring_router
+from api.campaign_routes import router as campaign_router
 from monitoring.service import MonitoringService
 
 DATA_PATH = module5.DATA_PATH
@@ -74,6 +75,7 @@ app.add_middleware(
 )
 
 app.include_router(monitoring_router)
+app.include_router(campaign_router)
 
 
 @app.middleware("http")

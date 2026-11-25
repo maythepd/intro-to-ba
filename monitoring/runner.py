@@ -27,7 +27,8 @@ def summarize(report: dict) -> dict:
 
 
 def run_window(store, model_id: str, cfg: dict, *, source: str, scenario: str = "",
-               start: str, end: str, as_of: str | None = None, replay_metadata: dict | None = None) -> dict:
+               start: str, end: str, as_of: str | None = None, replay_metadata: dict | None = None,
+               input_drift: dict | None = None) -> dict:
     if source not in SOURCES or (source == "study_replay" and not scenario) or (source != "study_replay" and scenario):
         raise ValueError("Use an explicit scenario only for study_replay")
     start, end, as_of = timestamp(start), timestamp(end), timestamp(as_of or now_utc())
@@ -49,7 +50,9 @@ def run_window(store, model_id: str, cfg: dict, *, source: str, scenario: str = 
     latest = {event["subject"]: event for event in window if event["valid"]}
     cohort = list(latest.values())
     frame = pd.DataFrame([event["features"] for event in cohort])
-    data_drift = drift.evaluate(frame, reference, cfg)
+    if input_drift is not None and input_drift["sample_count"] != len(cohort):
+        raise ValueError("Shared input drift cohort mismatch")
+    data_drift = input_drift if input_drift is not None else drift.evaluate(frame, reference, cfg)
     prediction_drift = (drift.compare([event["probability"] for event in cohort], reference["prediction"], cfg,
                                       name="churn_probability")
                         if len(cohort) >= cfg["min_drift_samples"] else None)

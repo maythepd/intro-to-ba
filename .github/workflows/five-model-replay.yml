@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install -r requirements-serving.txt pytest httpx2 optuna
+      - run: python -m pip install -r requirements-serving.txt pytest httpx2
       - uses: actions/cache@v4
         with:
           path: ~/.cache/kagglehub/datasets/maythepd/full-dataset-intro2ba
@@ -37,7 +37,16 @@ jobs:
         env:
           DATABASE_URL: sqlite:///artifacts/monitoring/ci-validation.sqlite3
       - run: python -m demo_data.labels --seed 4242
-      - run: python -m monitoring.multi_model_replay --labels data/demo/synthetic_outcomes.csv --export-dir artifacts/five-model-results
+      - run: python -m api.prepare_challengers --models lr rf --verify-study
+      - run: /usr/bin/time -v -o artifacts/five-model-resources.txt python -m monitoring.multi_model_replay --labels data/demo/synthetic_outcomes.csv --export-dir artifacts/five-model-results
+        env:
+          DATABASE_URL: sqlite:///artifacts/monitoring/five-model-ci.sqlite3
+      - run: python -m pytest tests -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install && npm run build
+        working-directory: frontend
       - name: Print aggregate metrics for review
         if: always()
         run: |
@@ -48,4 +57,6 @@ jobs:
         if: always()
         with:
           name: five-model-results
-          path: artifacts/five-model-results/
+          path: |
+            artifacts/five-model-results/
+            artifacts/five-model-resources.txt

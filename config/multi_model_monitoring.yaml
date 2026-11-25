@@ -1,0 +1,13 @@
+version: 1
+silhouette_sample_size: 600
+sampling_seed: 42
+min_cluster_profile_samples: 50
+silhouette_drop: 0.05
+dbi_relative_increase: 0.20
+p95_relative_increase: 0.20
+outlier_share_increase: 0.10
+threshold_note: Illustrative stress-test review thresholds; not universal validation standards.
+classifier_roles:
+  xgboost: champion
+  lr: challenger
+  rf: challenger

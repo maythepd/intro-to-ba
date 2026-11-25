@@ -121,6 +121,8 @@ class Store:
                     connection.exec_driver_sql(f'SET LOCAL ROLE "{role}"')
 
     def migrate(self):
+        # Additive feature tables; base schema version/old model and report identities remain valid.
+        from monitoring import campaign_store  # noqa: F401
         with self.connection(write=True) as connection:
             if not self.is_sqlite:
                 connection.execute(CreateSchema("bank_monitoring", if_not_exists=True))

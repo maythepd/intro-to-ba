@@ -8,6 +8,8 @@ Bank-staff analytics interface for customer churn risk, with an XGBoost API. The
 
 Five-batch synthetic monitoring is implemented: independent optional outcomes, versioned replay, fixed-reference drift, transactional reports, authenticated admin API and dashboard batch history. See [the implementation, execution plan and reproducible commands](docs/synthetic-demo-monitoring.md). Synthetic performance is illustrative and does not measure real-customer accuracy.
 
+The [five-model study replay](docs/multi-model-monitoring.md) adds frozen LR/RF challengers, KMeans and a Ward-centroid surrogate on shared cohorts, with 25 durable reports and a comparison mode on the monitoring page. XGBoost remains the serving model.
+
 ## Official dataset
 
 The project's **source of truth** is [Full Dataset Intro2BA on Kaggle](https://www.kaggle.com/datasets/maythepd/full-dataset-intro2ba), as referenced in the current `main` README and `synth_data_dict.md`. It contains six related behavioral tables (`accounts`, `login`, `transactions`, `savings_cycles`, `complaints`, `customer_context`) and uses a **2026-10-01 exclusive snapshot boundary**. The original Bank Customer Churn Prediction table provides customer profiles and labels.
@@ -85,8 +87,8 @@ and precision 0.2040. Those figures describe the research study, **not** current
 The committed comparison report's stated test count should be reconciled with the CSV's `X_test_Shape`
 before any final presentation.
 
-**Model compatibility:** serving uses the XGBoost JSON plus separately fitted Module 5 preprocessing,
-not the LR/RF pickle files or a legacy churn bundle. A build succeeds only when the exact 133-feature
+**Model compatibility:** serving uses the XGBoost JSON plus separately fitted Module 5 preprocessing.
+The study replay separately accepts only the two hash-approved LR/RF checkpoints after held-out reproduction. A build succeeds only when the exact 133-feature
 schema and the committed study metrics are reproduced. The actual serving identity is exposed by `/health`.
 
 ## KMeans + hierarchical customer segmentation

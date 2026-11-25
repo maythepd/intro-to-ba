@@ -89,7 +89,8 @@ export interface MonitoringAlert {
 export interface PerformanceReport {
   status: string; sample_count: number; mature_samples: number; labeled_samples: number;
   label_coverage: number; positive_samples: number; negative_samples: number;
-  metrics: { roc_auc: number | null; average_precision: number | null; accuracy?: number; precision: number; recall: number; f1: number; confusion_matrix: number[][] } | null;
+  metrics: { roc_auc: number | null; average_precision: number | null; accuracy?: number; precision: number; recall: number; f1: number;
+    balanced_accuracy?: number | null; log_loss?: number; brier?: number; predicted_positive_rate?: number; confusion_matrix: number[][] } | null;
   baseline: Record<string, number>; threshold: number; trigger_candidate: boolean; drops: Record<string, number>;
   label_sources?: string[]; simulated?: boolean; churn_rate?: number | null; baseline_note?: string;
   synthetic_baseline?: { batches: string[]; sample_count: number; metrics: Record<string, number> } | null;
@@ -118,6 +119,32 @@ export interface MonitoringSummary {
   scenario_details?: Array<{ name: string; outcome_kind?: string | null; label_seed?: number | null }>;
   drift_available: boolean; performance_tracking_available: boolean; stale: boolean;
   policy: { min_labeled_samples: number; min_class_samples: number; min_label_coverage: number; consecutive_windows: number; psi_critical: number; js_critical: number; performance_drop: number; quality_error_rate: number };
+}
+
+export interface CampaignSummary {
+  id: string; created_at: string; status: string; mode: string; dataset_sha256: string; label_policy_version?: string | null;
+}
+export interface CampaignUnit {
+  campaign_id: string; algorithm: string; batch_id: string; model_id: string; task: string; cohort_sha256: string;
+  report: {
+    id: string; sample_count: number; status: string; role?: string; performance?: PerformanceReport;
+    prediction_drift?: DriftFeature | null; assignment_method?: string; eval_N?: number; k?: number;
+    silhouette?: number | null; dbi?: number | null; chi?: number | null; mean_distance?: number; p95_distance?: number;
+    distortion?: number; outlier_share?: number | null; margin?: number; counts?: number[]; cluster_shares?: number[];
+    baseline?: Record<string, number | null>; drops?: Record<string, number | null>; review_status?: string;
+    assignment_drift?: DriftFeature; profiles?: Array<{cluster_id: number; sample_count: number; status: string; features: DriftFeature[]}>;
+  };
+}
+export interface CampaignDetail extends CampaignSummary {
+  manifest: { campaign_id: string; mode: string; anchor: string; dataset_sha256: string; label_seed: number | null;
+    label_policy_version: string | null; config: {silhouette_sample_size: number; threshold_note: string};
+    models: Record<string, {model_id: string; task: string; role: string; assignment_method?: string}>;
+    batches: Array<{batch_id: string; index: number; N: number; cohort_sha256: string; window_start: string; window_end: string}> };
+  reports: CampaignUnit[]; report_count: number;
+}
+export interface CampaignInput {
+  campaign_id: string; batch_id: string; feature_space_id: string; reference_sha256: string;
+  report: MonitoringRun["drift"] & {space: string};
 }
 
 export type ClusterAlgorithm = "kmeans" | "hierarchical";
@@ -264,6 +291,9 @@ export const api = {
     return request<MonitoringSummary>(`/api/monitoring?${q}`, { signal, timeoutMs: 90000 });
   },
   monitoringRun: (id: string, signal?: AbortSignal) => request<MonitoringRun>(`/api/monitoring/runs/${encodeURIComponent(id)}`, { signal, timeoutMs: 60000 }),
+  campaigns: (signal?: AbortSignal) => request<{items: CampaignSummary[]}>("/api/monitoring/campaigns", {signal, timeoutMs: 60000}),
+  campaign: (id: string, signal?: AbortSignal) => request<CampaignDetail>(`/api/monitoring/campaigns/${encodeURIComponent(id)}`, {signal, timeoutMs: 60000}),
+  campaignInputs: (id: string, signal?: AbortSignal) => request<{items: CampaignInput[]}>(`/api/monitoring/campaigns/${encodeURIComponent(id)}/input-drift`, {signal, timeoutMs: 60000}),
 };
 
 export function normalizeCustomerList(data: CustomerFeatures[] | { items: CustomerFeatures[] }): CustomerFeatures[] {

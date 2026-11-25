@@ -145,7 +145,7 @@ class OutcomeUpload(BaseModel):
 def add_labels(payload: OutcomeUpload, service=Depends(require_admin)):
     try:
         rows = [{**item.model_dump(), "observed_at": timestamp(item.observed_at), "horizon_end": timestamp(item.horizon_end)} for item in payload.items]
-        if any(row["scenario"].startswith("synthetic_demo") for row in service.store.prediction_scopes([r["event_id"] for r in rows])):
+        if any(row["scenario"].startswith(("synthetic_demo", "multi_")) for row in service.store.prediction_scopes([r["event_id"] for r in rows])):
             raise ValueError("Synthetic demo outcomes must be imported through the versioned replay adapter")
         inserted = service.store.add_outcomes(rows)
         updated = service.refresh_labels([row["event_id"] for row in rows])

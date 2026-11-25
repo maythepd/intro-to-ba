@@ -7,6 +7,7 @@ import { ErrorState, Notice, PageHeader, Panel } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { api, API_BASE_URL, describeError, isApiConfigured, type DistributionBin, type MonitoringSource } from "@/lib/api";
 import { pageMeta } from "@/lib/seo";
+import { MultiModelMonitoring } from "@/components/MultiModelMonitoring";
 
 export const Route = createFileRoute("/monitoring")({
   head: () => pageMeta("Monitoring", "Measured data drift, labeled performance and retraining alerts."), component: Monitoring,
@@ -43,6 +44,14 @@ function Distribution({ data }: { data: DistributionBin[] }) {
 }
 
 function Monitoring() {
+  const [view, setView] = useState("champion");
+  return <><div className="mb-6 flex flex-wrap gap-2" aria-label="Monitoring mode">
+    <Button variant={view === "champion" ? "default" : "outline"} onClick={() => setView("champion")}>Serving champion</Button>
+    <Button variant={view === "comparison" ? "default" : "outline"} onClick={() => setView("comparison")}>Multi-model study replay</Button>
+  </div>{view === "comparison" ? <MultiModelMonitoring /> : <ChampionMonitoring />}</>;
+}
+
+function ChampionMonitoring() {
   const [dataset, setDataset] = useState<"live" | "snapshot_batch" | "synthetic" | "stress">("live");
   const [stressScenario, setStressScenario] = useState("stable");
   const [replayId, setReplayId] = useState("");
@@ -112,7 +121,7 @@ function Monitoring() {
           {stressScenarios.map((name) => <option key={name} value={name}>{stressName(name)}</option>)}
         </select></label> : <div className="grid min-w-0 gap-2 text-xs font-medium">Scenario
         <div className={`${control} flex items-center text-muted-foreground`}>Not applicable</div>
-      </div>
+      </div>}
       <div className="grid min-w-0 gap-2 text-xs font-medium">Model version
         <div className={`${control} flex items-center`} title={data?.model_id ? `${servingModelLabel} (${data.model_id})` : servingModelLabel}>
           <span className="min-w-0 truncate">{servingModelLabel}</span>

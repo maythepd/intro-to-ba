@@ -29,12 +29,14 @@ def main():
         env = {**os.environ, "DATABASE_URL": "sqlite:///artifacts/monitoring/build-validation.sqlite3"}
         subprocess.run([sys.executable, "-m", "demo_data.validate"], env=env, check=True)
         generate_labels(OUTPUT / "customer_features.csv", OUTPUT / "synthetic_outcomes.csv", seed=4242)
+        subprocess.run([sys.executable, "-m", "api.prepare_challengers", "--verify-study"], check=True)
         print("Validated five synthetic batches and independent outcomes; no monitoring replay at startup")
     elif url or checksum or os.getenv("DEMO_DATA_DIR"):
         if not url or not checksum or os.getenv("DEMO_DATA_DIR") != "data/demo":
             raise SystemExit("Configure a private bundle or explicit DEMO_BUILD_MODE=generate with DEMO_DATA_DIR=data/demo")
         from tools.demo_artifact import download
         download(url, checksum)
+        subprocess.run([sys.executable, "-m", "api.prepare_challengers", "--verify-study"], check=True)
         print("Installed verified serving models and synthetic demo snapshot; replay is an explicit admin operation")
     else:
         for module in ("api.prepare_module5", "api.official_data", "api.segmentation_service"):
