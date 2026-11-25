@@ -121,6 +121,29 @@ Dataset SHA256 `8a54c89258e7742ee060d100d38c39e4df41085fd21309f2ed5f61270d70d3cd
 
 Mỗi batch có coverage 100%, đủ hai lớp; precision bằng accuracy vì checkpoint dự đoán toàn bộ positive tại threshold 0,5. Không có performance/retraining alert theo baseline synthetic. Friction có missing excess khoảng 0,2996 do `avg_resolution_delay_days` thiếu khi chỉ có complaint chưa giải quyết; đây là đặc tính synthetic cần xem xét, không phải request failure. Feature critical share nhỏ nên không có chuỗi data-drift alert đủ điều kiện.
 
-File aggregate đầy đủ: `artifacts/synthetic-demo-reports/summary.csv`, `features.csv`, từng report JSON/HTML; drift-only ở `artifacts/synthetic-drift-reports/`. Rerun cùng identity đã xác nhận 0 event/outcome mới. Những artifact này chỉ nằm local, không theo dõi trong Git. Kết quả triển khai sẽ được ghi riêng sau kiểm chứng thực tế.
+File aggregate đầy đủ: `artifacts/synthetic-demo-reports/summary.csv`, `features.csv`, từng report JSON/HTML; drift-only ở `artifacts/synthetic-drift-reports/`. Rerun cùng identity đã xác nhận 0 event/outcome mới. Những artifact này chỉ nằm local, không theo dõi trong Git. Kết quả triển khai được ghi riêng bên dưới.
 
 Suite cuối: **68 passed**, gồm PostgreSQL 17 Docker riêng, không còn test skip. Frontend TypeScript/Vite build pass. Full build `DEMO_BUILD_MODE=generate` pass; peak working set quan sát khoảng 1,22 GB. Đã bổ sung regression cho import khi bật demo và đường dẫn segmentation độc lập với Module 5.
+
+## Kết quả triển khai ngày 25/11/2026
+
+Backend và frontend hiện có đã chuyển từ upstream sang `nthne/Intro-to-Business-Analysis`, branch `demo`, và deploy application commit `6000e21bb9ed5ccec58329f61ac0b8c25b100151`. [CI Linux](https://github.com/nthne/Intro-to-Business-Analysis/actions/runs/45396962697) pass 68 tests, generate/validate 10.000 mẫu và frontend build. Hai secret được cấu hình trực tiếp trong backend Render sau xác nhận của người dùng; không ghi vào Git hoặc frontend.
+
+- Backend: https://babank.onrender.com, deploy `dep-dc35t7k0916s73fqu4a0`.
+- Frontend: https://babank-dashboard.onrender.com/monitoring, deploy `dep-dc35v9qfngtc73d1gnk0`.
+- Build Render dùng pinned Kaggle release 3, `DEMO_BUILD_MODE=generate`, không cài research stack torch/optuna. Generate, hai fitted adapters và validation/API parity đều pass.
+- `/health`: model, customers, segmentation, study reproduction đều true; feature count 133; PostgreSQL storage ready/persistent và reference available đều true; không có ingest error.
+- Serving model ID: `00621aa7242712b7f388cf8cf0126614fb0d791d13d3fdc74ab71ee80778bcb2`.
+- Fixed reference SHA256: `6f5271ebe88ce6cf90335de0b6044451f010fcfe9495c314d3edc690ea9a9eef`.
+- Dataset SHA256 khớp local: `8a54c89258e7742ee060d100d38c39e4df41085fd21309f2ed5f61270d70d3cd`.
+- Scenario production: `synthetic_demo_6bdec224083a`; generation seed 42; label seed 4242; policy `synthetic_outcome_v1`.
+
+Chạy admin API lần lượt đủ năm batch, mỗi batch 2.000 dòng. SQL kiểm chứng trên Supabase xác nhận đúng **10.000 events, 10.000 unique prediction IDs/subjects, 10.000 outcomes**, tất cả outcome source `synthetic_stress`, và **5 reports**. Coverage nhãn và KMeans của cả năm batch đều 100%; cùng serving model và reference. Không có synthetic subjects trong scope ngoài `study_replay`. Metrics và cảnh báo từng batch khớp bảng kết quả local phía trên; execution là replay trên backend Render, không phải phép đo serving latency hoặc độ chính xác trên khách hàng thật.
+
+Chạy lại `normal_01` tạo 0 events và 0 outcomes. Restart backend qua Render API, xác nhận process mới khởi động lúc 04:13:38 UTC, sau đó `/health` vẫn persistent/ready và history vẫn đúng **5 report IDs** trước restart. Không tự replay khi startup.
+
+`/monitoring` trả HTTP 200 nhờ SPA rewrite. Bundle đã publish có selector Synthetic Demo, batch metadata và đúng API URL; không chứa giá trị DATABASE_URL hoặc MONITORING_ADMIN_TOKEN. Admin replay thiếu token trả 401. Kiểm tra hình ảnh UI trực tiếp chưa thực hiện được do browser automation host không sẵn sàng; kiểm chứng frontend build, asset và API đã pass.
+
+Để xem: mở `/monitoring`, chọn **Study replay / stress tests**, rồi scenario **Synthetic Demo · Simulated labels (seed 4242) · 6bdec224083a**, giữ Current serving model và chọn batch 1–5. Scope Incoming API requests vẫn tách riêng.
+
+Report JSON/HTML tải từ backend được lưu tại `artifacts/deployed-synthetic-reports/`, kèm `summary.csv`, `verification.json` và `after-restart.json`. Rollback snapshot của cấu hình/deploy trước thay đổi ở `artifacts/monitoring/render-before-synthetic.json`. Các file này không được commit. Script cấu hình đã sửa để bỏ biến artifact tùy chọn thay vì gửi chuỗi rỗng mà Render từ chối, và lọc secret trong thông báo lỗi API.

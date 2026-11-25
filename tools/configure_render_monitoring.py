@@ -48,7 +48,11 @@ def main():
         except urllib.error.HTTPError as exc:
             if missing_ok and exc.code == 404:
                 return None
-            raise SystemExit(f"Render operation returned HTTP {exc.code}; credentials omitted") from None
+            detail = exc.read().decode("utf-8", errors="replace")
+            for value in values.values():
+                if value and len(value) >= 8:
+                    detail = detail.replace(value, "[redacted]")
+            raise SystemExit(f"Render {method} {path} returned HTTP {exc.code}: {detail[:600]}; credentials omitted") from None
 
     services = []
     cursor = None
@@ -68,7 +72,8 @@ def main():
     print(json.dumps([{"id":service["id"],"type":service["type"],"repo":service.get("repo"),
         "branch":service.get("branch"),"rootDir":service.get("rootDir"),"url":service["serviceDetails"]["url"],
         "command_layout":"envSpecificDetails" if "envSpecificDetails" in service["serviceDetails"] else "direct",
-        "build_uses_module5":"api.prepare_module5" in service["serviceDetails"].get("envSpecificDetails",{}).get("buildCommand", ""),
+        "build_uses_module5":any(module in service["serviceDetails"].get("envSpecificDetails",{}).get("buildCommand", "")
+                                for module in ("api.prepare_module5", "tools.prepare_serving")),
         "start_runs_migrations":"monitoring.migrate" in service["serviceDetails"].get("envSpecificDetails",{}).get("startCommand", "")}
         for service in targets]))
     if not args.apply:
@@ -127,7 +132,12 @@ def main():
         "SEGMENTATION_CUSTOMERS_CSV_PATH":"data/official/customer_features.csv"}
     env["PYTHON_VERSION"] = "3.11.15"
     if args.generate_synthetic:
-        env.update(DEMO_DATA_DIR="data/demo", DEMO_BUILD_MODE="generate", DEMO_ARTIFACT_URL="", DEMO_ARTIFACT_SHA256="")
+        env.update(DEMO_DATA_DIR="data/demo", DEMO_BUILD_MODE="generate")
+        # Render rejects empty env values. Remove obsolete bundle settings only when present.
+        for key in ("DEMO_ARTIFACT_URL", "DEMO_ARTIFACT_SHA256"):
+            path = f"/services/{backend['id']}/env-vars/{key}"
+            if request(path, missing_ok=True) is not None:
+                request(path, method="DELETE")
     for key, value in env.items():
         set_env(backend, key, value)
     cors = request(f"/services/{backend['id']}/env-vars/CORS_ORIGINS", missing_ok=True) or {}
