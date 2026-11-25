@@ -1,6 +1,6 @@
 # Five-model monitoring study replay
 
-This implements the required A–I stages of the supplied `BaBank_Multi_Model_Monitoring_Implementation_Guide.md`. Deployment and visual verification receipts are recorded below when observed. Three frozen classifiers and two fixed segmentation adapters evaluate the same 10,000 synthetic IDs, in five cohorts of 2,000. This is a simulated study, not an estimate of real-customer accuracy. XGBoost remains the serving champion at threshold 0.5.
+The core A–I implementation from the supplied `BaBank_Multi_Model_Monitoring_Implementation_Guide.md` is deployed; browser visual verification remains blocked by the unavailable browser host. Three frozen classifiers and two fixed segmentation adapters evaluate the same 10,000 synthetic IDs, in five cohorts of 2,000. This is a simulated study, not an estimate of real-customer accuracy. XGBoost remains the serving champion at threshold 0.5.
 
 ## Audit and implementation decisions
 
@@ -64,6 +64,8 @@ At `/monitoring`, choose **Multi-model study replay** beside **Serving champion*
 Local full suite: **81 passed**, including disposable PostgreSQL migration, runtime writer/RLS, atomicity/resume, identity/cohort/label alignment, deterministic no-leakage/no-fit checks, metric parity, degenerate clustering and API authorization. TypeScript + Vite production build passed. The existing large-bundle warning remains. Browser visual verification is a separate gate and is not inferred from the build.
 
 Measured local preflight plus aggregate export: 12.50 seconds wall time, 12.03 process CPU seconds, 305,516,544 bytes (291.4 MiB) peak working set, on Windows/Python 3.11.15, all 10,000 rows and silhouette sample 600. This same-process measurement excludes database writes and is not a Render memory guarantee. The five-model CI records `/usr/bin/time -v` for the full persistent replay as an artifact. Replay loads challengers sequentially and retains only arrays/references after inference.
+
+The [final five-model CI](https://github.com/nthne/Intro-to-Business-Analysis/actions/runs/45602156901) passed 81 tests, including the forced out-of-order two-worker PostgreSQL case. Linux full replay measurement: 14.40 seconds wall time, 15.17 user + 0.71 system CPU seconds, 399,056 KiB (389.7 MiB) peak RSS, exit 0. The [demo branch CI](https://github.com/nthne/Intro-to-Business-Analysis/actions/runs/45602407226) also passed. These resource figures describe the CI runner, not the Render instance.
 
 The complete local labeled campaign `470f82326dd854c3cf4ec8758ddaa44b56d781d8c30b742ae93b512193750ab8` produced 30,000 events, 30,000 event-linked outcomes, 20,000 assignments, 15 classifier reports, 10 clustering reports and 10 shared input reports. Repeating the same identity inserted zero events/outcomes/assignments. A separate drift-only campaign has zero outcomes and N/A classifier performance. Results and repeat receipts are in ignored `artifacts/multi-model-final` and `artifacts/multi-model-final-repeat`.
 
@@ -130,4 +132,31 @@ Fixed segmentation (N=2,000; intrinsic eval N=600; normal baseline is median of 
 
 ## Deployment receipts
 
-Pending controlled rollout of the tested integration. Before rollout, Render backend and frontend were verified linked to `https://github.com/nthne/Intro-to-Business-Analysis`, branch `demo`. Backend rollback deployment: `dep-dc35t7k0916s73fqu4a0` at `6000e21`; frontend: `dep-dc37bmhksfps7398sslg` at `7d62198`. The original synthetic scenario `synthetic_demo_6bdec224083a` must remain available.
+Verified on 2026-11-25 (Asia/Bangkok). Local and remote `demo` were fast-forwarded to application commit `7ccfca5c58a9461af4a96220cd690abf5e780b33`. Both existing Render services remain linked to `https://github.com/nthne/Intro-to-Business-Analysis`, branch `demo`; no upstream/main push or new repository relink was performed in this rollout. Auto-deploy was temporarily disabled for backend-first deployment and restored to its original `commit` setting after the documentation push.
+
+| Service | Observed deployment | Application commit | Result |
+| --- | --- | --- | --- |
+| [Backend](https://babank.onrender.com/health) | `dep-dc3c5mm8bjmc73f908o0` | `7ccfca5` | Live, persistent storage ready, 133 features, study reproduced |
+| [Frontend monitoring](https://babank-dashboard.onrender.com/monitoring) | `dep-dc3c7o1ksfps739mh9c0` | `7ccfca5` | Live, SPA/assets/CORS and credential scan passed |
+
+Deployed labeled campaign: `5acb77b2976e9d3e500e3dbdd2b28a098bd3b46df352f48af43bbbc3252c0011`, anchor `2026-08-20T00:00:00+00:00`, generation seed 42, outcome policy `synthetic_outcome_v1`, label seed 4242. Data SHA256 remains `8a54c89258e7742ee060d100d38c39e4df41085fd21309f2ed5f61270d70d3cd`; label SHA256 remains `e169dd745190baf0e7117798f964dba036c7dc9a2fa488332a77326fcf5de950`.
+
+SQL verification scoped to this campaign confirmed **30,000 prediction events, 30,000 outcomes, 10,000 distinct subjects, 3 classifiers, 20,000 assignments, 25 reports and 10 input drift reports**, with zero inconsistent labels between classifiers. All eleven tables have RLS enabled; `anon` and `authenticated` have no schema USAGE, while `bank_monitoring_writer` does. Global table totals also contain earlier experiments and explicit live control predictions; they are not new customer counts.
+
+Authenticated rerun of LR/normal_01 using the stored campaign ID inserted **0 events, 0 outcomes, 0 assignments**, retaining complete status. JSON, CSV and HTML exports returned 200. All fifteen preexisting run records were compared with the pre-migration backup and remained unchanged, including the five reports under `synthetic_demo_6bdec224083a`.
+
+After an actual backend process restart (new Uvicorn startup observed at 18:24 UTC+7), all 25 report IDs, model/batch links and campaign row counts remained identical. The serving model ID is still `00621aa7242712b7f388cf8cf0126614fb0d791d13d3fdc74ab71ee80778bcb2`; checkpoint SHA256 remains `a80aba0ed70c16b5a1ac1dccef824501ab1a7a8c9e997e421fae203f689db28f`. The same customer input produced exactly the same probability, predicted class and risk level before rollout, after rollout and after restart. Measured deployed stress metrics agree with the tables above.
+
+Operational receipts and aggregate exports are saved locally under ignored `artifacts/deployed-multi-model/`: pre-migration Render/schema/run backup, control predictions, 25 replay receipts, no-duplicate receipt, downloaded CSV/JSON/HTML, frontend verification and post-restart SQL/API snapshots. Local and deployed campaign identities bind their respective prepared artifact hashes; use the ID returned by the target environment for resume.
+
+Rollback deployments remain `dep-dc35t7k0916s73fqu4a0` / `6000e21` for the backend and `dep-dc37bmhksfps7398sslg` / `7d62198` for the frontend. App rollback retains the additive schema and historical data.
+
+Remaining verification: desktop/mobile visual layout and interactive browser checks. The browser tool failed to open the requested monitoring URL with `browser access host unavailable`; no visual pass is claimed. The checked production HTTP/asset/API behavior and successful TypeScript/Vite build do not replace that gate.
+
+## Completion checklist
+
+- [x] A–F: audit, approved checkpoint reproduction, frozen references/assignments, aligned replay, exports, atomic/resumable storage, PostgreSQL/RLS and authenticated API.
+- [x] G: comparison UI, measured charts/tables/distributions, valid N/A states and CSV/JSON/HTML downloads; production build/HTTP checks.
+- [ ] G: browser desktop/mobile visual and interactive verification (tool unavailable).
+- [x] H: controlled backend/frontend deployment, champion regression checks, 25 durable reports, rerun and actual restart verification.
+- [x] I: separate study/synthetic results, task-specific robustness analysis and evidence-limited recommendation.
