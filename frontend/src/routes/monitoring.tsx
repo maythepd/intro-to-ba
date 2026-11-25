@@ -22,7 +22,7 @@ const pretty = (value: string) => names[value] ?? value.replaceAll("_", " ");
 const number = (value: number | null | undefined, digits = 3) => value == null ? "N/A" : value.toFixed(digits);
 const percent = (value: number | null | undefined) => value == null ? "—" : `${(value * 100).toFixed(1)}%`;
 const date = (value: string) => new Date(value).toLocaleString();
-const control = "h-10 max-w-full rounded-xl border bg-background px-3 text-sm";
+const control = "h-10 w-full min-w-0 max-w-full truncate rounded-xl border bg-background px-3 text-sm";
 
 function State({ value }: { value: string }) {
   const tone = ["critical", "retraining_required", "data_quality_alert"].includes(value) ? "bg-danger-soft text-danger"
@@ -77,20 +77,20 @@ function Monitoring() {
     <PageHeader eyebrow="Monitoring" title="Model Monitoring"
       description="Compare populations with the frozen training reference, track labeled outcomes and inspect retraining signals."
       actions={<Button variant="outline" onClick={() => query.refetch()} disabled={!isApiConfigured || query.isFetching}><RefreshCw className={query.isFetching ? "animate-spin" : ""} /> Refresh</Button>} />
-    <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      <label className="grid gap-2 text-xs font-medium">Data source
+    <div className="mb-6 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 min-[1900px]:grid-cols-4">
+      <label className="grid min-w-0 gap-2 text-xs font-medium">Data source
         <select className={control} value={source} onChange={(e) => { setSource(e.target.value as MonitoringSource); resetSelection(); }}>
           <option value="live">Incoming API requests</option><option value="snapshot_batch">Study snapshot batch</option><option value="study_replay">Study replay / stress tests</option>
         </select></label>
-      <label className="grid gap-2 text-xs font-medium">Scenario
-        <select className={control} value={scenario} disabled={source !== "study_replay"} onChange={(e) => { setScenario(e.target.value); resetSelection(); }}>
+      <label className="grid min-w-0 gap-2 text-xs font-medium">Scenario
+        <select className={control} title={scenarioName(scenario)} value={scenario} disabled={source !== "study_replay"} onChange={(e) => { setScenario(e.target.value); resetSelection(); }}>
           {scenarios.map((name) => <option key={name} value={name}>{scenarioName(name)}</option>)}
         </select></label>
-      <label className="grid gap-2 text-xs font-medium">Model version
-        <select className={control} value={modelId} onChange={(e) => { setModelId(e.target.value); resetSelection(); }}>
+      <label className="grid min-w-0 gap-2 text-xs font-medium">Model version
+        <select className={control} title={modelId ? `${data?.models.find((item) => item.id === modelId)?.name ?? "Model"} · ${modelId}` : "Current serving model"} value={modelId} onChange={(e) => { setModelId(e.target.value); resetSelection(); }}>
           <option value="">Current serving model</option>{data?.models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.id.slice(0, 12)}</option>)}
         </select></label>
-      <label className="grid gap-2 text-xs font-medium">History range
+      <label className="grid min-w-0 gap-2 text-xs font-medium">History range
         <select className={control} value={days} onChange={(e) => { setDays(Number(e.target.value)); resetSelection(); }}>
           {[7, 30, 90, 180].map((day) => <option key={day} value={day}>Last {day} days{source === "study_replay" ? " of replay" : ""}</option>)}
         </select></label>
