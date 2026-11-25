@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
 .venv/
+.venv-*/
+.test-tmp/
+.pytest_cache/
 .env
 .env.*
 !.env.example
@@ -9,3 +12,5 @@ frontend/dist/
 *.log
 artifacts/
 data/official/
+/data/demo/
+/data/full_dataset/

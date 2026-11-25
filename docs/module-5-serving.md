@@ -23,7 +23,9 @@ Generated outputs:
 - `artifacts/module5/preprocessor.joblib`: fitted Module 5 transforms only.
 - `artifacts/module5/manifest.json`: feature schema, hashes, split sizes and reproduced study metrics.
 
-The saved checkpoint is unchanged. Generated files stay ignored by Git. `MODULE5_CHECKPOINT_PATH`, `MODULE5_PREPROCESSOR_PATH`, `MODULE5_MANIFEST_PATH` and `CUSTOMERS_CSV_PATH` control server paths; all must identify the same prepared export. Default file names are shown in the root `.env.example`. Set environment variables in the server environment; the API does not automatically load a dotenv file.
+The saved checkpoint is unchanged. Generated files stay ignored by Git. `MODULE5_CHECKPOINT_PATH`, `MODULE5_PREPROCESSOR_PATH`, `MODULE5_MANIFEST_PATH` and `CUSTOMERS_CSV_PATH` control server paths; all must identify the same prepared export. Default file names are shown in the root `.env.example`. Local commands load `.env`; existing server environment variables take precedence.
+
+Module 7 preparation also exports `monitoring_reference.json` (training distributions and matching test metrics) and `monitoring_replay.csv` (the held-out test cohort). These generated files are bound by the manifest and remain ignored by Git.
 
 ## API contract
 

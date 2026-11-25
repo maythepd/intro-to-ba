@@ -1,0 +1,48 @@
+version: 1
+window_hours: 24
+outcome_horizon_days: 90
+retention_days: 180
+min_drift_samples: 500
+min_labeled_samples: 500
+min_class_samples: 50
+min_label_coverage: 0.8
+min_quality_samples: 100
+histogram_bins: 10
+psi_warning: 0.1
+psi_critical: 0.25
+js_warning: 0.1
+js_critical: 0.2
+drift_feature_share: 0.3
+performance_drop: 0.05
+quality_error_rate: 0.05
+consecutive_windows: 2
+max_window_events: 50000
+max_job_windows: 7
+critical_features:
+  - recency_days
+  - monthly_transactions
+  - trans_trend_ratio
+  - app_logins_monthly
+numeric_features:
+  - credit_score
+  - age
+  - balance
+  - estimated_salary
+  - recency_days
+  - monthly_transactions
+  - trans_amount_3m
+  - trans_trend_ratio
+  - app_logins_monthly
+  - customer_service_complaints
+  - total_accounts
+  - total_logins
+  - failed_logins
+  - total_transactions
+  - failed_transactions
+  - exposure_days
+  - avg_resolution_delay_days
+categorical_features:
+  - country
+  - gender
+  - preferred_channel
+  - primary_device

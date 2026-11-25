@@ -2,10 +2,26 @@ services:
   - type: web
     name: babank-api
     runtime: python
-    buildCommand: pip install -r requirements.txt && python -m api.prepare_module5 --download && python -m api.official_data --download && python -m api.segmentation_service
-    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r requirements-serving.txt && python -m tools.prepare_serving
+    startCommand: python -m monitoring.migrate && uvicorn api.main:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.15"
       - key: CORS_ORIGINS
         sync: false
       - key: OFFICIAL_DATA_DIR
         value: data/official/raw
+      - key: DATABASE_URL
+        sync: false
+      - key: MONITORING_ADMIN_TOKEN
+        sync: false
+      - key: MONITORING_DATABASE_ROLE
+        value: bank_monitoring_writer
+      - key: ENABLE_MONITORING_DEMO
+        value: "false"
+      # To enable demo data, configure these together on the existing service:
+      # DEMO_DATA_DIR=data/demo, DEMO_ARTIFACT_URL (private HTTPS), DEMO_ARTIFACT_SHA256.
+      # Alternative: DEMO_DATA_DIR=data/demo and DEMO_BUILD_MODE=generate (pinned Kaggle release 3).
+      # Keep replay disabled unless an operator needs the authenticated admin route.
+      - key: SUPABASE_URL
+        value: https://exifwzbacchvvtzckxcw.supabase.co

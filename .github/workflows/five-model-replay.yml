@@ -1,0 +1,63 @@
+name: Five Model Offline Replay
+on:
+  push:
+    branches: [feature/five-model-monitoring]
+  workflow_dispatch:
+jobs:
+  monitoring-and-ui:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: monitoring-test-only
+          POSTGRES_DB: monitoring_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d monitoring_test" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      MONITORING_TEST_DATABASE_URL: postgresql://postgres:monitoring-test-only@localhost:5432/monitoring_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-serving.txt pytest httpx2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/kagglehub/datasets/maythepd/full-dataset-intro2ba
+          key: kaggle-babank-release-3
+      - run: python -m api.prepare_module5 --download
+      - run: python -m tools.prepare_demo_source
+      - run: python -m api.official_data --source data/full_dataset
+      - run: python -m api.segmentation_service
+      - run: python -m demo_data.generate --multiplier 10 --max-samples 10000 --seed 42
+      - run: python -m demo_data.validate
+        env:
+          DATABASE_URL: sqlite:///artifacts/monitoring/ci-validation.sqlite3
+      - run: python -m demo_data.labels --seed 4242
+      - run: python -m api.prepare_challengers --models lr rf --verify-study
+      - run: /usr/bin/time -v -o artifacts/five-model-resources.txt python -m monitoring.multi_model_replay --labels data/demo/synthetic_outcomes.csv --export-dir artifacts/five-model-results
+        env:
+          DATABASE_URL: sqlite:///artifacts/monitoring/five-model-ci.sqlite3
+      - run: python -m pytest tests -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install && npm run build
+        working-directory: frontend
+      - name: Print aggregate metrics for review
+        if: always()
+        run: |
+          if [ -f artifacts/five-model-resources.txt ]; then cat artifacts/five-model-resources.txt; fi
+          for f in artifacts/five-model-results/*metrics.csv; do
+            if [ -f "$f" ]; then echo "$f"; cat "$f"; fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: five-model-results
+          path: |
+            artifacts/five-model-results/
+            artifacts/five-model-resources.txt

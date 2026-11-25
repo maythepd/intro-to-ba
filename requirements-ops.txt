@@ -1,0 +1,2 @@
+# Optional one-time GitHub secret/workflow setup; not needed by the web server.
+PyNaCl==1.6.2

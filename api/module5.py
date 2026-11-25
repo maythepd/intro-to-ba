@@ -11,11 +11,15 @@ import joblib
 import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT / ".env", override=False)
 CHECKPOINT_PATH = Path(os.getenv("MODULE5_CHECKPOINT_PATH", str(ROOT / "model_development/models/saved/xgboost_churn.json")))
 PREPROCESSOR_PATH = Path(os.getenv("MODULE5_PREPROCESSOR_PATH", str(ROOT / "artifacts/module5/preprocessor.joblib")))
 MANIFEST_PATH = Path(os.getenv("MODULE5_MANIFEST_PATH", str(ROOT / "artifacts/module5/manifest.json")))
+REFERENCE_PATH = Path(os.getenv("MONITORING_REFERENCE_PATH", str(PREPROCESSOR_PATH.parent / "monitoring_reference.json")))
+REPLAY_PATH = Path(os.getenv("MONITORING_REPLAY_PATH", str(PREPROCESSOR_PATH.parent / "monitoring_replay.csv")))
 DATA_PATH = Path(os.getenv("CUSTOMERS_CSV_PATH", str(ROOT / "data/official/module5_customer_features.csv")))
 CONFIG_PATH = ROOT / "model_development/config/config.yaml"
 REPORT_PATH = ROOT / "model_development/results/comparison/model_comparison_metrics.csv"
@@ -97,19 +101,25 @@ def load() -> Module5Model | None:
 
 
 def prediction_inputs(model: Module5Model, payload: dict, customers: pd.DataFrame | None) -> pd.DataFrame:
+    """Resolve raw demo aggregates without accidentally mixing in an official customer row."""
+    extra = payload.get("raw_features") or {}
+    required = set(model.input_columns)
+    unknown = set(extra) - required
+    if unknown:
+        raise Module5InputError("Unsupported Module 5 raw features: " + ", ".join(sorted(unknown)))
+    overrides = {key: value for key, value in payload.items()
+                 if key in required and value is not None}
+    if required == set(extra):
+        return pd.DataFrame([{**extra, **overrides}]).loc[:, model.input_columns]
     row = {}
     identifier = payload.get("customer_id")
     if customers is not None and identifier is not None:
         match = customers.loc[customers.customer_id == identifier]
         if not match.empty:
             row.update(match.iloc[0].to_dict())
-    extra = payload.get("raw_features") or {}
-    unknown = set(extra) - set(model.input_columns)
-    if unknown:
-        raise Module5InputError("Unsupported Module 5 raw features: " + ", ".join(sorted(unknown)))
     row.update(extra)
-    row.update({key: value for key, value in payload.items() if key in model.input_columns})
-    missing = set(model.input_columns) - set(row)
+    row.update(overrides)
+    missing = required - set(row)
     if missing:
         raise Module5InputError("Module 5 requires a customer from the snapshot or complete raw_features. Missing: "
                          + ", ".join(sorted(missing)))

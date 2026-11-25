@@ -1,5 +1,6 @@
 """Serving contract for the real, committed Module 5 checkpoint and preprocessor."""
 from pathlib import Path
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -17,6 +18,11 @@ from api.scoring import score_probabilities
 class Module5ServingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        folder = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(folder.cleanup)
+        environment = patch.dict(os.environ, {"DATABASE_URL": "sqlite:///" + (Path(folder.name) / "monitoring.db").as_posix()})
+        environment.start()
+        cls.addClassCleanup(environment.stop)
         cls.context = TestClient(app)
         cls.client = cls.context.__enter__()
         cls.model = app.state.churn_model

@@ -1,9 +1,17 @@
 # Kế hoạch hoàn thiện Module 7 — Model Monitoring
 
 Ngày lập: 17/11/2026. Phạm vi: API FastAPI và dashboard React hiện có của BaBank.
-Đây là kế hoạch triển khai; các chức năng bên dưới chưa được xây dựng trong lần lập kế hoạch này.
+Đây là kế hoạch ban đầu, kèm cập nhật triển khai bên dưới. Hướng dẫn vận hành hiện tại nằm trong `docs/module-7-monitoring.md`.
 
 Cập nhật sau khi chuyển mặc định sang Module 5: API đã có adapter checkpoint, preprocessing riêng và manifest tái lập đúng metrics nghiên cứu. Các hạng mục monitoring, lưu lịch sử và trigger bên dưới vẫn cần thực hiện.
+
+## Tiến độ ngày 18/11/2026
+
+- Đã triển khai baseline, PostgreSQL/SQLite store, logging single/batch, delayed labels, drift/performance rules, API, dashboard và HTML/JSON report.
+- Supabase project riêng `exifwzbacchvvtzckxcw` đã có schema private/RLS; ba kịch bản replay đã được ghi, tính và đọc lại sau khi kết nối lại.
+- Đã có notebook nộp bài; [CI trên Linux/Python 3.11](https://github.com/nthne/Intro-to-Business-Analysis/actions/runs/44326590270) đã qua 39 kiểm thử, gồm PostgreSQL 17, và build frontend. Đã sửa bộ đếm insert bằng `RETURNING` vì psycopg không luôn trả `rowcount` đáng tin cậy.
+- Theo lựa chọn của người dùng, workflow chỉ gọi API đã được cài riêng lên `main` của fork tại commit `db81e0d`, có GitHub Secret được mã hóa; code ứng dụng vẫn phát triển trên nhánh Module 7 và hướng về `demo`.
+- Chưa xác nhận lượt deploy Render của Module 7. Đang chờ `RENDER_API_KEY` để cấu hình/redeploy bằng API; trang chủ trả HTTP 200 nhưng truy cập trực tiếp `/monitoring` trả 404, cần rule rewrite SPA đã được bổ sung vào công cụ cấu hình. Computer Use dừng do không xác định được URL trình duyệt Windows đủ tin cậy, nên chưa kiểm tra trực quan desktop/mobile.
 
 ## 1. Mục tiêu theo đề bài
 
@@ -15,7 +23,7 @@ Căn cứ Module 7 và Evaluation Focus trong [thông báo project](../../Busine
 
 Kết quả cần nộp: trang `/monitoring` trên live link, báo cáo có thể tải về, cấu hình ngưỡng, kiểm thử và hướng dẫn demo tái lập được.
 
-## 2. Hiện trạng và các phụ thuộc phải xử lý
+## 2. Hiện trạng khi lập kế hoạch và các phụ thuộc
 
 | Thành phần | Hiện trạng | Việc cần làm |
 | --- | --- | --- |

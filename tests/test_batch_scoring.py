@@ -1,5 +1,9 @@
 """Batch scoring API contract tests with deterministic, fake model outputs only."""
 import unittest
+import os
+from pathlib import Path
+import tempfile
+from unittest.mock import patch
 import numpy as np
 import pandas as pd
 from fastapi.testclient import TestClient
@@ -32,6 +36,11 @@ def customer(cid, age):
 
 class BatchRiskTests(unittest.TestCase):
     def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        environment = patch.dict(os.environ, {"DATABASE_URL": "sqlite:///" + (Path(folder.name) / "monitoring.db").as_posix()})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.client_context = TestClient(app)
         self.client = self.client_context.__enter__()
         self.model = ProbabilityModel()
