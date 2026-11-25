@@ -45,14 +45,17 @@ function Distribution({ data }: { data: DistributionBin[] }) {
 function Monitoring() {
   const [source, setSource] = useState<MonitoringSource>("live");
   const [scenario, setScenario] = useState("stable");
-  const [modelId, setModelId] = useState("");
   const [days, setDays] = useState(30);
   const [selectedId, setSelectedId] = useState("");
   const [selectedFeature, setSelectedFeature] = useState("");
-  const query = useQuery({ queryKey: ["monitoring", source, scenario, modelId, days],
-    queryFn: ({ signal }) => api.monitoring({ source, scenario: source === "study_replay" ? scenario : undefined, modelId: modelId || undefined, days }, signal),
+  const query = useQuery({ queryKey: ["monitoring", source, scenario, days],
+    queryFn: ({ signal }) => api.monitoring({ source, scenario: source === "study_replay" ? scenario : undefined, days }, signal),
     enabled: isApiConfigured, refetchInterval: 30000, retry: 1 });
   const data = query.data;
+  const servingModel = data?.models.find((model) => model.id === data.model_id);
+  const servingModelLabel = data?.model_id
+    ? `${servingModel?.name ?? "Serving model"} · ${data.model_id.slice(0, 12)}`
+    : "Current serving model";
   const selected = useQuery({ queryKey: ["monitoring-run", selectedId],
     queryFn: ({ signal }) => api.monitoringRun(selectedId, signal), enabled: !!selectedId && isApiConfigured, retry: false });
   const report = selectedId ? selected.data : data?.latest;
@@ -86,10 +89,10 @@ function Monitoring() {
         <select className={control} title={scenarioName(scenario)} value={scenario} disabled={source !== "study_replay"} onChange={(e) => { setScenario(e.target.value); resetSelection(); }}>
           {scenarios.map((name) => <option key={name} value={name}>{scenarioName(name)}</option>)}
         </select></label>
-      <label className="grid min-w-0 gap-2 text-xs font-medium">Model version
-        <select className={control} title={modelId ? `${data?.models.find((item) => item.id === modelId)?.name ?? "Model"} · ${modelId}` : "Current serving model"} value={modelId} onChange={(e) => { setModelId(e.target.value); resetSelection(); }}>
-          <option value="">Current serving model</option>{data?.models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.id.slice(0, 12)}</option>)}
-        </select></label>
+      <div className="grid min-w-0 gap-2 text-xs font-medium">Model version
+        <div className={`${control} flex items-center`} title={data?.model_id ? `${servingModelLabel} (${data.model_id})` : servingModelLabel}>
+          <span className="min-w-0 truncate">{servingModelLabel}</span>
+        </div></div>
       <label className="grid min-w-0 gap-2 text-xs font-medium">History range
         <select className={control} value={days} onChange={(e) => { setDays(Number(e.target.value)); resetSelection(); }}>
           {[7, 30, 90, 180].map((day) => <option key={day} value={day}>Last {day} days{source === "study_replay" ? " of replay" : ""}</option>)}
