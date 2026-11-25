@@ -84,10 +84,8 @@ def persist(service, prepared, *, algorithm=None, batch=None, execution_origin="
                                      {"space": space, "reference_sha256": reference_hash, **report})
         for name in selected:
             spec = prepared.models[name]
-            previous = {item["batch_id"]: item for item in store.reports(identifier) if item["algorithm"] == name}
             # Recompute already persisted downstream windows if an earlier unit is refreshed.
-            chosen = list(BATCHES) if batch is None else [b for b in BATCHES if b == batch or
-                (BATCHES.index(b) > BATCHES.index(batch) and b in previous)]
+            chosen = list(BATCHES) if batch is None else list(BATCHES[BATCHES.index(batch):])
             for name_batch in chosen:
                 index = BATCHES.index(name_batch)
                 window = prepared.manifest["batches"][index]
@@ -95,6 +93,12 @@ def persist(service, prepared, *, algorithm=None, batch=None, execution_origin="
                 cohort = prepared.frame.loc[mask]
                 with service.store.transaction():
                     service.store.lock_scope(identifier + name)
+                    # Read availability under the same algorithm lock as the write: another
+                    # worker may have completed a later window after this request began.
+                    if batch is not None and name_batch != batch and not any(
+                            item["algorithm"] == name and item["batch_id"] == name_batch
+                            for item in store.reports(identifier)):
+                        continue
                     if spec["task"] == "classification":
                         adapter_service = copy(service)
                         adapter_service.model_id, adapter_service.reference = spec["model_id"], spec["reference"]

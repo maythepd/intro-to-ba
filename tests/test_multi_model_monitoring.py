@@ -236,6 +236,46 @@ def test_postgres_additive_schema_campaign_role_and_idempotency(prepared, servic
         result = persist(service, prepared)
         assert result["status"] == "complete"
         assert persist(service, prepared)["inserted"] == {"events": 0, "outcomes": 0, "assignments": 0}
+        # Force two independent workers to start out of order before either sees
+        # the other's unit. The later writer must refresh the already saved tail.
+        from concurrent.futures import ThreadPoolExecutor
+        from copy import copy
+        from threading import Barrier, Event, RLock, local
+        from monitoring.settings import digest
+        parallel = deepcopy(prepared)
+        parallel.manifest.pop("campaign_id")
+        parallel.manifest["test_case"] = "concurrent_streak_refresh"
+        identifier = parallel.manifest["campaign_id"] = digest(parallel.manifest)
+        for batch in ("engagement_shift", "friction_shift"):
+            parallel.cluster_reports["hierarchical"][batch]["trigger_candidate"] = True
+        barrier, tail_saved, worker = Barrier(2), Event(), local()
+        original_lock = database.lock_scope
+
+        def interleaved_lock(scope):
+            if scope == identifier + "hierarchical" and not getattr(worker, "entered", False):
+                worker.entered = True
+                barrier.wait(timeout=20)
+                if worker.batch == "engagement_shift":
+                    assert tail_saved.wait(timeout=20)
+            original_lock(scope)
+
+        def write_unit(batch):
+            worker.batch = batch
+            independent = copy(service)
+            independent.lock = RLock()
+            try:
+                return persist(independent, parallel, algorithm="hierarchical", batch=batch)
+            finally:
+                if batch == "friction_shift":
+                    tail_saved.set()
+
+        with patch.object(database, "lock_scope", side_effect=interleaved_lock), ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(write_unit, batch) for batch in ("friction_shift", "engagement_shift")]
+            for future in futures:
+                future.result(timeout=45)
+        tail = next(item["report"] for item in CampaignStore(database).reports(identifier)
+                    if item["batch_id"] == "friction_shift")
+        assert tail["consecutive_candidates"] == 2 and tail["review_status"] == "review_required"
         with database.engine.connect() as connection:
             assert connection.execute(text("select current_user")).scalar_one() == "bank_monitoring_writer"
             rows = connection.execute(text("select relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='bank_monitoring' and c.relname in ('monitoring_campaigns','campaign_reports','cluster_assignments','input_drift_reports','cluster_model_registry')")).scalars().all()

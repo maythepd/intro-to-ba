@@ -50,6 +50,7 @@ jobs:
       - name: Print aggregate metrics for review
         if: always()
         run: |
+          if [ -f artifacts/five-model-resources.txt ]; then cat artifacts/five-model-resources.txt; fi
           for f in artifacts/five-model-results/*metrics.csv; do
             if [ -f "$f" ]; then echo "$f"; cat "$f"; fi
           done
