@@ -10,6 +10,8 @@ export const monitoringModelNames = {xgboost: "XGBoost · champion", lr: "Logist
 export type MonitoringModel = "all" | keyof typeof monitoringModelNames;
 const names: Record<string, string> = monitoringModelNames;
 const colors = ["var(--color-chart-1)", "var(--color-chart-2)", "var(--color-chart-3)", "var(--color-chart-4)"];
+const classifierColors: Record<string, string> = { xgboost: "#16a34a", lr: "#facc15", rf: "#f97316" };
+const classifierLegendColors: Record<string, string> = { [names.xgboost]: "#16a34a", [names.lr]: "#854d0e", [names.rf]: "#c2410c" };
 const control = "h-10 w-full min-w-0 truncate rounded-xl border bg-background px-3 text-sm";
 const num = (value: number | null | undefined) => value == null ? "N/A" : value.toFixed(3);
 const pct = (value: number | null | undefined) => value == null ? "N/A" : `${(value * 100).toFixed(1)}%`;
@@ -94,8 +96,8 @@ export function MultiModelMonitoring({model = "all"}: {model?: MonitoringModel})
             (key === "inputs" || selectedTask === null || key === selectedTask) && <button key={key} role="tab" aria-selected={activeTab === key} className={`rounded-xl border px-4 py-2 text-sm ${activeTab === key ? "bg-primary text-primary-foreground" : "bg-card"}`} onClick={() => setTab(key)}>{name}</button>)}</div>
           {activeTab === "classification" && <><Panel title={model === "all" ? "Three classifiers, identical cohorts" : `${names[model]} performance`} subtitle="ROC-AUC, AP, F1 and recall: higher is better. Log loss/Brier: lower is better. AP must be read together with prevalence.">
             <label className="grid max-w-sm gap-2 text-xs">Chart metric<select className={control} value={metric} onChange={(e) => setMetric(e.target.value)}>{["roc_auc", "average_precision", "f1", "recall", "accuracy", "balanced_accuracy", "log_loss", "brier"].map((key) => <option key={key}>{key}</option>)}</select></label>
-            <div className="mt-5 h-72 min-w-0"><ResponsiveContainer width="100%" height="100%"><LineChart data={lineData("classification", metric)}><CartesianGrid /><XAxis dataKey="batch" tick={{fontSize: 10}} /><YAxis /><Tooltip /><Legend />
-              {classifierAlgorithms.map((name) => <Line key={name} dataKey={name} name={names[name]} stroke={colors[["xgboost", "lr", "rf"].indexOf(name)]} connectNulls={false} />)}</LineChart></ResponsiveContainer></div>
+            <div className="mt-5 h-72 min-w-0"><ResponsiveContainer width="100%" height="100%"><LineChart data={lineData("classification", metric)}><CartesianGrid /><XAxis dataKey="batch" tick={{fontSize: 10}} /><YAxis /><Tooltip /><Legend formatter={(value: string) => <span style={{ color: classifierLegendColors[value], fontWeight: 600 }}>{value}</span>} />
+              {classifierAlgorithms.map((name) => <Line key={name} dataKey={name} name={names[name]} stroke={classifierColors[name]} strokeWidth={3} dot={{ r: 4, fill: classifierColors[name], stroke: classifierColors[name] }} activeDot={{ r: 6 }} connectNulls={false} />)}</LineChart></ResponsiveContainer></div>
             <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[1300px] text-left text-xs"><thead className="border-b"><tr>{["Algorithm / role", "Batch", "N", "AUC", "AP", "Accuracy", "Precision", "Recall", "F1", "Churn rate", "Predicted +", "Normal AP", "AP drop", "Confusion [[TN,FP],[FN,TP]]", "Labels"].map((key) => <th className="p-2" key={key}>{key}</th>)}</tr></thead>
               <tbody>{classifiers.map((item) => {const p = item.report.performance; return <tr className="border-b" key={item.algorithm + item.batch_id}><td className="p-2" title={item.model_id}>{names[item.algorithm]}</td><td className="p-2">{item.batch_id}</td><td className="p-2">{item.report.sample_count}</td>
                 {(["roc_auc", "average_precision", "accuracy", "precision", "recall", "f1"] as const).map((key) => <td className="p-2 tabular-nums" key={key}>{num(p?.metrics?.[key])}</td>)}
